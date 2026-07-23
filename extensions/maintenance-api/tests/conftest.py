@@ -4,6 +4,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 
 _TEST_TEMP_DIR = tempfile.TemporaryDirectory(
@@ -15,6 +16,14 @@ os.environ["DATABASE_URL"] = (
     f"sqlite:///{_TEST_DATABASE_PATH.as_posix()}"
 )
 os.environ["DATABASE_ECHO"] = "false"
+
+
+@pytest.fixture()
+def client() -> Generator[TestClient, None, None]:
+    from app.main import create_app
+
+    with TestClient(create_app()) as test_client:
+        yield test_client
 
 
 @pytest.fixture(scope="session", autouse=True)
