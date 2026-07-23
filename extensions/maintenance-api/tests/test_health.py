@@ -1,4 +1,4 @@
-﻿from app.db.health import check_database_health
+from app.db.health import check_database_health
 
 
 def test_database_health_is_healthy() -> None:

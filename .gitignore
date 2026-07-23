@@ -57,3 +57,12 @@ fix-docker.sh
 
 # WeChat Mini Program local/private configuration
 miniprogram/project.private.config.json
+
+# Maintenance Python extensions
+extensions/**/.venv/
+extensions/**/.env
+extensions/**/.pytest_cache/
+extensions/**/.ruff_cache/
+extensions/**/data/*.db
+extensions/**/data/*.db-shm
+extensions/**/data/*.db-wal

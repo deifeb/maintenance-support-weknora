@@ -1,7 +1,6 @@
-﻿from fastapi import FastAPI, Query
-from fastapi.testclient import TestClient
-
 from app.core.exceptions import register_exception_handlers
+from fastapi import FastAPI, Query
+from fastapi.testclient import TestClient
 
 
 def create_validation_test_app() -> FastAPI:

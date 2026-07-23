@@ -1,6 +1,7 @@
-﻿from typing import Any
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -57,10 +58,12 @@ def register_exception_handlers(app: FastAPI) -> None:
 
         return JSONResponse(
             status_code=exc.status_code,
-            content=build_error_body(
-                code=exc.code,
-                message=exc.message,
-                details=exc.details,
+            content=jsonable_encoder(
+                build_error_body(
+                    code=exc.code,
+                    message=exc.message,
+                    details=exc.details,
+                )
             ),
         )
 
@@ -73,10 +76,12 @@ def register_exception_handlers(app: FastAPI) -> None:
 
         return JSONResponse(
             status_code=422,
-            content=build_error_body(
-                code="VALIDATION_ERROR",
-                message="Request validation failed",
-                details=exc.errors(),
+            content=jsonable_encoder(
+                build_error_body(
+                    code="VALIDATION_ERROR",
+                    message="Request validation failed",
+                    details=exc.errors(),
+                )
             ),
         )
 

@@ -1,4 +1,4 @@
-﻿import platform
+import platform
 from urllib.parse import urlparse
 
 from fastapi import APIRouter
@@ -7,7 +7,6 @@ from app.core.config import get_settings
 from app.core.responses import success_response
 from app.schemas.common import SuccessResponse
 from app.schemas.system import SystemInfoData
-
 
 router = APIRouter(
     prefix="/system",
@@ -38,9 +37,7 @@ def system_info() -> SuccessResponse[SystemInfoData]:
             environment=settings.app_env,
             api_prefix=settings.api_v1_prefix,
             python_version=platform.python_version(),
-            database_type=get_database_type(
-                settings.database_url,
-            ),
+            database_type=get_database_type(settings.database_url),
         ),
         message="System information retrieved",
     )

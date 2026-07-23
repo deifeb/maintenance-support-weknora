@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter
+from fastapi import APIRouter
 
 from app.core.config import get_settings
 from app.core.exceptions import DatabaseUnavailableError
@@ -6,7 +6,6 @@ from app.core.responses import success_response
 from app.db.health import check_database_health
 from app.schemas.common import SuccessResponse
 from app.schemas.system import HealthData
-
 
 router = APIRouter(tags=["health"])
 

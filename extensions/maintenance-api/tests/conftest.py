@@ -1,11 +1,10 @@
-﻿import os
+import os
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 _TEST_TEMP_DIR = tempfile.TemporaryDirectory(
     prefix="maintenance_api_tests_"

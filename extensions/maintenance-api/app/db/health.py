@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError

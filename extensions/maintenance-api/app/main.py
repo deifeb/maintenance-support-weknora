@@ -1,10 +1,11 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 
 from app.api.v1.endpoints.health import router as health_router
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.responses import success_response
+from app.schemas.common import SuccessResponse
 
 
 def create_app() -> FastAPI:
@@ -17,7 +18,6 @@ def create_app() -> FastAPI:
     )
 
     register_exception_handlers(application)
-
     application.include_router(health_router)
     application.include_router(
         api_router,
@@ -25,7 +25,7 @@ def create_app() -> FastAPI:
     )
 
     @application.get("/")
-    def root():
+    def root() -> SuccessResponse[dict[str, str]]:
         return success_response(
             data={
                 "service": "maintenance-api",
