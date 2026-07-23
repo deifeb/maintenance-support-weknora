@@ -10,27 +10,19 @@ from app.schemas.common import SuccessResponse
 
 def create_app() -> FastAPI:
     settings = get_settings()
-
     application = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.app_debug,
     )
-
     register_exception_handlers(application)
     application.include_router(health_router)
-    application.include_router(
-        api_router,
-        prefix=settings.api_v1_prefix,
-    )
+    application.include_router(api_router, prefix=settings.api_v1_prefix)
 
     @application.get("/")
     def root() -> SuccessResponse[dict[str, str]]:
         return success_response(
-            data={
-                "service": "maintenance-api",
-                "docs": "/docs",
-            },
+            {"service": "maintenance-api", "docs": "/docs"},
             message="Maintenance Support API is running",
         )
 

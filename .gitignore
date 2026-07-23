@@ -66,3 +66,10 @@ extensions/**/.ruff_cache/
 extensions/**/data/*.db
 extensions/**/data/*.db-shm
 extensions/**/data/*.db-wal
+# Maintenance master data phase
+extensions/**/templates/~$*.xlsx
+extensions/**/imports/
+extensions/**/data/*.db
+extensions/**/data/*.db-shm
+extensions/**/data/*.db-wal
+.phase02-backup-*/

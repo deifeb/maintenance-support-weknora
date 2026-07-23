@@ -10,7 +10,7 @@ DEFAULT_DATABASE_PATH = (SERVICE_ROOT / "data" / "maintenance.db").as_posix()
 
 class Settings(BaseSettings):
     app_name: str = "Maintenance Support API"
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     app_env: str = "development"
     app_debug: bool = True
     api_v1_prefix: str = "/api/v1"
@@ -19,6 +19,8 @@ class Settings(BaseSettings):
         description="SQLAlchemy database URL",
     )
     database_echo: bool = False
+    max_import_size_mb: int = 10
+    max_import_rows_per_sheet: int = 10_000
 
     model_config = SettingsConfigDict(
         env_file=SERVICE_ROOT / ".env",

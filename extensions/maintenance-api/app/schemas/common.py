@@ -20,3 +20,11 @@ class ErrorDetail(BaseModel):
 class ErrorResponse(BaseModel):
     success: bool = False
     error: ErrorDetail = Field(...)
+
+
+class PageData(BaseModel, Generic[T]):
+    items: list[T]
+    page: int
+    page_size: int
+    total: int
+    pages: int

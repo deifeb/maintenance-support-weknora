@@ -10,19 +10,14 @@ from app.schemas.system import HealthData
 router = APIRouter(tags=["health"])
 
 
-@router.get(
-    "/health",
-    response_model=SuccessResponse[HealthData],
-)
+@router.get("/health", response_model=SuccessResponse[HealthData])
 def health_check() -> SuccessResponse[HealthData]:
     settings = get_settings()
     database_health = check_database_health()
-
     if database_health.status != "healthy":
         raise DatabaseUnavailableError()
-
     return success_response(
-        data=HealthData(
+        HealthData(
             status="ok",
             service="maintenance-api",
             version=settings.app_version,

@@ -1,45 +1,54 @@
 # Maintenance Support API
 
-维修器材需求管理系统的独立 Python 业务服务。当前版本提供配置读取、SQLite/SQLAlchemy 连接、健康检查、系统信息、统一响应和异常处理。
+维修器材需求管理系统的独立 Python 业务服务。当前阶段提供装备型号、多版本构型、部件、维修器材、可靠性参数、多库房库存、供应商报价、Excel 主数据导入和样例数据。
 
-## 环境要求
-
-- Python 3.11
-- Windows PowerShell
-- Git
-
-## 创建环境
+## 安装
 
 ```powershell
 cd E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api
-py -3.11 -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
-Copy-Item .env.example .env
+Copy-Item .env.example .env -ErrorAction SilentlyContinue
 ```
 
-## 启动服务
+## 数据库迁移
+
+```powershell
+python -m alembic upgrade head
+python -m alembic current
+```
+
+回退和重新升级：
+
+```powershell
+python -m alembic downgrade base
+python -m alembic upgrade head
+```
+
+## 样例数据与 Excel 模板
+
+```powershell
+python -m app.scripts.seed_master_data
+python -m app.scripts.generate_import_template
+```
+
+模板路径：`templates/master_data_import_template.xlsx`。
+
+## 启动
 
 ```powershell
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8100
 ```
 
-## 地址
-
-- 根接口：`http://127.0.0.1:8100/`
-- 健康检查：`http://127.0.0.1:8100/health`
-- 系统信息：`http://127.0.0.1:8100/api/v1/system/info`
 - Swagger：`http://127.0.0.1:8100/docs`
+- 主数据前缀：`/api/v1/master-data`
+- Excel 模板：`GET /api/v1/master-data/import/template`
+- Excel 校验：`POST /api/v1/master-data/import/validate`
+- Excel 执行：`POST /api/v1/master-data/import/execute`
 
-## 测试
+## 验证
 
 ```powershell
 python -m pytest -v
 python -m ruff check app tests
 ```
-
-## 数据库
-
-默认数据库文件为 `data/maintenance.db`。可通过 `.env` 中的 `DATABASE_URL` 切换为其他 SQLite 文件或 PostgreSQL。数据库文件、虚拟环境和 `.env` 不应提交到 Git。

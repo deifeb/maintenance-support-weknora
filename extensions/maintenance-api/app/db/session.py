@@ -6,31 +6,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import get_settings
 
 
-def _build_engine_kwargs(
-    database_url: str,
-) -> dict[str, object]:
-    settings = get_settings()
-
-    kwargs: dict[str, object] = {
-        "echo": settings.database_echo,
-        "pool_pre_ping": True,
-    }
-
+def build_engine(database_url: str, echo: bool = False) -> Engine:
+    kwargs: dict[str, object] = {"echo": echo, "pool_pre_ping": True}
     if database_url.startswith("sqlite"):
-        kwargs["connect_args"] = {
-            "check_same_thread": False,
-        }
-
-    return kwargs
+        kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(database_url, **kwargs)
 
 
 settings = get_settings()
-
-engine: Engine = create_engine(
-    settings.database_url,
-    **_build_engine_kwargs(settings.database_url),
-)
-
+engine: Engine = build_engine(settings.database_url, settings.database_echo)
 SessionLocal = sessionmaker(
     bind=engine,
     class_=Session,
@@ -42,7 +26,6 @@ SessionLocal = sessionmaker(
 
 def get_db_session() -> Generator[Session, None, None]:
     session = SessionLocal()
-
     try:
         yield session
     finally:

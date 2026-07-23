@@ -16,14 +16,6 @@ def check_database_health() -> DatabaseHealth:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-
-        return DatabaseHealth(
-            status="healthy",
-            error=None,
-        )
-
+        return DatabaseHealth(status="healthy")
     except SQLAlchemyError:
-        return DatabaseHealth(
-            status="unhealthy",
-            error="Database connection failed",
-        )
+        return DatabaseHealth(status="unhealthy", error="Database connection failed")

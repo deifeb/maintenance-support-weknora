@@ -8,30 +8,19 @@ from app.core.responses import success_response
 from app.schemas.common import SuccessResponse
 from app.schemas.system import SystemInfoData
 
-router = APIRouter(
-    prefix="/system",
-    tags=["system"],
-)
+router = APIRouter(prefix="/system", tags=["system"])
 
 
 def get_database_type(database_url: str) -> str:
     scheme = urlparse(database_url).scheme
-
-    if not scheme:
-        return "unknown"
-
-    return scheme.split("+", maxsplit=1)[0]
+    return scheme.split("+", maxsplit=1)[0] if scheme else "unknown"
 
 
-@router.get(
-    "/info",
-    response_model=SuccessResponse[SystemInfoData],
-)
+@router.get("/info", response_model=SuccessResponse[SystemInfoData])
 def system_info() -> SuccessResponse[SystemInfoData]:
     settings = get_settings()
-
     return success_response(
-        data=SystemInfoData(
+        SystemInfoData(
             service="maintenance-api",
             version=settings.app_version,
             environment=settings.app_env,
