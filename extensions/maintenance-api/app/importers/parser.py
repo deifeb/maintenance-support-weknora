@@ -83,43 +83,96 @@ class WorkbookParser:
         self.max_size_bytes = max_size_mb * 1024 * 1024
         self.max_rows_per_sheet = max_rows_per_sheet
 
-    def parse(self, content: bytes, filename: str) -> tuple[dict[str, list[dict[str, Any]]], list[ImportIssue]]:
+    def parse(
+        self, content: bytes, filename: str
+    ) -> tuple[dict[str, list[dict[str, Any]]], list[ImportIssue]]:
         errors: list[ImportIssue] = []
         if not filename.lower().endswith(".xlsx"):
-            return {}, [ImportIssue(code="INVALID_FILE_TYPE", message="Only .xlsx files are accepted")]
+            return {}, [
+                ImportIssue(code="INVALID_FILE_TYPE", message="Only .xlsx files are accepted")
+            ]
         if len(content) > self.max_size_bytes:
-            return {}, [ImportIssue(code="FILE_TOO_LARGE", message="Workbook exceeds the configured size limit")]
+            return {}, [
+                ImportIssue(
+                    code="FILE_TOO_LARGE", message="Workbook exceeds the configured size limit"
+                )
+            ]
         try:
-            workbook = load_workbook(BytesIO(content), data_only=False, read_only=False, keep_vba=False)
+            workbook = load_workbook(
+                BytesIO(content), data_only=False, read_only=False, keep_vba=False
+            )
         except Exception:
             return {}, [ImportIssue(code="INVALID_WORKBOOK", message="Workbook cannot be opened")]
         parsed: dict[str, list[dict[str, Any]]] = {}
         for sheet_name in SHEET_SPECS:
             if sheet_name not in workbook.sheetnames:
-                errors.append(ImportIssue(sheet=sheet_name, code="MISSING_SHEET", message="Required worksheet is missing"))
+                errors.append(
+                    ImportIssue(
+                        sheet=sheet_name,
+                        code="MISSING_SHEET",
+                        message="Required worksheet is missing",
+                    )
+                )
                 continue
             sheet = workbook[sheet_name]
             headers = [cell.value for cell in sheet[1]]
             header_set = {str(value).strip() for value in headers if value is not None}
             missing = required_headers(sheet_name) - header_set
             for header in sorted(missing):
-                errors.append(ImportIssue(sheet=sheet_name, field=header, code="MISSING_HEADER", message="Required header is missing"))
+                errors.append(
+                    ImportIssue(
+                        sheet=sheet_name,
+                        field=header,
+                        code="MISSING_HEADER",
+                        message="Required header is missing",
+                    )
+                )
             mapping = header_map(sheet_name)
-            positions = {index: mapping[str(value).strip()] for index, value in enumerate(headers) if value is not None and str(value).strip() in mapping}
+            positions = {
+                index: mapping[str(value).strip()]
+                for index, value in enumerate(headers)
+                if value is not None and str(value).strip() in mapping
+            }
             rows: list[dict[str, Any]] = []
             for row_number, row in enumerate(sheet.iter_rows(min_row=2), start=2):
                 if row_number - 1 > self.max_rows_per_sheet:
-                    errors.append(ImportIssue(sheet=sheet_name, row=row_number, code="ROW_LIMIT_EXCEEDED", message="Worksheet exceeds the configured row limit"))
+                    errors.append(
+                        ImportIssue(
+                            sheet=sheet_name,
+                            row=row_number,
+                            code="ROW_LIMIT_EXCEEDED",
+                            message="Worksheet exceeds the configured row limit",
+                        )
+                    )
                     break
                 if any(cell.data_type == "f" for cell in row):
-                    errors.append(ImportIssue(sheet=sheet_name, row=row_number, code="FORMULA_NOT_ALLOWED", message="Formula cells are not allowed"))
+                    errors.append(
+                        ImportIssue(
+                            sheet=sheet_name,
+                            row=row_number,
+                            code="FORMULA_NOT_ALLOWED",
+                            message="Formula cells are not allowed",
+                        )
+                    )
                     continue
-                values = {positions[index]: cell.value for index, cell in enumerate(row) if index in positions}
+                values = {
+                    positions[index]: cell.value
+                    for index, cell in enumerate(row)
+                    if index in positions
+                }
                 if not any(value not in (None, "") for value in values.values()):
                     continue
                 operation = normalize_code(values.get("operation") or ImportOperation.UPSERT)
                 if operation not in {item.value for item in ImportOperation}:
-                    errors.append(ImportIssue(sheet=sheet_name, row=row_number, field="操作", code="INVALID_OPERATION", message="Operation must be CREATE, UPDATE, or UPSERT"))
+                    errors.append(
+                        ImportIssue(
+                            sheet=sheet_name,
+                            row=row_number,
+                            field="操作",
+                            code="INVALID_OPERATION",
+                            message="Operation must be CREATE, UPDATE, or UPSERT",
+                        )
+                    )
                     continue
                 values["operation"] = operation
                 values["_row"] = row_number

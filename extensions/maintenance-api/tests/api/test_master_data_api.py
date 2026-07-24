@@ -32,9 +32,9 @@ def test_configuration_api_flow(client) -> None:
     equipment = client.post(
         "/api/v1/master-data/equipment-models", json={"code": "EQ-1", "name": "E"}
     ).json()["data"]
-    part = client.post(
-        "/api/v1/master-data/parts", json={"code": "PT-1", "name": "P"}
-    ).json()["data"]
+    part = client.post("/api/v1/master-data/parts", json={"code": "PT-1", "name": "P"}).json()[
+        "data"
+    ]
     version = client.post(
         "/api/v1/master-data/configuration-versions",
         json={
@@ -55,9 +55,7 @@ def test_configuration_api_flow(client) -> None:
         },
     )
     assert item.status_code == 201
-    published = client.post(
-        f"/api/v1/master-data/configuration-versions/{version_id}/publish"
-    )
+    published = client.post(f"/api/v1/master-data/configuration-versions/{version_id}/publish")
     assert published.status_code == 200
     tree = client.get(f"/api/v1/master-data/configuration-versions/{version_id}/tree")
     assert tree.status_code == 200

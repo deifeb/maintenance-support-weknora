@@ -1,4 +1,3 @@
-
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
@@ -31,7 +30,9 @@ class InventoryService(CrudService):
             raise NotFoundError("warehouse", identifier)
         return warehouse
 
-    def _validate_references(self, session: Session, warehouse_id: int, spare_part_id: int) -> Warehouse:
+    def _validate_references(
+        self, session: Session, warehouse_id: int, spare_part_id: int
+    ) -> Warehouse:
         warehouse = self._warehouse(session, warehouse_id)
         if session.get(SparePart, spare_part_id) is None:
             raise NotFoundError("spare_part", spare_part_id)
@@ -41,14 +42,20 @@ class InventoryService(CrudService):
         if warehouse.status != WarehouseStatus.NORMAL or not warehouse.is_active:
             raise ConflictError("warehouse is not available for inventory changes")
 
-    def create_inventory(self, session: Session, payload: WarehouseInventoryCreate, *, commit: bool = True):
+    def create_inventory(
+        self, session: Session, payload: WarehouseInventoryCreate, *, commit: bool = True
+    ):
         warehouse = self._validate_references(session, payload.warehouse_id, payload.spare_part_id)
         self._validate_state(warehouse)
-        if self.inventory_repository.get_by_business_key(session, payload.warehouse_id, payload.spare_part_id):
+        if self.inventory_repository.get_by_business_key(
+            session, payload.warehouse_id, payload.spare_part_id
+        ):
             raise ConflictError("inventory already exists for warehouse and spare part")
         return super().create(session, payload, commit=commit)
 
-    def update_inventory(self, session: Session, identifier: int, payload: WarehouseInventoryUpdate):
+    def update_inventory(
+        self, session: Session, identifier: int, payload: WarehouseInventoryUpdate
+    ):
         current = self.get(session, identifier)
         warehouse = self._warehouse(session, current.warehouse_id)
         self._validate_state(warehouse)

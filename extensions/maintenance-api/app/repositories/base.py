@@ -80,7 +80,9 @@ class BaseRepository(Generic[ModelT]):
         if not hasattr(self.model, sort_by):
             sort_by = "id"
         sort_column = getattr(self.model, sort_by)
-        stmt = stmt.order_by(sort_column.desc() if sort_order.lower() == "desc" else sort_column.asc())
+        stmt = stmt.order_by(
+            sort_column.desc() if sort_order.lower() == "desc" else sort_column.asc()
+        )
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
         items = list(session.scalars(stmt).all())

@@ -12,9 +12,9 @@ class SupplierRepository(BaseRepository[Supplier]):
     def count_references(self, session: Session, identifier: int) -> int:
         return int(
             session.scalar(
-                select(func.count()).select_from(SupplierOffer).where(
-                    SupplierOffer.supplier_id == identifier
-                )
+                select(func.count())
+                .select_from(SupplierOffer)
+                .where(SupplierOffer.supplier_id == identifier)
             )
             or 0
         )

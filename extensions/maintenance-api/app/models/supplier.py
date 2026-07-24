@@ -31,7 +31,9 @@ class Supplier(Base, ActiveMixin, TimestampMixin):
     offers: Mapped[list["SupplierOffer"]] = relationship(back_populates="supplier")
 
     __table_args__ = (
-        CheckConstraint("rating IS NULL OR (rating >= 0 AND rating <= 100)", name="ck_supplier_rating"),
+        CheckConstraint(
+            "rating IS NULL OR (rating >= 0 AND rating <= 100)", name="ck_supplier_rating"
+        ),
     )
 
 
@@ -51,7 +53,9 @@ class SupplierOffer(Base, ActiveMixin, TimestampMixin):
     tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     price_includes_tax: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    minimum_order_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=1)
+    minimum_order_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=1
+    )
     order_multiple: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=1)
     maximum_supply_quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
     warranty_months: Mapped[int | None] = mapped_column(Integer)
@@ -66,7 +70,9 @@ class SupplierOffer(Base, ActiveMixin, TimestampMixin):
 
     __table_args__ = (
         CheckConstraint("unit_price >= 0", name="ck_offer_price_nonnegative"),
-        CheckConstraint("tax_rate IS NULL OR (tax_rate >= 0 AND tax_rate <= 1)", name="ck_offer_tax_rate"),
+        CheckConstraint(
+            "tax_rate IS NULL OR (tax_rate >= 0 AND tax_rate <= 1)", name="ck_offer_tax_rate"
+        ),
         CheckConstraint("lead_time_days >= 0", name="ck_offer_lead_time_nonnegative"),
         CheckConstraint("minimum_order_quantity >= 0", name="ck_offer_min_order_nonnegative"),
         CheckConstraint("order_multiple > 0", name="ck_offer_order_multiple_positive"),
@@ -74,6 +80,11 @@ class SupplierOffer(Base, ActiveMixin, TimestampMixin):
             "maximum_supply_quantity IS NULL OR maximum_supply_quantity >= 0",
             name="ck_offer_max_supply_nonnegative",
         ),
-        CheckConstraint("warranty_months IS NULL OR warranty_months >= 0", name="ck_offer_warranty_nonnegative"),
-        CheckConstraint("valid_to IS NULL OR valid_from IS NULL OR valid_to > valid_from", name="ck_offer_date_order"),
+        CheckConstraint(
+            "warranty_months IS NULL OR warranty_months >= 0", name="ck_offer_warranty_nonnegative"
+        ),
+        CheckConstraint(
+            "valid_to IS NULL OR valid_from IS NULL OR valid_to > valid_from",
+            name="ck_offer_date_order",
+        ),
     )

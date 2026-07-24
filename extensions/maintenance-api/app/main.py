@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.v1.endpoints.health import router as health_router
@@ -5,7 +7,21 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.responses import success_response
+from app.db.session import SessionLocal
 from app.schemas.common import SuccessResponse
+from app.workers import demand_task_executor, recover_interrupted_calculations
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    del application
+    session = SessionLocal()
+    try:
+        recover_interrupted_calculations(session)
+    finally:
+        session.close()
+    yield
+    demand_task_executor.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:
@@ -14,6 +30,7 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         debug=settings.app_debug,
+        lifespan=lifespan,
     )
     register_exception_handlers(application)
     application.include_router(health_router)

@@ -24,15 +24,23 @@ class SupplierOfferService(CrudService):
         if session.get(SparePart, spare_part_id) is None:
             raise NotFoundError("spare_part", spare_part_id)
 
-    def _validate_preferred(self, session: Session, payload: SupplierOfferCreate, exclude_id: int | None = None) -> None:
-        if payload.is_active and payload.is_preferred and self.offer_repository.find_preferred_overlap(
-            session,
-            spare_part_id=payload.spare_part_id,
-            valid_from=payload.valid_from,
-            valid_to=payload.valid_to,
-            exclude_id=exclude_id,
+    def _validate_preferred(
+        self, session: Session, payload: SupplierOfferCreate, exclude_id: int | None = None
+    ) -> None:
+        if (
+            payload.is_active
+            and payload.is_preferred
+            and self.offer_repository.find_preferred_overlap(
+                session,
+                spare_part_id=payload.spare_part_id,
+                valid_from=payload.valid_from,
+                valid_to=payload.valid_to,
+                exclude_id=exclude_id,
+            )
         ):
-            raise ConflictError("preferred supplier offer validity interval overlaps an existing preferred offer")
+            raise ConflictError(
+                "preferred supplier offer validity interval overlaps an existing preferred offer"
+            )
 
     def create_offer(self, session: Session, payload: SupplierOfferCreate, *, commit: bool = True):
         self._validate_references(session, payload.supplier_id, payload.spare_part_id)
@@ -43,7 +51,9 @@ class SupplierOfferService(CrudService):
         current = self.get(session, identifier)
         merged = SupplierOfferCreate.model_validate(
             {
-                **SupplierOfferRead.model_validate(current).model_dump(exclude={"id", "created_at", "updated_at"}),
+                **SupplierOfferRead.model_validate(current).model_dump(
+                    exclude={"id", "created_at", "updated_at"}
+                ),
                 **payload.model_dump(exclude_unset=True),
             }
         )
@@ -52,7 +62,9 @@ class SupplierOfferService(CrudService):
         return super().update(session, identifier, payload)
 
     def delete(self, session: Session, identifier: int) -> None:
-        raise ConflictError("supplier offers are historical records and cannot be physically deleted")
+        raise ConflictError(
+            "supplier offers are historical records and cannot be physically deleted"
+        )
 
 
 supplier_offer_service = SupplierOfferService()

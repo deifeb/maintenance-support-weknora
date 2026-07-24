@@ -52,3 +52,27 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8100
 python -m pytest -v
 python -m ruff check app tests
 ```
+
+## Demand calculation engine
+
+The demand subsystem is available under `/api/v1/demand` and uses the sibling pure-Python package `../demand-engine`.
+
+```powershell
+cd extensions\maintenance-api
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ..\demand-engine
+python -m pip install -r requirements-dev.txt
+python -m alembic upgrade head
+python -m app.scripts.seed_master_data
+python -m app.scripts.seed_demand_scenarios
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8100
+```
+
+Main capabilities:
+
+- reusable demand scenario templates and immutable published versions;
+- exponential, Weibull, binomial, negative-binomial and empirical calculations;
+- analytical, adaptive Monte Carlo, AUTO and COMPARE execution modes;
+- synchronous and background calculation tasks;
+- input snapshots, idempotency keys, cancellation, retry and replay;
+- inventory gap analysis and JSON/XLSX exports.

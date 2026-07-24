@@ -87,7 +87,9 @@ class WarehouseInventory(Base, TimestampMixin):
         CheckConstraint("in_transit_quantity >= 0", name="ck_inventory_in_transit_nonnegative"),
         CheckConstraint("safety_stock >= 0", name="ck_inventory_safety_nonnegative"),
         CheckConstraint("reorder_point >= 0", name="ck_inventory_reorder_nonnegative"),
-        CheckConstraint("maximum_stock IS NULL OR maximum_stock >= 0", name="ck_inventory_max_nonnegative"),
+        CheckConstraint(
+            "maximum_stock IS NULL OR maximum_stock >= 0", name="ck_inventory_max_nonnegative"
+        ),
         CheckConstraint(
             "reserved_quantity + damaged_quantity + quarantined_quantity <= on_hand_quantity",
             name="ck_inventory_allocated_not_exceed_on_hand",

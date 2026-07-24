@@ -17,7 +17,10 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 
 @router.post("", response_model=SuccessResponse[WarehouseRead], status_code=status.HTTP_201_CREATED)
 def create_warehouse(payload: WarehouseCreate, session: SessionDep):
-    return success_response(WarehouseRead.model_validate(warehouse_service.create(session, payload)), "Warehouse created")
+    return success_response(
+        WarehouseRead.model_validate(warehouse_service.create(session, payload)),
+        "Warehouse created",
+    )
 
 
 @router.get("", response_model=SuccessResponse[PageData[WarehouseRead]])
@@ -27,17 +30,27 @@ def list_warehouses(session: SessionDep, params: Annotated[dict, Depends(list_pa
 
 @router.get("/{identifier}", response_model=SuccessResponse[WarehouseRead])
 def get_warehouse(identifier: int, session: SessionDep):
-    return success_response(WarehouseRead.model_validate(warehouse_service.get(session, identifier)))
+    return success_response(
+        WarehouseRead.model_validate(warehouse_service.get(session, identifier))
+    )
 
 
 @router.put("/{identifier}", response_model=SuccessResponse[WarehouseRead])
 def update_warehouse(identifier: int, payload: WarehouseUpdate, session: SessionDep):
-    return success_response(WarehouseRead.model_validate(warehouse_service.update(session, identifier, payload)), "Warehouse updated")
+    return success_response(
+        WarehouseRead.model_validate(warehouse_service.update(session, identifier, payload)),
+        "Warehouse updated",
+    )
 
 
 @router.patch("/{identifier}/active", response_model=SuccessResponse[WarehouseRead])
 def set_warehouse_active(identifier: int, payload: ActivePatch, session: SessionDep):
-    return success_response(WarehouseRead.model_validate(warehouse_service.set_active(session, identifier, payload.is_active)), "Warehouse status updated")
+    return success_response(
+        WarehouseRead.model_validate(
+            warehouse_service.set_active(session, identifier, payload.is_active)
+        ),
+        "Warehouse status updated",
+    )
 
 
 @router.delete("/{identifier}", response_model=SuccessResponse[DeleteResult])

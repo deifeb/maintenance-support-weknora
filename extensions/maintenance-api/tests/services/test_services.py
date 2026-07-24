@@ -31,7 +31,9 @@ from app.services import (
 
 
 def create_catalog(session):
-    equipment = equipment_service.create(session, EquipmentModelCreate(code="EQ-1", name="Equipment"))
+    equipment = equipment_service.create(
+        session, EquipmentModelCreate(code="EQ-1", name="Equipment")
+    )
     part = part_service.create(session, PartCreate(code="PT-1", name="Part"))
     spare = spare_part_service.create(session, SparePartCreate(code="SP-1", name="Spare"))
     return equipment, part, spare
@@ -96,9 +98,9 @@ def test_configuration_publish_clone_and_retire(session) -> None:
     clone = configuration_service.clone(
         session,
         version.id,
-        __import__("app.schemas.equipment", fromlist=["ConfigurationCloneRequest"]).ConfigurationCloneRequest(
-            version_code="V2", version_name="Version 2"
-        ),
+        __import__(
+            "app.schemas.equipment", fromlist=["ConfigurationCloneRequest"]
+        ).ConfigurationCloneRequest(version_code="V2", version_name="Version 2"),
     )
     assert clone.status == ConfigurationStatus.DRAFT
     assert len(configuration_service.tree(session, clone.id).items) == 1

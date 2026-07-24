@@ -50,8 +50,12 @@ class SparePart(Base, ActiveMixin, TimestampMixin):
     default_service_level: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
     description: Mapped[str | None] = mapped_column(Text)
 
-    configuration_items: Mapped[list["ConfigurationItem"]] = relationship(back_populates="spare_part")
-    reliability_profiles: Mapped[list["ReliabilityProfile"]] = relationship(back_populates="spare_part")
+    configuration_items: Mapped[list["ConfigurationItem"]] = relationship(
+        back_populates="spare_part"
+    )
+    reliability_profiles: Mapped[list["ReliabilityProfile"]] = relationship(
+        back_populates="spare_part"
+    )
     inventories: Mapped[list["WarehouseInventory"]] = relationship(back_populates="spare_part")
     supplier_offers: Mapped[list["SupplierOffer"]] = relationship(back_populates="spare_part")
 

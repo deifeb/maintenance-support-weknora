@@ -18,24 +18,24 @@ class SparePartRepository(BaseRepository[SparePart]):
     def count_references(self, session: Session, identifier: int) -> int:
         counts = [
             session.scalar(
-                select(func.count()).select_from(ConfigurationItem).where(
-                    ConfigurationItem.spare_part_id == identifier
-                )
+                select(func.count())
+                .select_from(ConfigurationItem)
+                .where(ConfigurationItem.spare_part_id == identifier)
             ),
             session.scalar(
-                select(func.count()).select_from(ReliabilityProfile).where(
-                    ReliabilityProfile.spare_part_id == identifier
-                )
+                select(func.count())
+                .select_from(ReliabilityProfile)
+                .where(ReliabilityProfile.spare_part_id == identifier)
             ),
             session.scalar(
-                select(func.count()).select_from(WarehouseInventory).where(
-                    WarehouseInventory.spare_part_id == identifier
-                )
+                select(func.count())
+                .select_from(WarehouseInventory)
+                .where(WarehouseInventory.spare_part_id == identifier)
             ),
             session.scalar(
-                select(func.count()).select_from(SupplierOffer).where(
-                    SupplierOffer.spare_part_id == identifier
-                )
+                select(func.count())
+                .select_from(SupplierOffer)
+                .where(SupplierOffer.spare_part_id == identifier)
             ),
         ]
         return sum(int(value or 0) for value in counts)

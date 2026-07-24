@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demand-engine"
+version = "0.1.0"
+description = "Pure maintenance spare demand calculation engine"
+requires-python = ">=3.11"
+dependencies = ["numpy>=2.0,<3.0", "scipy>=1.14,<2.0"]
+
+[project.scripts]
+demand-engine = "demand_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

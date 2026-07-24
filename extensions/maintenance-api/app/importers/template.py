@@ -193,7 +193,9 @@ def create_template_bytes() -> bytes:
             cell = sheet.cell(row=1, column=index, value=display)
             cell.font = Font(bold=True)
             cell.fill = required_fill if required else header_fill
-            sheet.column_dimensions[get_column_letter(index)].width = max(14, min(28, len(display) * 2 + 4))
+            sheet.column_dimensions[get_column_letter(index)].width = max(
+                14, min(28, len(display) * 2 + 4)
+            )
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}1"
     output = BytesIO()

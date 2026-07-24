@@ -9,13 +9,20 @@ from app.services.supplier_service import supplier_service
 from app.services.warehouse_service import warehouse_service
 
 __all__ = [
-    "equipment_service",
+    "calculation_service",
     "configuration_service",
-    "part_service",
-    "spare_part_service",
-    "reliability_service",
-    "warehouse_service",
+    "equipment_service",
     "inventory_service",
-    "supplier_service",
+    "part_service",
+    "reliability_service",
+    "repair_service",
+    "scenario_service",
+    "spare_part_service",
     "supplier_offer_service",
+    "supplier_service",
+    "warehouse_service",
 ]
+
+from app.services.demand_calculation_service import calculation_service
+from app.services.repair_service import repair_service
+from app.services.scenario_service import scenario_service

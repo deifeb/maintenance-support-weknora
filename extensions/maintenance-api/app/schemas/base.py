@@ -9,7 +9,9 @@ class ORMModel(BaseModel):
 
 
 class CodeModel(BaseModel):
-    @field_validator("code", "version_code", "item_code", "profile_code", "offer_code", check_fields=False)
+    @field_validator(
+        "code", "version_code", "item_code", "profile_code", "offer_code", check_fields=False
+    )
     @classmethod
     def normalize_code(cls, value: str) -> str:
         normalized = value.strip().upper()

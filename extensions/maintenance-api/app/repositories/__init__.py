@@ -12,14 +12,25 @@ from app.repositories.supplier_repository import SupplierRepository
 from app.repositories.warehouse_repository import WarehouseRepository
 
 __all__ = [
-    "EquipmentRepository",
-    "ConfigurationRepository",
     "ConfigurationItemRepository",
-    "PartRepository",
-    "SparePartRepository",
-    "ReliabilityRepository",
-    "WarehouseRepository",
+    "ConfigurationRepository",
+    "DemandCalculationRepository",
+    "DemandScenarioTemplateRepository",
+    "DemandScenarioVersionRepository",
+    "EquipmentRepository",
     "InventoryRepository",
-    "SupplierRepository",
+    "PartRepository",
+    "ReliabilityRepository",
+    "RepairRepository",
+    "SparePartRepository",
     "SupplierOfferRepository",
+    "SupplierRepository",
+    "WarehouseRepository",
 ]
+
+from app.repositories.demand_calculation_repository import DemandCalculationRepository
+from app.repositories.demand_scenario_repository import (
+    DemandScenarioTemplateRepository,
+    DemandScenarioVersionRepository,
+)
+from app.repositories.repair_repository import RepairRepository

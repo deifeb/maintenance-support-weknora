@@ -12,9 +12,9 @@ class EquipmentRepository(BaseRepository[EquipmentModel]):
     def count_references(self, session: Session, identifier: int) -> int:
         return int(
             session.scalar(
-                select(func.count()).select_from(ConfigurationVersion).where(
-                    ConfigurationVersion.equipment_model_id == identifier
-                )
+                select(func.count())
+                .select_from(ConfigurationVersion)
+                .where(ConfigurationVersion.equipment_model_id == identifier)
             )
             or 0
         )

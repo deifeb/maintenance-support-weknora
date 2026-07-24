@@ -42,7 +42,9 @@ class NotFoundError(AppException):
 
 
 class ConflictError(AppException):
-    def __init__(self, message: str, details: Any | None = None, code: str = "RESOURCE_CONFLICT") -> None:
+    def __init__(
+        self, message: str, details: Any | None = None, code: str = "RESOURCE_CONFLICT"
+    ) -> None:
         super().__init__(status_code=409, code=code, message=message, details=details)
 
 
@@ -56,7 +58,9 @@ class ResourceInUseError(ConflictError):
 
 
 class BusinessValidationError(AppException):
-    def __init__(self, message: str, details: Any | None = None, code: str = "BUSINESS_VALIDATION_ERROR") -> None:
+    def __init__(
+        self, message: str, details: Any | None = None, code: str = "BUSINESS_VALIDATION_ERROR"
+    ) -> None:
         super().__init__(status_code=422, code=code, message=message, details=details)
 
 
@@ -79,7 +83,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def handle_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
         del request
         return JSONResponse(
             status_code=422,

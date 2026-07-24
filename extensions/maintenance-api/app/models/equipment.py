@@ -97,7 +97,9 @@ class ConfigurationVersion(Base, ActiveMixin, TimestampMixin):
             "equipment_model_id",
             unique=True,
             sqlite_where=text("is_default = 1 AND is_active = 1 AND status = 'PUBLISHED'"),
-            postgresql_where=text("is_default IS TRUE AND is_active IS TRUE AND status = 'PUBLISHED'"),
+            postgresql_where=text(
+                "is_default IS TRUE AND is_active IS TRUE AND status = 'PUBLISHED'"
+            ),
         ),
     )
 
@@ -159,5 +161,7 @@ class ConfigurationItem(Base, TimestampMixin):
             name="ck_configuration_replacement_ratio",
         ),
         CheckConstraint("sort_order >= 0", name="ck_configuration_sort_order_nonnegative"),
-        CheckConstraint("parent_item_id IS NULL OR parent_item_id != id", name="ck_item_not_self_parent"),
+        CheckConstraint(
+            "parent_item_id IS NULL OR parent_item_id != id", name="ck_item_not_self_parent"
+        ),
     )

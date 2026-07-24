@@ -20,10 +20,14 @@ router = APIRouter(prefix="/reliability-profiles", tags=["master-data: reliabili
 SessionDep = Annotated[Session, Depends(get_db_session)]
 
 
-@router.post("", response_model=SuccessResponse[ReliabilityProfileRead], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=SuccessResponse[ReliabilityProfileRead], status_code=status.HTTP_201_CREATED
+)
 def create_profile(payload: ReliabilityProfileCreate, session: SessionDep):
     item = reliability_service.create_profile(session, payload)
-    return success_response(ReliabilityProfileRead.model_validate(item), "Reliability profile created")
+    return success_response(
+        ReliabilityProfileRead.model_validate(item), "Reliability profile created"
+    )
 
 
 @router.get("", response_model=SuccessResponse[PageData[ReliabilityProfileRead]])
@@ -39,18 +43,24 @@ def list_profiles(
         "configuration_version_id": configuration_version_id,
         "model_type": model_type,
     }
-    return success_response(reliability_service.list(session, **params, filters=filters), "Query completed")
+    return success_response(
+        reliability_service.list(session, **params, filters=filters), "Query completed"
+    )
 
 
 @router.get("/{identifier}", response_model=SuccessResponse[ReliabilityProfileRead])
 def get_profile(identifier: int, session: SessionDep):
-    return success_response(ReliabilityProfileRead.model_validate(reliability_service.get(session, identifier)))
+    return success_response(
+        ReliabilityProfileRead.model_validate(reliability_service.get(session, identifier))
+    )
 
 
 @router.put("/{identifier}", response_model=SuccessResponse[ReliabilityProfileRead])
 def update_profile(identifier: int, payload: ReliabilityProfileUpdate, session: SessionDep):
     return success_response(
-        ReliabilityProfileRead.model_validate(reliability_service.update_profile(session, identifier, payload)),
+        ReliabilityProfileRead.model_validate(
+            reliability_service.update_profile(session, identifier, payload)
+        ),
         "Reliability profile updated",
     )
 

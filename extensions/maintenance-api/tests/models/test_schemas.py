@@ -14,7 +14,10 @@ from pydantic import ValidationError
         (ReliabilityModelType.EXPONENTIAL, {"failure_rate": "0.001"}),
         (ReliabilityModelType.WEIBULL, {"weibull_shape": "1.5", "weibull_scale": "1000"}),
         (ReliabilityModelType.BINOMIAL, {"binomial_trials": 10, "binomial_probability": "0.2"}),
-        (ReliabilityModelType.NEGATIVE_BINOMIAL, {"negative_binomial_r": "3", "negative_binomial_p": "0.4"}),
+        (
+            ReliabilityModelType.NEGATIVE_BINOMIAL,
+            {"negative_binomial_r": "3", "negative_binomial_p": "0.4"},
+        ),
         (ReliabilityModelType.EMPIRICAL, {"empirical_mean": "2", "empirical_variance": "1"}),
     ],
 )
@@ -55,7 +58,12 @@ def test_invalid_inventory_relations_are_rejected(values) -> None:
 
 @pytest.mark.parametrize(
     "field,value",
-    [("unit_price", -1), ("lead_time_days", -1), ("order_multiple", 0), ("tax_rate", Decimal("1.1"))],
+    [
+        ("unit_price", -1),
+        ("lead_time_days", -1),
+        ("order_multiple", 0),
+        ("tax_rate", Decimal("1.1")),
+    ],
 )
 def test_invalid_supplier_offer_values_are_rejected(field, value) -> None:
     data = {

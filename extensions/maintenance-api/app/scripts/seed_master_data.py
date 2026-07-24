@@ -130,8 +130,12 @@ def seed() -> dict[str, int]:
                 )
                 versions.append(version)
                 for local_index in range(1, 9):
-                    global_index = ((eq_index - 1) * 15 + (version_index - 1) * 8 + local_index - 1) % 15
-                    spare_index = ((eq_index - 1) * 15 + (version_index - 1) * 8 + local_index - 1) % 20
+                    global_index = (
+                        (eq_index - 1) * 15 + (version_index - 1) * 8 + local_index - 1
+                    ) % 15
+                    spare_index = (
+                        (eq_index - 1) * 15 + (version_index - 1) * 8 + local_index - 1
+                    ) % 20
                     item_code = f"N{local_index:02d}"
                     item = session.scalar(
                         select(ConfigurationItem).where(
@@ -252,9 +256,7 @@ def seed() -> dict[str, int]:
             Supplier,
             SupplierOffer,
         ]
-        return {
-            model.__tablename__: len(session.scalars(select(model)).all()) for model in models
-        }
+        return {model.__tablename__: len(session.scalars(select(model)).all()) for model in models}
     except Exception:
         session.rollback()
         raise

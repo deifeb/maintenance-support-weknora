@@ -29,9 +29,9 @@ class ConfigurationRepository(BaseRepository[ConfigurationVersion]):
     def count_references(self, session: Session, identifier: int) -> int:
         return int(
             session.scalar(
-                select(func.count()).select_from(ReliabilityProfile).where(
-                    ReliabilityProfile.configuration_version_id == identifier
-                )
+                select(func.count())
+                .select_from(ReliabilityProfile)
+                .where(ReliabilityProfile.configuration_version_id == identifier)
             )
             or 0
         )
@@ -51,7 +51,9 @@ class ConfigurationItemRepository(BaseRepository[ConfigurationItem]):
             )
         )
 
-    def list_for_version(self, session: Session, configuration_version_id: int) -> list[ConfigurationItem]:
+    def list_for_version(
+        self, session: Session, configuration_version_id: int
+    ) -> list[ConfigurationItem]:
         return list(
             session.scalars(
                 select(ConfigurationItem)

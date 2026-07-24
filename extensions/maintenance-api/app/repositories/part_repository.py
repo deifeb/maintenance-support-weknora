@@ -12,9 +12,9 @@ class PartRepository(BaseRepository[Part]):
     def count_references(self, session: Session, identifier: int) -> int:
         return int(
             session.scalar(
-                select(func.count()).select_from(ConfigurationItem).where(
-                    ConfigurationItem.part_id == identifier
-                )
+                select(func.count())
+                .select_from(ConfigurationItem)
+                .where(ConfigurationItem.part_id == identifier)
             )
             or 0
         )

@@ -17,7 +17,9 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 
 @router.post("", response_model=SuccessResponse[PartRead], status_code=status.HTTP_201_CREATED)
 def create_part(payload: PartCreate, session: SessionDep):
-    return success_response(PartRead.model_validate(part_service.create(session, payload)), "Part created")
+    return success_response(
+        PartRead.model_validate(part_service.create(session, payload)), "Part created"
+    )
 
 
 @router.get("", response_model=SuccessResponse[PageData[PartRead]])
@@ -32,12 +34,17 @@ def get_part(identifier: int, session: SessionDep):
 
 @router.put("/{identifier}", response_model=SuccessResponse[PartRead])
 def update_part(identifier: int, payload: PartUpdate, session: SessionDep):
-    return success_response(PartRead.model_validate(part_service.update(session, identifier, payload)), "Part updated")
+    return success_response(
+        PartRead.model_validate(part_service.update(session, identifier, payload)), "Part updated"
+    )
 
 
 @router.patch("/{identifier}/active", response_model=SuccessResponse[PartRead])
 def set_part_active(identifier: int, payload: ActivePatch, session: SessionDep):
-    return success_response(PartRead.model_validate(part_service.set_active(session, identifier, payload.is_active)), "Part status updated")
+    return success_response(
+        PartRead.model_validate(part_service.set_active(session, identifier, payload.is_active)),
+        "Part status updated",
+    )
 
 
 @router.delete("/{identifier}", response_model=SuccessResponse[DeleteResult])

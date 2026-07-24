@@ -73,3 +73,6 @@ extensions/**/data/*.db
 extensions/**/data/*.db-shm
 extensions/**/data/*.db-wal
 .phase02-backup-*/
+.phase03-backup-*/
+extensions/maintenance-api/exports/
+extensions/maintenance-api/data/demand-*.json

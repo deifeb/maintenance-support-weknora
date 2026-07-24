@@ -15,7 +15,9 @@ router = APIRouter(prefix="/supplier-offers", tags=["master-data: supplier offer
 SessionDep = Annotated[Session, Depends(get_db_session)]
 
 
-@router.post("", response_model=SuccessResponse[SupplierOfferRead], status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=SuccessResponse[SupplierOfferRead], status_code=status.HTTP_201_CREATED
+)
 def create_offer(payload: SupplierOfferCreate, session: SessionDep):
     item = supplier_offer_service.create_offer(session, payload)
     return success_response(SupplierOfferRead.model_validate(item), "Supplier offer created")
@@ -29,18 +31,24 @@ def list_offers(
     spare_part_id: int | None = Query(default=None),
 ):
     filters = {"supplier_id": supplier_id, "spare_part_id": spare_part_id}
-    return success_response(supplier_offer_service.list(session, **params, filters=filters), "Query completed")
+    return success_response(
+        supplier_offer_service.list(session, **params, filters=filters), "Query completed"
+    )
 
 
 @router.get("/{identifier}", response_model=SuccessResponse[SupplierOfferRead])
 def get_offer(identifier: int, session: SessionDep):
-    return success_response(SupplierOfferRead.model_validate(supplier_offer_service.get(session, identifier)))
+    return success_response(
+        SupplierOfferRead.model_validate(supplier_offer_service.get(session, identifier))
+    )
 
 
 @router.put("/{identifier}", response_model=SuccessResponse[SupplierOfferRead])
 def update_offer(identifier: int, payload: SupplierOfferUpdate, session: SessionDep):
     return success_response(
-        SupplierOfferRead.model_validate(supplier_offer_service.update_offer(session, identifier, payload)),
+        SupplierOfferRead.model_validate(
+            supplier_offer_service.update_offer(session, identifier, payload)
+        ),
         "Supplier offer updated",
     )
 

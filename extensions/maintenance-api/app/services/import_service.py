@@ -326,9 +326,7 @@ class MasterDataImportService:
             tax_rate=parse_decimal(row.get("tax_rate")),
             price_includes_tax=parse_bool(row.get("price_includes_tax"), True),
             lead_time_days=parse_int(row.get("lead_time_days")),
-            minimum_order_quantity=parse_decimal(
-                row.get("minimum_order_quantity"), Decimal("1")
-            ),
+            minimum_order_quantity=parse_decimal(row.get("minimum_order_quantity"), Decimal("1")),
             order_multiple=parse_decimal(row.get("order_multiple"), Decimal("1")),
             maximum_supply_quantity=parse_decimal(row.get("maximum_supply_quantity")),
             warranty_months=parse_int(row.get("warranty_months")),
@@ -368,9 +366,7 @@ class MasterDataImportService:
         for sheet, rows in parsed.items():
             builder = builders[sheet]
             for row in rows:
-                normalized = self._safe_build(
-                    sheet=sheet, row=row, factory=builder, errors=errors
-                )
+                normalized = self._safe_build(sheet=sheet, row=row, factory=builder, errors=errors)
                 if normalized is not None:
                     normalized["operation"] = row["operation"]
                     normalized["_row"] = row["_row"]
@@ -416,7 +412,10 @@ class MasterDataImportService:
         return {str(value) for value in session.scalars(select(field)).all()}
 
     def _operation_checks(
-        self, session: Session, normalized: dict[str, list[dict[str, Any]]], errors: list[ImportIssue]
+        self,
+        session: Session,
+        normalized: dict[str, list[dict[str, Any]]],
+        errors: list[ImportIssue],
     ) -> None:
         existing: dict[str, set[Any]] = {
             SHEET_EQUIPMENT: self._existing_codes(session, EquipmentModel, "code"),
@@ -444,8 +443,14 @@ class MasterDataImportService:
                     ConfigurationVersion.version_code,
                     ConfigurationItem.item_code,
                 )
-                .join(ConfigurationVersion, ConfigurationVersion.equipment_model_id == EquipmentModel.id)
-                .join(ConfigurationItem, ConfigurationItem.configuration_version_id == ConfigurationVersion.id)
+                .join(
+                    ConfigurationVersion,
+                    ConfigurationVersion.equipment_model_id == EquipmentModel.id,
+                )
+                .join(
+                    ConfigurationItem,
+                    ConfigurationItem.configuration_version_id == ConfigurationVersion.id,
+                )
             ).all()
         }
         existing[SHEET_INVENTORY] = {
@@ -478,12 +483,29 @@ class MasterDataImportService:
                 operation = ImportOperation(row["operation"])
                 exists = key in existing[sheet]
                 if operation == ImportOperation.CREATE and exists:
-                    errors.append(ImportIssue(sheet=sheet, row=row["_row"], code="CREATE_CONFLICT", message=f"Record already exists: {key}"))
+                    errors.append(
+                        ImportIssue(
+                            sheet=sheet,
+                            row=row["_row"],
+                            code="CREATE_CONFLICT",
+                            message=f"Record already exists: {key}",
+                        )
+                    )
                 if operation == ImportOperation.UPDATE and not exists:
-                    errors.append(ImportIssue(sheet=sheet, row=row["_row"], code="UPDATE_TARGET_MISSING", message=f"Record does not exist: {key}"))
+                    errors.append(
+                        ImportIssue(
+                            sheet=sheet,
+                            row=row["_row"],
+                            code="UPDATE_TARGET_MISSING",
+                            message=f"Record does not exist: {key}",
+                        )
+                    )
 
     def _cross_reference_checks(
-        self, session: Session, normalized: dict[str, list[dict[str, Any]]], errors: list[ImportIssue]
+        self,
+        session: Session,
+        normalized: dict[str, list[dict[str, Any]]],
+        errors: list[ImportIssue],
     ) -> None:
         equipment_codes = self._existing_codes(session, EquipmentModel, "code") | {
             row["code"] for row in normalized[SHEET_EQUIPMENT]
@@ -509,8 +531,7 @@ class MasterDataImportService:
                 )
             ).all()
         } | {
-            (row["equipment_code"], row["version_code"])
-            for row in normalized[SHEET_CONFIGURATION]
+            (row["equipment_code"], row["version_code"]) for row in normalized[SHEET_CONFIGURATION]
         }
         item_keys = {
             (row["equipment_code"], row["version_code"], row["item_code"])
@@ -519,42 +540,94 @@ class MasterDataImportService:
         for sheet, rows in normalized.items():
             for row in rows:
                 row_number = row["_row"]
+
                 def missing(field: str, value: Any, message: str) -> None:
-                    errors.append(ImportIssue(sheet=sheet, row=row_number, field=field, code="MISSING_REFERENCE", message=message))
+                    errors.append(
+                        ImportIssue(
+                            sheet=sheet,
+                            row=row_number,
+                            field=field,
+                            code="MISSING_REFERENCE",
+                            message=message,
+                        )
+                    )
+
                 if sheet == SHEET_CONFIGURATION and row["equipment_code"] not in equipment_codes:
-                    missing("equipment_code", row["equipment_code"], "Referenced equipment model does not exist")
+                    missing(
+                        "equipment_code",
+                        row["equipment_code"],
+                        "Referenced equipment model does not exist",
+                    )
                 elif sheet == SHEET_ITEM:
                     config_key = (row["equipment_code"], row["version_code"])
                     if config_key not in configuration_keys:
-                        missing("version_code", config_key, "Referenced configuration version does not exist")
+                        missing(
+                            "version_code",
+                            config_key,
+                            "Referenced configuration version does not exist",
+                        )
                     if row["part_code"] not in part_codes:
                         missing("part_code", row["part_code"], "Referenced part does not exist")
                     if row["spare_part_code"] and row["spare_part_code"] not in spare_codes:
-                        missing("spare_part_code", row["spare_part_code"], "Referenced spare part does not exist")
+                        missing(
+                            "spare_part_code",
+                            row["spare_part_code"],
+                            "Referenced spare part does not exist",
+                        )
                     if row["parent_item_code"]:
                         parent_key = (*config_key, row["parent_item_code"])
                         if parent_key not in item_keys:
-                            missing("parent_item_code", parent_key, "Referenced parent item does not exist in workbook")
+                            missing(
+                                "parent_item_code",
+                                parent_key,
+                                "Referenced parent item does not exist in workbook",
+                            )
                 elif sheet == SHEET_RELIABILITY:
                     if row["spare_part_code"] not in spare_codes:
-                        missing("spare_part_code", row["spare_part_code"], "Referenced spare part does not exist")
+                        missing(
+                            "spare_part_code",
+                            row["spare_part_code"],
+                            "Referenced spare part does not exist",
+                        )
                     if row["version_code"]:
                         config_key = (row["equipment_code"], row["version_code"])
                         if config_key not in configuration_keys:
-                            missing("version_code", config_key, "Referenced configuration version does not exist")
+                            missing(
+                                "version_code",
+                                config_key,
+                                "Referenced configuration version does not exist",
+                            )
                 elif sheet == SHEET_INVENTORY:
                     if row["warehouse_code"] not in warehouse_codes:
-                        missing("warehouse_code", row["warehouse_code"], "Referenced warehouse does not exist")
+                        missing(
+                            "warehouse_code",
+                            row["warehouse_code"],
+                            "Referenced warehouse does not exist",
+                        )
                     if row["spare_part_code"] not in spare_codes:
-                        missing("spare_part_code", row["spare_part_code"], "Referenced spare part does not exist")
+                        missing(
+                            "spare_part_code",
+                            row["spare_part_code"],
+                            "Referenced spare part does not exist",
+                        )
                 elif sheet == SHEET_OFFER:
                     if row["supplier_code"] not in supplier_codes:
-                        missing("supplier_code", row["supplier_code"], "Referenced supplier does not exist")
+                        missing(
+                            "supplier_code",
+                            row["supplier_code"],
+                            "Referenced supplier does not exist",
+                        )
                     if row["spare_part_code"] not in spare_codes:
-                        missing("spare_part_code", row["spare_part_code"], "Referenced spare part does not exist")
+                        missing(
+                            "spare_part_code",
+                            row["spare_part_code"],
+                            "Referenced spare part does not exist",
+                        )
 
         parent_by_key = {
-            (row["equipment_code"], row["version_code"], row["item_code"]): row.get("parent_item_code")
+            (row["equipment_code"], row["version_code"], row["item_code"]): row.get(
+                "parent_item_code"
+            )
             for row in normalized[SHEET_ITEM]
         }
         for key in parent_by_key:
@@ -562,7 +635,13 @@ class MasterDataImportService:
             cursor = key
             while cursor in parent_by_key and parent_by_key[cursor]:
                 if cursor in seen:
-                    errors.append(ImportIssue(sheet=SHEET_ITEM, code="CONFIGURATION_CYCLE", message=f"Configuration hierarchy contains a cycle at {key}"))
+                    errors.append(
+                        ImportIssue(
+                            sheet=SHEET_ITEM,
+                            code="CONFIGURATION_CYCLE",
+                            message=f"Configuration hierarchy contains a cycle at {key}",
+                        )
+                    )
                     break
                 seen.add(cursor)
                 cursor = (cursor[0], cursor[1], parent_by_key[cursor])
@@ -597,9 +676,7 @@ class MasterDataImportService:
             if key not in excluded:
                 setattr(instance, key, value)
 
-    def execute(
-        self, session: Session, *, content: bytes, filename: str
-    ) -> ImportExecutionResult:
+    def execute(self, session: Session, *, content: bytes, filename: str) -> ImportExecutionResult:
         validation = self.validate(session, content=content, filename=filename)
         if not validation.valid:
             raise BusinessValidationError(
@@ -633,10 +710,14 @@ class MasterDataImportService:
             upsert_simple(SHEET_WAREHOUSE, Warehouse)
             upsert_simple(SHEET_SUPPLIER, Supplier)
 
-            equipment_by_code = {item.code: item for item in session.scalars(select(EquipmentModel)).all()}
+            equipment_by_code = {
+                item.code: item for item in session.scalars(select(EquipmentModel)).all()
+            }
             part_by_code = {item.code: item for item in session.scalars(select(Part)).all()}
             spare_by_code = {item.code: item for item in session.scalars(select(SparePart)).all()}
-            warehouse_by_code = {item.code: item for item in session.scalars(select(Warehouse)).all()}
+            warehouse_by_code = {
+                item.code: item for item in session.scalars(select(Warehouse)).all()
+            }
             supplier_by_code = {item.code: item for item in session.scalars(select(Supplier)).all()}
 
             for row in normalized[SHEET_CONFIGURATION]:

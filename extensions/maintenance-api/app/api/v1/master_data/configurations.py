@@ -32,7 +32,9 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 )
 def create_version(payload: ConfigurationVersionCreate, session: SessionDep):
     item = configuration_service.create_version(session, payload)
-    return success_response(ConfigurationVersionRead.model_validate(item), "Configuration version created")
+    return success_response(
+        ConfigurationVersionRead.model_validate(item), "Configuration version created"
+    )
 
 
 @router.get(
@@ -71,7 +73,9 @@ def get_version(identifier: int, session: SessionDep):
 )
 def update_version(identifier: int, payload: ConfigurationVersionUpdate, session: SessionDep):
     item = configuration_service.update_version(session, identifier, payload)
-    return success_response(ConfigurationVersionRead.model_validate(item), "Configuration version updated")
+    return success_response(
+        ConfigurationVersionRead.model_validate(item), "Configuration version updated"
+    )
 
 
 @router.delete(
@@ -91,7 +95,9 @@ def delete_version(identifier: int, session: SessionDep):
 )
 def publish_version(identifier: int, session: SessionDep):
     item = configuration_service.publish(session, identifier)
-    return success_response(ConfigurationVersionRead.model_validate(item), "Configuration published")
+    return success_response(
+        ConfigurationVersionRead.model_validate(item), "Configuration published"
+    )
 
 
 @router.post(
@@ -118,7 +124,9 @@ def clone_version(identifier: int, payload: ConfigurationCloneRequest, session: 
     response_model=SuccessResponse[ConfigurationTree],
 )
 def get_tree(identifier: int, session: SessionDep):
-    return success_response(configuration_service.tree(session, identifier), "Configuration tree retrieved")
+    return success_response(
+        configuration_service.tree(session, identifier), "Configuration tree retrieved"
+    )
 
 
 @router.post(
@@ -128,7 +136,9 @@ def get_tree(identifier: int, session: SessionDep):
 )
 def create_item(payload: ConfigurationItemCreate, session: SessionDep):
     item = configuration_service.create_item(session, payload)
-    return success_response(ConfigurationItemRead.model_validate(item), "Configuration item created")
+    return success_response(
+        ConfigurationItemRead.model_validate(item), "Configuration item created"
+    )
 
 
 @router.put(
@@ -137,7 +147,9 @@ def create_item(payload: ConfigurationItemCreate, session: SessionDep):
 )
 def update_item(identifier: int, payload: ConfigurationItemUpdate, session: SessionDep):
     item = configuration_service.update_item(session, identifier, payload)
-    return success_response(ConfigurationItemRead.model_validate(item), "Configuration item updated")
+    return success_response(
+        ConfigurationItemRead.model_validate(item), "Configuration item updated"
+    )
 
 
 @router.delete(

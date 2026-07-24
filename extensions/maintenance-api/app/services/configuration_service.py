@@ -1,4 +1,3 @@
-
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
@@ -96,7 +95,9 @@ class ConfigurationService(CrudService):
         if parent is None:
             raise NotFoundError("configuration_item", parent_item_id)
         if parent.configuration_version_id != version.id:
-            raise BusinessValidationError("parent item must belong to the same configuration version")
+            raise BusinessValidationError(
+                "parent item must belong to the same configuration version"
+            )
         if current_item_id is not None:
             cursor = parent
             seen: set[int] = set()
@@ -104,7 +105,9 @@ class ConfigurationService(CrudService):
                 if cursor.id == current_item_id:
                     raise BusinessValidationError("configuration hierarchy cannot contain a cycle")
                 if cursor.id in seen:
-                    raise BusinessValidationError("configuration hierarchy already contains a cycle")
+                    raise BusinessValidationError(
+                        "configuration hierarchy already contains a cycle"
+                    )
                 seen.add(cursor.id)
                 cursor = cursor.parent
 
@@ -173,7 +176,9 @@ class ConfigurationService(CrudService):
         if version.status != ConfigurationStatus.DRAFT:
             raise ConflictError("only DRAFT configuration versions can be published")
         if not version.items:
-            raise BusinessValidationError("configuration must contain at least one item before publish")
+            raise BusinessValidationError(
+                "configuration must contain at least one item before publish"
+            )
         for item in version.items:
             if not item.part.is_active:
                 raise BusinessValidationError(
@@ -254,7 +259,9 @@ class ConfigurationService(CrudService):
             old_to_new[source_item.id] = cloned
         for source_item in source.items:
             if source_item.parent_item_id is not None:
-                old_to_new[source_item.id].parent_item_id = old_to_new[source_item.parent_item_id].id
+                old_to_new[source_item.id].parent_item_id = old_to_new[
+                    source_item.parent_item_id
+                ].id
         self._commit(session)
         session.refresh(target)
         return target

@@ -51,7 +51,9 @@ class ReliabilityProfileBase(CodeModel):
                     raise ValueError("BINOMIAL requires binomial_trials and binomial_probability")
             case ReliabilityModelType.NEGATIVE_BINOMIAL:
                 if self.negative_binomial_r is None or self.negative_binomial_p is None:
-                    raise ValueError("NEGATIVE_BINOMIAL requires negative_binomial_r and negative_binomial_p")
+                    raise ValueError(
+                        "NEGATIVE_BINOMIAL requires negative_binomial_r and negative_binomial_p"
+                    )
             case ReliabilityModelType.EMPIRICAL:
                 if self.empirical_mean is None or self.empirical_variance is None:
                     raise ValueError("EMPIRICAL requires empirical_mean and empirical_variance")

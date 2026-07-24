@@ -68,23 +68,41 @@ class ReliabilityProfile(Base, ActiveMixin, TimestampMixin):
     )
 
     __table_args__ = (
-        CheckConstraint("failure_rate IS NULL OR failure_rate > 0", name="ck_reliability_failure_rate"),
+        CheckConstraint(
+            "failure_rate IS NULL OR failure_rate > 0", name="ck_reliability_failure_rate"
+        ),
         CheckConstraint("mtbf_hours IS NULL OR mtbf_hours > 0", name="ck_reliability_mtbf"),
-        CheckConstraint("weibull_shape IS NULL OR weibull_shape > 0", name="ck_reliability_weibull_shape"),
-        CheckConstraint("weibull_scale IS NULL OR weibull_scale > 0", name="ck_reliability_weibull_scale"),
-        CheckConstraint("binomial_trials IS NULL OR binomial_trials > 0", name="ck_reliability_binomial_trials"),
+        CheckConstraint(
+            "weibull_shape IS NULL OR weibull_shape > 0", name="ck_reliability_weibull_shape"
+        ),
+        CheckConstraint(
+            "weibull_scale IS NULL OR weibull_scale > 0", name="ck_reliability_weibull_scale"
+        ),
+        CheckConstraint(
+            "binomial_trials IS NULL OR binomial_trials > 0", name="ck_reliability_binomial_trials"
+        ),
         CheckConstraint(
             "binomial_probability IS NULL OR (binomial_probability >= 0 AND binomial_probability <= 1)",
             name="ck_reliability_binomial_probability",
         ),
-        CheckConstraint("negative_binomial_r IS NULL OR negative_binomial_r > 0", name="ck_reliability_negative_r"),
+        CheckConstraint(
+            "negative_binomial_r IS NULL OR negative_binomial_r > 0",
+            name="ck_reliability_negative_r",
+        ),
         CheckConstraint(
             "negative_binomial_p IS NULL OR (negative_binomial_p > 0 AND negative_binomial_p <= 1)",
             name="ck_reliability_negative_p",
         ),
-        CheckConstraint("empirical_mean IS NULL OR empirical_mean >= 0", name="ck_reliability_empirical_mean"),
-        CheckConstraint("empirical_variance IS NULL OR empirical_variance >= 0", name="ck_reliability_empirical_variance"),
-        CheckConstraint("sample_size IS NULL OR sample_size >= 0", name="ck_reliability_sample_size"),
+        CheckConstraint(
+            "empirical_mean IS NULL OR empirical_mean >= 0", name="ck_reliability_empirical_mean"
+        ),
+        CheckConstraint(
+            "empirical_variance IS NULL OR empirical_variance >= 0",
+            name="ck_reliability_empirical_variance",
+        ),
+        CheckConstraint(
+            "sample_size IS NULL OR sample_size >= 0", name="ck_reliability_sample_size"
+        ),
         CheckConstraint(
             "confidence_level IS NULL OR (confidence_level > 0 AND confidence_level <= 1)",
             name="ck_reliability_confidence",
