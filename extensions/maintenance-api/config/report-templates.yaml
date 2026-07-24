@@ -1,0 +1,48 @@
+schema_version: '1.0'
+templates:
+  DEMAND_CALCULATION:
+    sections: &id001
+    - code: report_information
+      title: 报告基本信息
+    - code: management_summary
+      title: 管理摘要
+    - code: mission_and_configuration
+      title: 任务场景与装备构型
+    - code: data_and_parameter_sources
+      title: 数据与参数来源
+    - code: calculation_method
+      title: 需求计算方法
+    - code: calculation_results
+      title: 需求计算结果
+    - code: inventory_and_repair_analysis
+      title: 库存与修理资源分析
+    - code: gap_and_support_risk
+      title: 需求缺口与保障风险
+    - code: review_findings
+      title: 智能审查结果
+    - code: model_comparison_and_uncertainty
+      title: 模型对比与不确定性
+    - code: support_recommendations
+      title: 保障建议
+    - code: decision_items
+      title: 需确认与决策事项
+    - code: conclusion
+      title: 结论
+    - code: appendix_demand_items
+      title: 附录A：器材需求明细
+    - code: appendix_parameters
+      title: 附录B：计算参数与模型版本
+    - code: appendix_citations
+      title: 附录C：证据和引用
+    - code: appendix_audit
+      title: 附录D：审计与确认记录
+    title: 维修器材需求计算报告
+    version: '1.0'
+  INVENTORY_GAP:
+    sections: *id001
+    title: 库存缺口与保障分析报告
+    version: '1.0'
+  MANAGEMENT_DECISION:
+    sections: *id001
+    title: 维修保障管理决策综合报告
+    version: '1.0'

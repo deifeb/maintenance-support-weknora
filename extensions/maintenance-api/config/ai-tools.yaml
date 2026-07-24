@@ -1,0 +1,450 @@
+schema_version: '1.0'
+tools:
+  build_evidence_package:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 构建证据包
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  calculate_inventory_gap:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 计算库存缺口
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  cancel_demand_calculation:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: SECONDARY
+    description: 取消任务
+    idempotent: false
+    permission_level: CALCULATION_CANCEL
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  compare_calculation_runs:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 比较计算结果
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  create_report_draft:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: IMPLICIT
+    description: 创建报告草稿
+    idempotent: true
+    permission_level: REPORT_CREATE
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  create_scenario_draft:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: IMPLICIT
+    description: 创建场景草稿
+    idempotent: true
+    permission_level: SCENARIO_DRAFT
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  general_qa:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 普通问答
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_calculation_result:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取计算结果
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_calculation_status:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取计算状态
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_configuration_snapshot:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取构型快照
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_equipment_model:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取装备型号
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_inventory_snapshot:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取库存快照
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_reliability_profiles:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取可靠性参数
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_repair_pipeline:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取修理管线
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_report_status:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取报告状态
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_review_findings:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取审查问题
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_scenario_preview:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 预览场景
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  get_spare_part:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 读取器材
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  list_spare_parts:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 查询器材
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  prepare_demand_scenario:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: IMPLICIT
+    description: 复合场景准备
+    idempotent: true
+    permission_level: SCENARIO_DRAFT
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  prepare_management_report:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: EXPLICIT
+    description: 生成管理报告
+    idempotent: false
+    permission_level: REPORT_CREATE
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  preview_demand_calculation:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 预览需求计算
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  publish_scenario_version:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: SECONDARY
+    description: 发布场景
+    idempotent: false
+    permission_level: SCENARIO_PUBLISH
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  recommend_calculation_method:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 推荐计算方法
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  resolve_equipment_context:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 匹配装备和构型
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  run_demand_assessment:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: EXPLICIT
+    description: 复合需求评估
+    idempotent: false
+    permission_level: CALCULATION_EXECUTE
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  run_demand_list_review:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 审查需求清单
+    idempotent: true
+    permission_level: REVIEW_EXECUTE
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  search_configuration_versions:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 查询构型版本
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  search_equipment_models:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 查询装备型号
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'
+  start_demand_calculation:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: EXPLICIT
+    description: 启动正式需求计算
+    idempotent: false
+    permission_level: CALCULATION_EXECUTE
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  update_scenario_draft:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: IMPLICIT
+    description: 更新场景草稿
+    idempotent: true
+    permission_level: SCENARIO_DRAFT
+    retryable: false
+    timeout_seconds: 30
+    version: '1.0'
+  validate_scenario_draft:
+    allowed_intents: []
+    allowed_sensitivity:
+    - CONFIDENTIAL
+    - INTERNAL
+    - PUBLIC
+    - RESTRICTED
+    confirmation_level: NONE
+    description: 校验场景
+    idempotent: true
+    permission_level: READ
+    retryable: true
+    timeout_seconds: 30
+    version: '1.0'

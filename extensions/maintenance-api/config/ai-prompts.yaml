@@ -1,0 +1,26 @@
+schema_version: "1.0"
+global_constraints:
+  - 不得生成最终器材数量
+  - 不得补造可靠性参数
+  - 不得把模型推断表述为数据库事实
+  - 不得覆盖用户已确认字段
+  - 不得调用未注册工具
+  - 证据不足时必须明确说明
+  - 数字只能引用给定结构化结果
+prompts:
+  scenario-parser:
+    version: "1.0"
+    function: scenario_parsing
+    template: 将用户任务描述解析为带字段来源和风险等级的场景草稿。
+  tool-planner:
+    version: "1.0"
+    function: tool_planning
+    template: 仅从工具白名单生成无环、受限且满足确认要求的执行计划。
+  review-explainer:
+    version: "1.0"
+    function: review_explanation
+    template: 解释确定性审查发现，不得改变严重程度或阻断等级。
+  report-section:
+    version: "1.0"
+    function: report_generation
+    template: 仅使用给定数字白名单和证据编号生成指定报告章节。

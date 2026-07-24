@@ -1,3 +1,15 @@
+from app.models.ai_evidence import AIEvidenceItem, AIEvidencePackage
+from app.models.ai_execution import AIConfirmationRequest, AIExecutionPlan, AIPlanStep, AIToolCall
+from app.models.ai_report import (
+    AIReportCitation,
+    AIReportExport,
+    AIReportJob,
+    AIReportSection,
+    AIReportValidationFinding,
+    AIReportVersion,
+)
+from app.models.ai_review import AIReviewFinding, AIReviewRun
+from app.models.ai_session import AIEvent, AIMessage, AIModelCall, AISession, AISessionSnapshot
 from app.models.catalog import Part, SparePart
 from app.models.demand_calculation import (
     DemandCalculation,
@@ -45,4 +57,23 @@ __all__ = [
     "DemandCalculationRun",
     "DemandRunItemResult",
     "DemandRunContribution",
+    "AIEvent",
+    "AIMessage",
+    "AIModelCall",
+    "AISession",
+    "AISessionSnapshot",
+    "AIConfirmationRequest",
+    "AIExecutionPlan",
+    "AIPlanStep",
+    "AIToolCall",
+    "AIEvidenceItem",
+    "AIEvidencePackage",
+    "AIReviewFinding",
+    "AIReviewRun",
+    "AIReportCitation",
+    "AIReportExport",
+    "AIReportJob",
+    "AIReportSection",
+    "AIReportValidationFinding",
+    "AIReportVersion",
 ]

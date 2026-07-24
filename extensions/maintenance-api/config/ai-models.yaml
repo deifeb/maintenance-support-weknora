@@ -1,0 +1,23 @@
+schema_version: "1.0"
+models:
+  local-qwen:
+    provider: OLLAMA
+    model: qwen3:8b
+    model_env: OLLAMA_MODEL
+    base_url: http://localhost:11434
+    base_url_env: OLLAMA_BASE_URL
+    enabled: true
+    allowed_sensitivity: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED]
+    capabilities: [TEXT, STRUCTURED_OUTPUT, STREAMING]
+    context_window: 32768
+  remote-strong:
+    provider: OPENAI_COMPATIBLE
+    model: configured-remote-model
+    model_env: OPENAI_COMPATIBLE_MODEL
+    base_url_env: OPENAI_COMPATIBLE_BASE_URL
+    api_key_env: OPENAI_COMPATIBLE_API_KEY
+    enabled: false
+    enabled_env: AI_REMOTE_ENABLED
+    allowed_sensitivity: [PUBLIC, INTERNAL]
+    capabilities: [TEXT, STRUCTURED_OUTPUT, STREAMING, LONG_CONTEXT]
+    context_window: 131072

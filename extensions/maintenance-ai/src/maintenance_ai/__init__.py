@@ -1,0 +1,18 @@
+from maintenance_ai.version import (
+    AI_CORE_VERSION,
+    EVIDENCE_SCHEMA_VERSION,
+    PLAN_SCHEMA_VERSION,
+    PROMPT_SCHEMA_VERSION,
+    REPORT_SCHEMA_VERSION,
+)
+
+__version__ = AI_CORE_VERSION
+
+__all__ = [
+    "__version__",
+    "AI_CORE_VERSION",
+    "EVIDENCE_SCHEMA_VERSION",
+    "PLAN_SCHEMA_VERSION",
+    "PROMPT_SCHEMA_VERSION",
+    "REPORT_SCHEMA_VERSION",
+]

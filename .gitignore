@@ -76,3 +76,11 @@ extensions/**/data/*.db-wal
 .phase03-backup-*/
 extensions/maintenance-api/exports/
 extensions/maintenance-api/data/demand-*.json
+.phase04-backup-*/
+extensions/maintenance-api/exports/ai-reports/
+extensions/maintenance-api/data/ai-*.json
+extensions/maintenance-api/data/ai-*.docx
+extensions/maintenance-ai/.pytest_cache/
+extensions/maintenance-ai/.ruff_cache/
+extensions/maintenance-ai/src/*.egg-info/
+*.egg-info/

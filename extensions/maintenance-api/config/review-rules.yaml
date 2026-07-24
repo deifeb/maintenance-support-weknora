@@ -1,0 +1,269 @@
+rules:
+  CFG-001:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: CONFIGURATION
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 器材不属于当前构型
+    version: '1.0'
+  CFG-002:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: CONFIGURATION
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 安装数量与构型不一致
+    version: '1.0'
+  CFG-003:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: CONFIGURATION
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 失效器材进入正式结果
+    version: '1.0'
+  DAT-001:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: DATA
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 高风险场景字段缺失
+    version: '1.0'
+  DAT-002:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: DATA
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 可靠性参数未关联来源
+    version: '1.0'
+  DAT-003:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: DATA
+    enabled: true
+    parameters: {}
+    severity: CRITICAL
+    title: 计算快照缺失
+    version: '1.0'
+  DAT-004:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: DATA
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 参数单位不受支持
+    version: '1.0'
+  DEM-001:
+    blocking_level: NONE
+    category: DEMAND
+    enabled: true
+    parameters:
+      historical_upper_multiplier: 2.0
+    severity: WARNING
+    title: 需求超过历史倍数阈值
+    version: '1.0'
+  DEM-002:
+    blocking_level: NONE
+    category: DEMAND
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 需求异常为零
+    version: '1.0'
+  DEM-003:
+    blocking_level: NONE
+    category: DEMAND
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 单机需求超过安装位阈值
+    version: '1.0'
+  DEM-004:
+    blocking_level: NONE
+    category: DEMAND
+    enabled: true
+    parameters:
+      relative_difference_threshold: 0.25
+    severity: WARNING
+    title: 解析与蒙特卡洛结果偏差过大
+    version: '1.0'
+  DEM-005:
+    blocking_level: NONE
+    category: DEMAND
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 共同冲击贡献异常
+    version: '1.0'
+  EVD-001:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: EVIDENCE
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 关键参数缺少证据
+    version: '1.0'
+  EVD-002:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: EVIDENCE
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 引用版本已失效
+    version: '1.0'
+  EVD-003:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: EVIDENCE
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 场景与计算版本不一致
+    version: '1.0'
+  EVD-004:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: EVIDENCE
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 模型推断被标记为事实
+    version: '1.0'
+  INV-001:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: INVENTORY
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 可用库存低于需求
+    version: '1.0'
+  INV-002:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: INVENTORY
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 在途库存晚于任务窗口
+    version: '1.0'
+  INV-003:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: INVENTORY
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 修理回流晚于需求时间
+    version: '1.0'
+  INV-004:
+    blocking_level: NONE
+    category: INVENTORY
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 安全库存被完全消耗
+    version: '1.0'
+  INV-005:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: INVENTORY
+    enabled: true
+    parameters:
+      minimum_coverage_rate: 0.95
+    severity: ERROR
+    title: 保障率低于目标
+    version: '1.0'
+  REL-001:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: RELIABILITY
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 可靠性参数超出有效范围
+    version: '1.0'
+  REL-002:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: RELIABILITY
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 可靠性来源已失效
+    version: '1.0'
+  REL-003:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: RELIABILITY
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 可靠性证据冲突
+    version: '1.0'
+  REL-004:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: RELIABILITY
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 模型与参数集不兼容
+    version: '1.0'
+  REP-001:
+    blocking_level: BLOCK_FORMAL_CALCULATION
+    category: REPAIR
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 可修件缺少修理档案
+    version: '1.0'
+  REP-002:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: REPAIR
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 修理回流超过送修数量
+    version: '1.0'
+  REP-003:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: REPAIR
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 修理能力超过上限
+    version: '1.0'
+  REP-004:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: REPAIR
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 报废数量错误计入回流
+    version: '1.0'
+  SUB-001:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: SUBSTITUTE
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 替代件与构型不兼容
+    version: '1.0'
+  SUB-002:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: SUBSTITUTE
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 替代比例超过上限
+    version: '1.0'
+  SUB-003:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: SUBSTITUTE
+    enabled: true
+    parameters: {}
+    severity: ERROR
+    title: 互斥器材同时选用
+    version: '1.0'
+  SUB-004:
+    blocking_level: BLOCK_REPORT_FINALIZATION
+    category: SUBSTITUTE
+    enabled: true
+    parameters: {}
+    severity: WARNING
+    title: 成套器材数量不一致
+    version: '1.0'
+schema_version: '1.0'
