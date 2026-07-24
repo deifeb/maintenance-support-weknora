@@ -111,3 +111,12 @@ extract:
 tenant:
   # Enable cross-tenant access (can be enabled for intranet environments)
   enable_cross_tenant_access: false
+
+# Maintenance support integration (secret is supplied through the environment)
+maintenance:
+  enabled: false
+  api_base_url: http://maintenance-api:8090
+  jwt_issuer: weknora
+  jwt_audience: maintenance-api
+  jwt_ttl: 3m
+  proxy_dial_timeout: 5s
