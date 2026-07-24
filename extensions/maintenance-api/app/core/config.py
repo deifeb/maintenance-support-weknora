@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATABASE_PATH = (SERVICE_ROOT / "data" / "maintenance.db").as_posix()
+DEFAULT_AI_CONFIG_DIR = SERVICE_ROOT / "config"
+DEFAULT_AI_REPORT_EXPORT_DIR = SERVICE_ROOT / "exports" / "ai-reports"
 
 
 class Settings(BaseSettings):
@@ -29,6 +31,32 @@ class Settings(BaseSettings):
     demand_max_fleet_groups: int = 500
     demand_max_demand_items: int = 5_000
     demand_result_export_max_rows: int = 100_000
+
+    ai_models_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-models.yaml"
+    ai_routes_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-routes.yaml"
+    ai_tools_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-tools.yaml"
+    ai_prompts_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-prompts.yaml"
+    ai_review_rules_path: Path = DEFAULT_AI_CONFIG_DIR / "review-rules.yaml"
+    ai_report_templates_path: Path = DEFAULT_AI_CONFIG_DIR / "report-templates.yaml"
+    ai_remote_enabled: bool = False
+    ai_default_sensitivity: str = "INTERNAL"
+    ai_sse_poll_interval_seconds: float = 0.25
+    ai_sse_heartbeat_seconds: int = 15
+    ai_confirmation_ttl_seconds: int = 900
+    ai_context_recent_message_count: int = 12
+    ai_max_plan_steps: int = 30
+    ai_worker_count: int = 2
+    ai_max_pending_tasks: int = 20
+    ai_model_timeout_seconds: int = 60
+    ai_model_max_retries: int = 2
+    ai_report_export_dir: Path = DEFAULT_AI_REPORT_EXPORT_DIR
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen3:8b"
+    openai_compatible_base_url: str | None = None
+    openai_compatible_api_key: str | None = None
+    openai_compatible_model: str | None = None
+    weknora_evidence_url: str | None = None
+    weknora_api_key: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=SERVICE_ROOT / ".env",

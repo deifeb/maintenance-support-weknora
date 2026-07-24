@@ -7,8 +7,13 @@ requires-python = ">=3.11,<3.12"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-markers = ["performance: long-running demand engine performance checks"]
-addopts = "-ra -m 'not performance'"
+markers = [
+  "performance: long-running performance checks",
+  "external: calls an external service",
+  "ollama: calls a real local Ollama service",
+  "openai_compatible: calls a configured OpenAI-compatible service",
+]
+addopts = "-ra -m 'not performance and not external'"
 
 [tool.ruff]
 target-version = "py311"

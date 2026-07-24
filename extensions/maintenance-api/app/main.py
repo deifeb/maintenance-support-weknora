@@ -9,7 +9,12 @@ from app.core.exceptions import register_exception_handlers
 from app.core.responses import success_response
 from app.db.session import SessionLocal
 from app.schemas.common import SuccessResponse
-from app.workers import demand_task_executor, recover_interrupted_calculations
+from app.workers import (
+    ai_task_executor,
+    demand_task_executor,
+    recover_interrupted_ai_tasks,
+    recover_interrupted_calculations,
+)
 
 
 @asynccontextmanager
@@ -18,9 +23,11 @@ async def lifespan(application: FastAPI):
     session = SessionLocal()
     try:
         recover_interrupted_calculations(session)
+        recover_interrupted_ai_tasks(session)
     finally:
         session.close()
     yield
+    ai_task_executor.shutdown(wait=False)
     demand_task_executor.shutdown(wait=False)
 
 
