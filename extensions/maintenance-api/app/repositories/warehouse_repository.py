@@ -9,12 +9,20 @@ class WarehouseRepository(BaseRepository[Warehouse]):
     def __init__(self) -> None:
         super().__init__(Warehouse)
 
-    def count_references(self, session: Session, identifier: int) -> int:
+    def count_references(
+        self,
+        session: Session,
+        tenant_id: str,
+        identifier: int,
+    ) -> int:
         return int(
             session.scalar(
                 select(func.count())
                 .select_from(WarehouseInventory)
-                .where(WarehouseInventory.warehouse_id == identifier)
+                .where(
+                    WarehouseInventory.tenant_id == tenant_id,
+                    WarehouseInventory.warehouse_id == identifier,
+                )
             )
             or 0
         )

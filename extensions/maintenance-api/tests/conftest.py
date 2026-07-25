@@ -1,6 +1,6 @@
 import os
 import tempfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 _TEST_DIR = tempfile.TemporaryDirectory(prefix="maintenance_master_data_tests_")
@@ -18,6 +18,7 @@ import app.models  # noqa: F401
 import pytest
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
+from app.security.actor import ActorContext, MaintenanceRole
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -53,3 +54,41 @@ def client() -> Generator[TestClient, None, None]:
 
     with TestClient(create_app()) as test_client:
         yield test_client
+
+
+@pytest.fixture()
+def actor_context() -> Callable[..., ActorContext]:
+    def build(
+        *,
+        tenant_id: str = "tenant-a",
+        user_id: str = "user-a",
+        role: MaintenanceRole = MaintenanceRole.CONTRIBUTOR,
+        request_id: str = "request-a",
+        token_id: str = "token-a",
+    ) -> ActorContext:
+        return ActorContext(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            role=role,
+            request_id=request_id,
+            token_id=token_id,
+        )
+
+    return build
+
+
+@pytest.fixture()
+def actor_viewer(actor_context: Callable[..., ActorContext]) -> ActorContext:
+    return actor_context(role=MaintenanceRole.VIEWER)
+
+
+@pytest.fixture()
+def actor_contributor(
+    actor_context: Callable[..., ActorContext],
+) -> ActorContext:
+    return actor_context(role=MaintenanceRole.CONTRIBUTOR)
+
+
+@pytest.fixture()
+def actor_admin(actor_context: Callable[..., ActorContext]) -> ActorContext:
+    return actor_context(role=MaintenanceRole.ADMIN)
