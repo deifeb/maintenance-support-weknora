@@ -13,7 +13,7 @@
 - Unit 0: complete — approved design, roadmap, plans 05-1 through 05-5, revised execution plan, and this ledger preserved; documentation-only review clean.
 - Unit 1: complete — canonical configuration contract implemented with RED/GREEN evidence, focused harness tests passing, specification review clean; full repository Go test awaits the user's Go 1.26 toolchain.
 - Unit 2: complete — HS256 actor tokens implemented with exact 180-second expiry, normalized tenant roles, unique jti values, RED/GREEN tests, package verification, race detection, and security review clean.
-- Unit 3: pending — HTTP and SSE reverse proxy.
+- Unit 3: complete — authenticated HTTP and SSE reverse proxy implemented with strict path and method gates, trusted JWT exchange, request and response header isolation, safe redirect rewriting, stable error envelopes, streaming cancellation coverage, package verification, and race detection clean.
 - Unit 4: pending — WeKnora actor mapping and route registration.
 - Unit 5: pending — FastAPI internal JWT verification.
 - Unit 6: pending — RBAC, stable error envelopes, and response metadata.
