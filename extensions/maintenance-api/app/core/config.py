@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_debug: bool = True
     api_v1_prefix: str = "/api/v1"
+    internal_jwt_secret: SecretStr
+    internal_jwt_issuer: str = "weknora"
+    internal_jwt_audience: str = "maintenance-api"
+    internal_jwt_max_lifetime_seconds: int = Field(default=180, ge=1, le=180)
+    internal_jwt_clock_skew_seconds: int = Field(default=5, ge=0, le=30)
     database_url: str = Field(
         default=f"sqlite:///{DEFAULT_DATABASE_PATH}",
         description="SQLAlchemy database URL",
@@ -58,11 +63,27 @@ class Settings(BaseSettings):
     weknora_evidence_url: str | None = None
     weknora_api_key: str | None = None
 
+    @field_validator("internal_jwt_secret")
+    @classmethod
+    def validate_internal_jwt_secret(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value().encode("utf-8")) < 32:
+            raise ValueError("internal JWT secret must contain at least 32 UTF-8 bytes")
+        return value
+
+    @field_validator("internal_jwt_issuer", "internal_jwt_audience")
+    @classmethod
+    def validate_internal_jwt_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("internal JWT issuer and audience must not be blank")
+        return normalized
+
     model_config = SettingsConfigDict(
         env_file=SERVICE_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 
