@@ -4,7 +4,7 @@
 
 **Goal:** Build the Maintenance FastAPI service's fail-closed internal identity boundary by validating WeKnora-issued HS256 JWTs into immutable, single-role `ActorContext` values and exposing a reusable `get_actor` dependency without protecting existing business routers yet.
 
-**Architecture:** Pydantic Settings validates the shared-secret contract at startup. A focused `InternalTokenVerifier` uses PyJWT only for signature, issuer, audience, and required-claim decoding, then performs strict application-level type, shape, UUID, string-safety, lifetime, and clock-skew checks with an injectable UTC clock. A FastAPI dependency converts all credential and verification failures into the existing project error envelope with a fixed Bearer challenge.
+**Architecture:** Pydantic Settings validates the shared-secret contract at startup. A focused `InternalTokenVerifier` first uses PyJWT for signature, issuer, audience, and required-claim decoding, then applies explicit application-level claim type, shape, UUID, string-safety, lifetime, and clock-skew checks with an injectable UTC clock. A FastAPI dependency converts every credential or verification failure into the existing project error envelope with a fixed Bearer challenge.
 
 **Tech Stack:** Python 3.11, FastAPI, Pydantic 2, pydantic-settings, PyJWT `>=2.10,<3`, pytest, HTTPX TestClient, Ruff.
 
@@ -14,16 +14,16 @@
 - Start from approved Unit 5 design head `21b6a92f913661593f80ebee412b6f36ed9d1931` plus this plan commit.
 - Do not implement on `main` or the primary worktree.
 - Unit 5 must not attach authentication globally to `/api/v1` or modify existing business endpoints.
-- Internal JWT algorithm is exactly HS256; never derive the allowed algorithm from token input.
+- Internal JWT algorithm is exactly HS256; never derive allowed algorithms from token input.
 - Required claims are `sub`, `tenant_id`, `roles`, `aud`, `iss`, `iat`, `exp`, `jti`, and `request_id`.
 - `roles` must be a JSON array containing exactly one of `viewer`, `contributor`, or `admin`.
 - `aud` must be a JSON array containing exactly one configured audience.
 - `jti` must be a canonical lowercase hyphenated UUIDv4.
-- `sub`, `tenant_id`, and `request_id` must be non-empty strings without surrounding whitespace or Unicode category-C characters and must not exceed 128 UTF-8 bytes.
+- `sub`, `tenant_id`, and `request_id` must be non-empty strings without surrounding whitespace or Unicode control/format characters and must not exceed 128 UTF-8 bytes.
 - `iat` and `exp` must be exact Python integers; booleans, floats, strings, and null are rejected.
-- Token lifetime must satisfy `0 < exp - iat <= configured maximum`, where the configured maximum is in `1..180` seconds.
+- Token lifetime must satisfy `0 < exp - iat <= configured maximum`, where the configured maximum is within `1..180` seconds.
 - Default clock skew is five seconds and may be configured only within `0..30` seconds.
-- Current-time checks use the exact rules `iat <= now + skew` and `exp > now - skew`; therefore a token exactly five seconds expired is rejected when skew is five seconds, while one four seconds expired is accepted.
+- Current-time checks use `iat <= now + skew` and `exp > now - skew`; a token exactly five seconds expired is rejected at five-second skew, while one four seconds expired is accepted.
 - Missing or unsafe JWT settings fail `Settings` construction immediately.
 - The shared secret contains at least 32 UTF-8 bytes and is represented with `SecretStr`.
 - No code introduced by this unit may log or expose the raw token, shared secret, rejected user ID, tenant ID, role, or claim payload.
@@ -37,27 +37,26 @@
 
 ### Create
 
-- `extensions/maintenance-api/app/security/__init__.py` — public exports for trusted actor and verifier types.
+- `extensions/maintenance-api/app/security/__init__.py` — public exports for actor, verifier, and dependency types.
 - `extensions/maintenance-api/app/security/actor.py` — `MaintenanceRole` and immutable `ActorContext`.
-- `extensions/maintenance-api/app/security/internal_jwt.py` — strict internal JWT verifier and uniform verifier exception.
-- `extensions/maintenance-api/app/security/dependencies.py` — cached verifier construction and FastAPI `get_actor` dependency.
-- `extensions/maintenance-api/tests/security/test_internal_jwt.py` — settings, actor, verifier, dependency, and error-envelope coverage.
+- `extensions/maintenance-api/app/security/internal_jwt.py` — strict verifier and uniform verifier exception.
+- `extensions/maintenance-api/app/security/dependencies.py` — cached verifier construction and FastAPI `get_actor`.
+- `extensions/maintenance-api/tests/security/test_internal_jwt.py` — settings, actor, verifier, dependency, and envelope tests.
 
 ### Modify
 
-- `extensions/maintenance-api/app/core/config.py` — required secret and bounded issuer, audience, lifetime, and skew settings.
-- `extensions/maintenance-api/app/core/exceptions.py` — optional response headers and `InternalAuthenticationError`.
-- `extensions/maintenance-api/requirements.txt` — add `PyJWT>=2.10,<3`.
-- `extensions/maintenance-api/.env.example` — document canonical internal JWT settings.
-- `extensions/maintenance-api/tests/conftest.py` — set deterministic safe JWT settings before importing `app` modules.
-- `.superpowers/sdd/progress.md` — mark Unit 5 complete only after every gate passes.
+- `extensions/maintenance-api/app/core/config.py`
+- `extensions/maintenance-api/app/core/exceptions.py`
+- `extensions/maintenance-api/requirements.txt`
+- `extensions/maintenance-api/.env.example`
+- `extensions/maintenance-api/tests/conftest.py`
+- `.superpowers/sdd/progress.md` only after all Unit 5 gates pass.
 
 ### Preserve
 
 - `extensions/maintenance-api/app/main.py`
 - `extensions/maintenance-api/app/api/v1/router.py`
-- all existing endpoint modules
-- repositories, services, models, and migrations
+- all existing endpoints, repositories, services, models, and migrations
 - all Go files
 
 ---
@@ -74,30 +73,31 @@
 
 **Interfaces:**
 
-- Consumes: existing `Settings(BaseSettings)` and `get_settings()` in `app.core.config`.
-- Produces: `Settings.internal_jwt_secret: SecretStr`, `internal_jwt_issuer: str`, `internal_jwt_audience: str`, `internal_jwt_max_lifetime_seconds: int`, and `internal_jwt_clock_skew_seconds: int`.
-- Consumed by: Task 3 verifier tests and Task 5 dependency construction.
+- Consumes: existing `Settings(BaseSettings)` and `get_settings()`.
+- Produces: `internal_jwt_secret: SecretStr`, `internal_jwt_issuer: str`, `internal_jwt_audience: str`, `internal_jwt_max_lifetime_seconds: int`, and `internal_jwt_clock_skew_seconds: int`.
+- Consumed by: Tasks 3 and 5.
 
-- [ ] **Step 1: Add the pinned runtime dependency**
+- [ ] **Step 1: Add and install PyJWT**
 
-Append exactly this line to `extensions/maintenance-api/requirements.txt`:
+Append to `extensions/maintenance-api/requirements.txt`:
 
 ```text
 PyJWT>=2.10,<3
 ```
 
-Install the updated development environment from the service directory:
+Run:
 
 ```powershell
 cd extensions\maintenance-api
 python -m pip install -r requirements-dev.txt
+python -c "import jwt; print(jwt.__version__)"
 ```
 
-Expected: installation completes and `python -c "import jwt; print(jwt.__version__)"` reports a `2.x` version not lower than `2.10`.
+Expected: a PyJWT `2.x` version not lower than `2.10`.
 
-- [ ] **Step 2: Create the security test module and write failing settings tests**
+- [ ] **Step 2: Write failing settings tests**
 
-Create `extensions/maintenance-api/tests/security/test_internal_jwt.py` with this initial content:
+Create `tests/security/test_internal_jwt.py`:
 
 ```python
 from __future__ import annotations
@@ -195,25 +195,23 @@ def test_settings_accept_bounded_clock_skew(value: int) -> None:
     assert settings.internal_jwt_clock_skew_seconds == value
 ```
 
-- [ ] **Step 3: Run the settings tests and observe RED**
-
-Run:
+- [ ] **Step 3: Run and observe RED**
 
 ```powershell
 python -m pytest tests/security/test_internal_jwt.py -v
 ```
 
-Expected: collection or tests fail because `Settings` has no `internal_jwt_*` fields, missing secrets do not fail, and unsafe values are accepted.
+Expected: failures because settings fields and validation do not exist.
 
-- [ ] **Step 4: Implement the settings contract**
+- [ ] **Step 4: Implement settings validation**
 
-Update imports at the top of `extensions/maintenance-api/app/core/config.py`:
+Change the Pydantic import in `app/core/config.py` to:
 
 ```python
 from pydantic import Field, SecretStr, field_validator
 ```
 
-Add these fields inside `Settings`, immediately after `api_v1_prefix`:
+Add fields immediately after `api_v1_prefix`:
 
 ```python
     internal_jwt_secret: SecretStr
@@ -223,7 +221,7 @@ Add these fields inside `Settings`, immediately after `api_v1_prefix`:
     internal_jwt_clock_skew_seconds: int = Field(default=5, ge=0, le=30)
 ```
 
-Add these validators inside `Settings`, before `model_config`:
+Add validators before `model_config`:
 
 ```python
     @field_validator("internal_jwt_secret")
@@ -242,11 +240,11 @@ Add these validators inside `Settings`, before `model_config`:
         return normalized
 ```
 
-Do not give `internal_jwt_secret` a default. This is what makes service startup fail closed.
+Do not give `internal_jwt_secret` a default.
 
-- [ ] **Step 5: Document settings and bootstrap tests before application imports**
+- [ ] **Step 5: Document and bootstrap the test environment**
 
-Append to `extensions/maintenance-api/.env.example`:
+Append to `.env.example`:
 
 ```text
 INTERNAL_JWT_SECRET=replace-with-at-least-32-random-bytes
@@ -256,7 +254,7 @@ INTERNAL_JWT_MAX_LIFETIME_SECONDS=180
 INTERNAL_JWT_CLOCK_SKEW_SECONDS=5
 ```
 
-In `extensions/maintenance-api/tests/conftest.py`, add these assignments immediately after the existing database environment assignments and before `import app.models`:
+Add to `tests/conftest.py` before `import app.models`:
 
 ```python
 os.environ["INTERNAL_JWT_SECRET"] = "unit-five-internal-jwt-secret-0001"
@@ -266,9 +264,7 @@ os.environ["INTERNAL_JWT_MAX_LIFETIME_SECONDS"] = "180"
 os.environ["INTERNAL_JWT_CLOCK_SKEW_SECONDS"] = "5"
 ```
 
-- [ ] **Step 6: Run focused and public-route regression tests**
-
-Run:
+- [ ] **Step 6: Verify GREEN and regressions**
 
 ```powershell
 python -m pytest tests/security/test_internal_jwt.py -v
@@ -276,26 +272,12 @@ python -m pytest tests/test_health.py tests/test_system.py -v
 python -m ruff check app/core/config.py tests/conftest.py tests/security/test_internal_jwt.py
 ```
 
-Expected: all commands pass. Existing public routes continue to start because test configuration is installed before application imports.
+Expected: all pass.
 
-- [ ] **Step 7: Review and commit Task 1**
-
-Review:
+- [ ] **Step 7: Review and commit**
 
 ```powershell
 git diff --check
-git diff -- extensions/maintenance-api/requirements.txt `
-  extensions/maintenance-api/app/core/config.py `
-  extensions/maintenance-api/.env.example `
-  extensions/maintenance-api/tests/conftest.py `
-  extensions/maintenance-api/tests/security/test_internal_jwt.py
-```
-
-Confirm the real secret never appears and no unrelated setting changed.
-
-Commit:
-
-```powershell
 git add extensions/maintenance-api/requirements.txt `
   extensions/maintenance-api/app/core/config.py `
   extensions/maintenance-api/.env.example `
@@ -316,13 +298,12 @@ git commit -m "feat: configure internal maintenance identity"
 
 **Interfaces:**
 
-- Consumes: Python 3.11 `StrEnum` and `dataclass`.
 - Produces: `MaintenanceRole` and `ActorContext(user_id, tenant_id, role, request_id, token_id)`.
 - Consumed by: Tasks 3–5.
 
 - [ ] **Step 1: Append failing actor tests**
 
-Append these imports to `tests/security/test_internal_jwt.py`:
+Add imports:
 
 ```python
 from dataclasses import FrozenInstanceError
@@ -330,7 +311,7 @@ from dataclasses import FrozenInstanceError
 from app.security.actor import ActorContext, MaintenanceRole
 ```
 
-Append these tests:
+Append:
 
 ```python
 def test_actor_context_is_immutable_and_single_role() -> None:
@@ -361,19 +342,17 @@ def test_actor_context_uses_slots() -> None:
         object.__setattr__(actor, "unexpected", "value")
 ```
 
-- [ ] **Step 2: Run the actor tests and observe RED**
-
-Run:
+- [ ] **Step 2: Run and observe RED**
 
 ```powershell
 python -m pytest tests/security/test_internal_jwt.py -k Actor -v
 ```
 
-Expected: collection fails because `app.security.actor` does not exist.
+Expected: collection fails because `app.security.actor` is missing.
 
-- [ ] **Step 3: Implement `MaintenanceRole` and `ActorContext`**
+- [ ] **Step 3: Implement actor types**
 
-Create `extensions/maintenance-api/app/security/actor.py`:
+Create `app/security/actor.py`:
 
 ```python
 from dataclasses import dataclass
@@ -395,7 +374,7 @@ class ActorContext:
     token_id: str
 ```
 
-Create `extensions/maintenance-api/app/security/__init__.py`:
+Create `app/security/__init__.py`:
 
 ```python
 from app.security.actor import ActorContext, MaintenanceRole
@@ -403,40 +382,20 @@ from app.security.actor import ActorContext, MaintenanceRole
 __all__ = ["ActorContext", "MaintenanceRole"]
 ```
 
-- [ ] **Step 4: Run focused tests and Ruff**
-
-Run:
+- [ ] **Step 4: Verify GREEN and commit**
 
 ```powershell
 python -m pytest tests/security/test_internal_jwt.py -k Actor -v
-python -m ruff check app/security/actor.py app/security/__init__.py `
-  tests/security/test_internal_jwt.py
-```
-
-Expected: PASS and `All checks passed!`.
-
-- [ ] **Step 5: Review and commit Task 2**
-
-Review:
-
-```powershell
+python -m ruff check app/security tests/security/test_internal_jwt.py
 git diff --check
-git diff -- extensions/maintenance-api/app/security `
-  extensions/maintenance-api/tests/security/test_internal_jwt.py
-```
-
-Commit:
-
-```powershell
-git add extensions/maintenance-api/app/security/__init__.py `
-  extensions/maintenance-api/app/security/actor.py `
+git add extensions/maintenance-api/app/security `
   extensions/maintenance-api/tests/security/test_internal_jwt.py
 git commit -m "feat: define maintenance actor context"
 ```
 
 ---
 
-### Task 3: HS256 Verification and Canonical Happy Path
+### Task 3: Minimal HS256 Verifier and Canonical Projection
 
 **Files:**
 
@@ -446,27 +405,26 @@ git commit -m "feat: define maintenance actor context"
 
 **Interfaces:**
 
-- Consumes: `ActorContext`, `MaintenanceRole`, PyJWT, and an aware UTC `clock: Callable[[], datetime]`.
 - Produces: `InternalTokenError` and `InternalTokenVerifier.verify(token: str) -> ActorContext`.
-- Consumed by: Tasks 4 and 5.
+- This task intentionally implements only the canonical happy path, fixed algorithm, issuer/audience checks, required-claim presence, and safe constructor values.
+- Task 4 proves and implements strict claim content and time boundaries.
 
-- [ ] **Step 1: Add deterministic token helpers and failing happy-path tests**
+- [ ] **Step 1: Add deterministic helpers and failing canonical tests**
 
-Add these imports to `tests/security/test_internal_jwt.py`:
+Add imports:
 
 ```python
 import base64
 import json
 from collections.abc import Callable
 from datetime import datetime, timezone
-from uuid import uuid4
 
 import jwt
 
 from app.security.internal_jwt import InternalTokenError, InternalTokenVerifier
 ```
 
-Add these constants and helpers below `TEST_SECRET`:
+Add below `TEST_SECRET`:
 
 ```python
 FIXED_NOW = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
@@ -500,7 +458,8 @@ def encode_token(
     secret: str = TEST_SECRET,
     algorithm: str = "HS256",
 ) -> str:
-    return jwt.encode(payload or canonical_payload(), secret, algorithm=algorithm)
+    source = canonical_payload() if payload is None else payload
+    return jwt.encode(source, secret, algorithm=algorithm)
 
 
 def make_verifier(
@@ -517,9 +476,16 @@ def make_verifier(
         clock_skew_seconds=clock_skew_seconds,
         clock=clock,
     )
+
+
+def replace_algorithm_header(token: str, algorithm: str) -> str:
+    header = json.dumps({"alg": algorithm, "typ": "JWT"}, separators=(",", ":")).encode()
+    encoded_header = base64.urlsafe_b64encode(header).rstrip(b"=").decode()
+    _, payload, signature = token.split(".")
+    return f"{encoded_header}.{payload}.{signature}"
 ```
 
-Append these tests:
+Append tests:
 
 ```python
 def test_verifier_returns_canonical_actor() -> None:
@@ -572,32 +538,50 @@ def test_verifier_rejects_empty_or_malformed_token(token: str) -> None:
 def test_verifier_rejects_wrong_secret() -> None:
     token = encode_token(secret="different-secret-value-with-32-bytes")
 
-    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
+    with pytest.raises(InternalTokenError):
         make_verifier().verify(token)
 
 
-@pytest.mark.parametrize("claim", canonical_payload().keys())
+@pytest.mark.parametrize(
+    "payload",
+    [
+        canonical_payload(iss="other"),
+        canonical_payload(aud=["other"]),
+    ],
+)
+def test_verifier_rejects_wrong_issuer_or_audience(payload: dict[str, object]) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(payload))
+
+
+@pytest.mark.parametrize("claim", list(canonical_payload()))
 def test_verifier_requires_every_claim(claim: str) -> None:
     payload = canonical_payload()
     del payload[claim]
 
-    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
+    with pytest.raises(InternalTokenError):
         make_verifier().verify(encode_token(payload))
+
+
+@pytest.mark.parametrize("algorithm", ["none", "HS384", "HS512", "RS256"])
+def test_verifier_rejects_every_non_hs256_header(algorithm: str) -> None:
+    forged = replace_algorithm_header(encode_token(), algorithm)
+
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(forged)
 ```
 
-- [ ] **Step 2: Run verifier tests and observe RED**
-
-Run:
+- [ ] **Step 2: Run and observe RED**
 
 ```powershell
 python -m pytest tests/security/test_internal_jwt.py -k Verifier -v
 ```
 
-Expected: collection fails because `app.security.internal_jwt` does not exist.
+Expected: collection fails because `app.security.internal_jwt` is missing.
 
-- [ ] **Step 3: Implement the verifier skeleton and canonical projection**
+- [ ] **Step 3: Implement only the minimal verified projection**
 
-Create `extensions/maintenance-api/app/security/internal_jwt.py`:
+Create `app/security/internal_jwt.py`:
 
 ```python
 from __future__ import annotations
@@ -605,8 +589,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
-from unicodedata import category
-from uuid import UUID
 
 import jwt
 from jwt import PyJWTError
@@ -624,7 +606,6 @@ REQUIRED_CLAIMS = (
     "jti",
     "request_id",
 )
-SUPPORTED_ROLES = {role.value: role for role in MaintenanceRole}
 
 
 class InternalTokenError(ValueError):
@@ -682,12 +663,335 @@ class InternalTokenVerifier:
                     "verify_nbf": False,
                 },
             )
-            return self._project_claims(claims)
+            return self._project_canonical_claims(claims)
         except InternalTokenError:
             raise
-        except (PyJWTError, KeyError, TypeError, ValueError, UnicodeError) as exc:
+        except (PyJWTError, KeyError, IndexError, TypeError, ValueError) as exc:
             raise InternalTokenError("invalid internal JWT") from exc
 
+    @staticmethod
+    def _project_canonical_claims(claims: dict[str, Any]) -> ActorContext:
+        return ActorContext(
+            user_id=claims["sub"],
+            tenant_id=claims["tenant_id"],
+            role=MaintenanceRole(claims["roles"][0]),
+            request_id=claims["request_id"],
+            token_id=claims["jti"],
+        )
+```
+
+Update `app/security/__init__.py`:
+
+```python
+from app.security.actor import ActorContext, MaintenanceRole
+from app.security.internal_jwt import InternalTokenError, InternalTokenVerifier
+
+__all__ = [
+    "ActorContext",
+    "InternalTokenError",
+    "InternalTokenVerifier",
+    "MaintenanceRole",
+]
+```
+
+- [ ] **Step 4: Verify GREEN**
+
+```powershell
+python -m pytest tests/security/test_internal_jwt.py -k Verifier -v
+python -m ruff check app/security tests/security/test_internal_jwt.py
+```
+
+Expected: canonical, constructor, signature, issuer, audience, required-claim, and algorithm tests pass.
+
+- [ ] **Step 5: Review and commit**
+
+Confirm `algorithms=["HS256"]` is a fixed literal and no logging exists.
+
+```powershell
+git diff --check
+git add extensions/maintenance-api/app/security `
+  extensions/maintenance-api/tests/security/test_internal_jwt.py
+git commit -m "feat: verify internal maintenance tokens"
+```
+
+---
+
+### Task 4: Strict Claim Content and Deterministic Time Boundaries
+
+**Files:**
+
+- Modify: `extensions/maintenance-api/app/security/internal_jwt.py`
+- Modify: `extensions/maintenance-api/tests/security/test_internal_jwt.py`
+
+**Interfaces:**
+
+- Consumes: Task 3 verifier.
+- Produces: complete strict verifier contract used by Task 5.
+
+- [ ] **Step 1: Append strict claim tests**
+
+Add imports:
+
+```python
+from uuid import uuid4
+```
+
+Append:
+
+```python
+@pytest.mark.parametrize("claim", ["sub", "tenant_id", "request_id"])
+@pytest.mark.parametrize("value", [123, True, [], {}, None])
+def test_verifier_rejects_non_string_actor_claims(claim: str, value: object) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(canonical_payload(**{claim: value})))
+
+
+@pytest.mark.parametrize("claim", ["sub", "tenant_id", "request_id"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "   ",
+        " leading",
+        "trailing ",
+        "line\nfeed",
+        "carriage\rreturn",
+        "tab\tvalue",
+        "null\x00value",
+        "zero\u200bwidth",
+        "x" * 129,
+        "界" * 43,
+    ],
+)
+def test_verifier_rejects_unsafe_actor_strings(claim: str, value: str) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(canonical_payload(**{claim: value})))
+
+
+def test_verifier_accepts_exactly_128_utf8_bytes() -> None:
+    actor = make_verifier().verify(encode_token(canonical_payload(sub="x" * 128)))
+
+    assert actor.user_id == "x" * 128
+
+
+@pytest.mark.parametrize(
+    "audience",
+    [
+        "maintenance-api",
+        [],
+        ["maintenance-api", "other"],
+        [123],
+        ["other"],
+        None,
+    ],
+)
+def test_verifier_requires_single_element_audience_array(audience: object) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(canonical_payload(aud=audience)))
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [
+        "viewer",
+        [],
+        ["viewer", "admin"],
+        ["owner"],
+        ["Admin"],
+        [" admin"],
+        [123],
+        [["admin"]],
+        None,
+    ],
+)
+def test_verifier_requires_one_supported_role(roles: object) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(canonical_payload(roles=roles)))
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        ("viewer", MaintenanceRole.VIEWER),
+        ("contributor", MaintenanceRole.CONTRIBUTOR),
+        ("admin", MaintenanceRole.ADMIN),
+    ],
+)
+def test_verifier_accepts_each_supported_single_role(
+    role: str, expected: MaintenanceRole
+) -> None:
+    actor = make_verifier().verify(encode_token(canonical_payload(roles=[role])))
+
+    assert actor.role is expected
+
+
+@pytest.mark.parametrize(
+    "token_id",
+    [
+        "",
+        "not-a-uuid",
+        "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+        "6fa459ea-ee8a-3ca4-894e-db77e160355e",
+        "886313e1-3b8a-5372-9b90-0c9aee199e5d",
+        CANONICAL_JTI.upper(),
+        "{" + CANONICAL_JTI + "}",
+        " " + CANONICAL_JTI,
+        CANONICAL_JTI + " ",
+        123,
+        None,
+    ],
+)
+def test_verifier_requires_canonical_lowercase_uuid4(token_id: object) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(canonical_payload(jti=token_id)))
+
+
+def test_verifier_accepts_generated_canonical_uuid4() -> None:
+    token_id = str(uuid4())
+
+    assert make_verifier().verify(
+        encode_token(canonical_payload(jti=token_id))
+    ).token_id == token_id
+
+
+@pytest.mark.parametrize("claim", ["iat", "exp"])
+@pytest.mark.parametrize("value", [True, False, 1.5, "1784956800", None])
+def test_verifier_rejects_non_integer_numeric_dates(claim: str, value: object) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(canonical_payload(**{claim: value})))
+
+
+@pytest.mark.parametrize(
+    ("issued_at", "expires_at"),
+    [
+        (FIXED_NOW_TS, FIXED_NOW_TS),
+        (FIXED_NOW_TS + 1, FIXED_NOW_TS),
+        (FIXED_NOW_TS, FIXED_NOW_TS + 181),
+    ],
+)
+def test_verifier_rejects_invalid_lifetime(issued_at: int, expires_at: int) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(
+            encode_token(canonical_payload(iat=issued_at, exp=expires_at))
+        )
+
+
+def test_verifier_honors_stricter_configured_lifetime() -> None:
+    token = encode_token(canonical_payload(exp=FIXED_NOW_TS + 91))
+
+    with pytest.raises(InternalTokenError):
+        make_verifier(max_lifetime_seconds=90).verify(token)
+
+
+def test_verifier_accepts_exact_maximum_lifetime() -> None:
+    actor = make_verifier().verify(
+        encode_token(canonical_payload(exp=FIXED_NOW_TS + 180))
+    )
+
+    assert actor.user_id == "user-1"
+
+
+def test_verifier_accepts_iat_at_future_skew_boundary() -> None:
+    actor = make_verifier().verify(
+        encode_token(
+            canonical_payload(
+                iat=FIXED_NOW_TS + 5,
+                exp=FIXED_NOW_TS + 185,
+            )
+        )
+    )
+
+    assert actor.user_id == "user-1"
+
+
+def test_verifier_rejects_iat_beyond_future_skew() -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(
+            encode_token(
+                canonical_payload(
+                    iat=FIXED_NOW_TS + 6,
+                    exp=FIXED_NOW_TS + 186,
+                )
+            )
+        )
+
+
+def test_verifier_accepts_token_expired_four_seconds_with_five_second_skew() -> None:
+    actor = make_verifier().verify(
+        encode_token(
+            canonical_payload(
+                iat=FIXED_NOW_TS - 184,
+                exp=FIXED_NOW_TS - 4,
+            )
+        )
+    )
+
+    assert actor.user_id == "user-1"
+
+
+def test_verifier_rejects_token_expired_exactly_five_seconds() -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(
+            encode_token(
+                canonical_payload(
+                    iat=FIXED_NOW_TS - 185,
+                    exp=FIXED_NOW_TS - 5,
+                )
+            )
+        )
+
+
+def test_verifier_zero_skew_requires_future_expiration() -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier(clock_skew_seconds=0).verify(
+            encode_token(
+                canonical_payload(
+                    iat=FIXED_NOW_TS - 180,
+                    exp=FIXED_NOW_TS,
+                )
+            )
+        )
+
+
+def test_verifier_rejects_naive_clock() -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier(clock=lambda: FIXED_NOW.replace(tzinfo=None)).verify(encode_token())
+```
+
+- [ ] **Step 2: Run strict tests and observe RED**
+
+```powershell
+python -m pytest tests/security/test_internal_jwt.py `
+  -k "actor_claims or actor_strings or audience_array or supported_role or uuid4 or numeric_dates or lifetime or skew or naive_clock" `
+  -v
+```
+
+Expected: multiple failures because Task 3 accepts malformed strings, multiple roles, noncanonical UUIDs, invalid dates, and expired tokens.
+
+- [ ] **Step 3: Replace the minimal projection with strict helpers**
+
+Update imports in `app/security/internal_jwt.py`:
+
+```python
+from unicodedata import category
+from uuid import UUID
+```
+
+Add after `REQUIRED_CLAIMS`:
+
+```python
+SUPPORTED_ROLES = {role.value: role for role in MaintenanceRole}
+```
+
+Replace `return self._project_canonical_claims(claims)` with:
+
+```python
+            return self._project_claims(claims)
+```
+
+Replace `_project_canonical_claims` with:
+
+```python
     def _project_claims(self, claims: dict[str, Any]) -> ActorContext:
         user_id = self._safe_string(claims["sub"])
         tenant_id = self._safe_string(claims["tenant_id"])
@@ -711,7 +1015,7 @@ class InternalTokenVerifier:
             raise InternalTokenError("invalid internal JWT")
         if len(value.encode("utf-8")) > 128:
             raise InternalTokenError("invalid internal JWT")
-        if any(category(character).startswith("C") for character in value):
+        if any(category(character) in {"Cc", "Cf"} for character in value):
             raise InternalTokenError("invalid internal JWT")
         return value
 
@@ -765,416 +1069,23 @@ class InternalTokenVerifier:
             raise InternalTokenError("invalid internal JWT")
 ```
 
-Update `app/security/__init__.py`:
+The outer `verify` exception conversion remains unchanged and converts `UUID` parsing errors to `InternalTokenError`.
 
-```python
-from app.security.actor import ActorContext, MaintenanceRole
-from app.security.internal_jwt import InternalTokenError, InternalTokenVerifier
-
-__all__ = [
-    "ActorContext",
-    "InternalTokenError",
-    "InternalTokenVerifier",
-    "MaintenanceRole",
-]
-```
-
-- [ ] **Step 4: Run the canonical verifier tests**
-
-Run:
+- [ ] **Step 4: Verify GREEN**
 
 ```powershell
-python -m pytest tests/security/test_internal_jwt.py -k Verifier -v
-python -m ruff check app/security tests/security/test_internal_jwt.py
-```
-
-Expected: all current verifier tests pass.
-
-- [ ] **Step 5: Add explicit wrong-algorithm tests**
-
-Append helper:
-
-```python
-def replace_algorithm_header(token: str, algorithm: str) -> str:
-    header = json.dumps({"alg": algorithm, "typ": "JWT"}, separators=(",", ":")).encode()
-    encoded_header = base64.urlsafe_b64encode(header).rstrip(b"=").decode()
-    _, payload, signature = token.split(".")
-    return f"{encoded_header}.{payload}.{signature}"
-```
-
-Append tests:
-
-```python
-@pytest.mark.parametrize("algorithm", ["none", "HS384", "HS512", "RS256"])
-def test_verifier_rejects_every_non_hs256_header(algorithm: str) -> None:
-    forged = replace_algorithm_header(encode_token(), algorithm)
-
-    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
-        make_verifier().verify(forged)
-
-
-def test_verifier_accepts_only_canonical_hs256_header() -> None:
-    token = encode_token()
-    assert jwt.get_unverified_header(token)["alg"] == "HS256"
-
-    assert make_verifier().verify(token).user_id == "user-1"
-```
-
-- [ ] **Step 6: Run algorithm and full focused tests**
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "algorithm or hs256" -v
-python -m pytest tests/security/test_internal_jwt.py -v
-```
-
-Expected: PASS. The forged RS256 fixture requires no asymmetric dependency because only the compact-token header is changed and the fixed whitelist rejects it before signature interpretation.
-
-- [ ] **Step 7: Review and commit Task 3**
-
-Review the verifier for a hard-coded `algorithms=["HS256"]`, disabled built-in time checks, and no logging.
-
-```powershell
-git diff --check
-git diff -- extensions/maintenance-api/app/security `
-  extensions/maintenance-api/tests/security/test_internal_jwt.py
-```
-
-Commit:
-
-```powershell
-git add extensions/maintenance-api/app/security `
-  extensions/maintenance-api/tests/security/test_internal_jwt.py
-git commit -m "feat: verify internal maintenance tokens"
-```
-
----
-
-### Task 4: Strict Claims, UUID, Lifetime, and Clock Boundaries
-
-**Files:**
-
-- Modify: `extensions/maintenance-api/app/security/internal_jwt.py`
-- Modify: `extensions/maintenance-api/tests/security/test_internal_jwt.py`
-
-**Interfaces:**
-
-- Consumes: Task 3 `InternalTokenVerifier` and token helpers.
-- Produces: complete Unit 5 verifier contract, including strict type and boundary rejection.
-- Consumed by: Task 5 HTTP dependency.
-
-- [ ] **Step 1: Add strict string-claim rejection tests**
-
-Append:
-
-```python
-@pytest.mark.parametrize("claim", ["sub", "tenant_id", "request_id"])
-@pytest.mark.parametrize("value", [123, True, [], {}, None])
-def test_verifier_rejects_non_string_actor_claims(claim: str, value: object) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(encode_token(canonical_payload(**{claim: value})))
-
-
-@pytest.mark.parametrize("claim", ["sub", "tenant_id", "request_id"])
-@pytest.mark.parametrize(
-    "value",
-    [
-        "",
-        "   ",
-        " leading",
-        "trailing ",
-        "line\nfeed",
-        "carriage\rreturn",
-        "tab\tvalue",
-        "null\x00value",
-        "zero\u200bwidth",
-        "x" * 129,
-        "界" * 43,
-    ],
-)
-def test_verifier_rejects_unsafe_actor_strings(claim: str, value: str) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(encode_token(canonical_payload(**{claim: value})))
-
-
-def test_verifier_accepts_exactly_128_utf8_bytes() -> None:
-    actor = make_verifier().verify(encode_token(canonical_payload(sub="x" * 128)))
-
-    assert actor.user_id == "x" * 128
-```
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "actor_claims or actor_strings or 128" -v
-```
-
-Expected: PASS if Task 3 implementation is complete. A failure identifies a concrete strictness defect; fix only the demonstrated helper.
-
-- [ ] **Step 2: Add strict audience and role-shape tests**
-
-Append:
-
-```python
-@pytest.mark.parametrize(
-    "audience",
-    [
-        "maintenance-api",
-        [],
-        ["maintenance-api", "other"],
-        [123],
-        ["other"],
-        None,
-    ],
-)
-def test_verifier_requires_single_element_audience_array(audience: object) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(encode_token(canonical_payload(aud=audience)))
-
-
-@pytest.mark.parametrize(
-    "roles",
-    [
-        "viewer",
-        [],
-        ["viewer", "admin"],
-        ["owner"],
-        ["Admin"],
-        [" admin"],
-        [123],
-        [["admin"]],
-        None,
-    ],
-)
-def test_verifier_requires_one_supported_role(roles: object) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(encode_token(canonical_payload(roles=roles)))
-
-
-@pytest.mark.parametrize(
-    ("role", "expected"),
-    [
-        ("viewer", MaintenanceRole.VIEWER),
-        ("contributor", MaintenanceRole.CONTRIBUTOR),
-        ("admin", MaintenanceRole.ADMIN),
-    ],
-)
-def test_verifier_accepts_each_supported_single_role(
-    role: str, expected: MaintenanceRole
-) -> None:
-    actor = make_verifier().verify(encode_token(canonical_payload(roles=[role])))
-
-    assert actor.role is expected
-```
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "audience or supported_role" -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 3: Add canonical UUIDv4 tests**
-
-Append:
-
-```python
-@pytest.mark.parametrize(
-    "token_id",
-    [
-        "",
-        "not-a-uuid",
-        "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-        "6fa459ea-ee8a-3ca4-894e-db77e160355e",
-        "886313e1-3b8a-5372-9b90-0c9aee199e5d",
-        CANONICAL_JTI.upper(),
-        "{" + CANONICAL_JTI + "}",
-        " " + CANONICAL_JTI,
-        CANONICAL_JTI + " ",
-        123,
-        None,
-    ],
-)
-def test_verifier_requires_canonical_lowercase_uuid4(token_id: object) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(encode_token(canonical_payload(jti=token_id)))
-
-
-def test_verifier_accepts_generated_canonical_uuid4() -> None:
-    token_id = str(uuid4())
-
-    assert make_verifier().verify(
-        encode_token(canonical_payload(jti=token_id))
-    ).token_id == token_id
-```
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "uuid4" -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 4: Add exact numeric-type and lifetime tests**
-
-Append:
-
-```python
-@pytest.mark.parametrize("claim", ["iat", "exp"])
-@pytest.mark.parametrize("value", [True, False, 1.5, "1784956800", None])
-def test_verifier_rejects_non_integer_numeric_dates(claim: str, value: object) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(encode_token(canonical_payload(**{claim: value})))
-
-
-@pytest.mark.parametrize(
-    ("issued_at", "expires_at"),
-    [
-        (FIXED_NOW_TS, FIXED_NOW_TS),
-        (FIXED_NOW_TS + 1, FIXED_NOW_TS),
-        (FIXED_NOW_TS, FIXED_NOW_TS + 181),
-    ],
-)
-def test_verifier_rejects_invalid_lifetime(issued_at: int, expires_at: int) -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(
-            encode_token(canonical_payload(iat=issued_at, exp=expires_at))
-        )
-
-
-def test_verifier_honors_stricter_configured_lifetime() -> None:
-    token = encode_token(canonical_payload(exp=FIXED_NOW_TS + 91))
-
-    with pytest.raises(InternalTokenError):
-        make_verifier(max_lifetime_seconds=90).verify(token)
-
-
-def test_verifier_accepts_exact_maximum_lifetime() -> None:
-    actor = make_verifier().verify(
-        encode_token(canonical_payload(exp=FIXED_NOW_TS + 180))
-    )
-
-    assert actor.user_id == "user-1"
-```
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "numeric_dates or lifetime" -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Add fixed clock-skew boundary tests**
-
-Append:
-
-```python
-def test_verifier_accepts_iat_at_future_skew_boundary() -> None:
-    actor = make_verifier().verify(
-        encode_token(
-            canonical_payload(
-                iat=FIXED_NOW_TS + 5,
-                exp=FIXED_NOW_TS + 180,
-            )
-        )
-    )
-
-    assert actor.user_id == "user-1"
-
-
-def test_verifier_rejects_iat_beyond_future_skew() -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(
-            encode_token(
-                canonical_payload(
-                    iat=FIXED_NOW_TS + 6,
-                    exp=FIXED_NOW_TS + 180,
-                )
-            )
-        )
-
-
-def test_verifier_accepts_token_expired_four_seconds_with_five_second_skew() -> None:
-    actor = make_verifier().verify(
-        encode_token(
-            canonical_payload(
-                iat=FIXED_NOW_TS - 184,
-                exp=FIXED_NOW_TS - 4,
-            )
-        )
-    )
-
-    assert actor.user_id == "user-1"
-
-
-def test_verifier_rejects_token_expired_exactly_five_seconds() -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier().verify(
-            encode_token(
-                canonical_payload(
-                    iat=FIXED_NOW_TS - 185,
-                    exp=FIXED_NOW_TS - 5,
-                )
-            )
-        )
-
-
-def test_verifier_zero_skew_requires_future_expiration() -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier(clock_skew_seconds=0).verify(
-            encode_token(
-                canonical_payload(
-                    iat=FIXED_NOW_TS - 180,
-                    exp=FIXED_NOW_TS,
-                )
-            )
-        )
-
-
-def test_verifier_rejects_naive_clock() -> None:
-    with pytest.raises(InternalTokenError):
-        make_verifier(clock=lambda: FIXED_NOW.replace(tzinfo=None)).verify(encode_token())
-```
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "skew or naive_clock" -v
-```
-
-Expected: PASS with the exact approved boundary semantics.
-
-- [ ] **Step 6: Run complete verifier tests and inspect coverage by test list**
-
-Run:
-
-```powershell
-python -m pytest tests/security/test_internal_jwt.py --collect-only -q
 python -m pytest tests/security/test_internal_jwt.py -v
 python -m ruff check app/security tests/security/test_internal_jwt.py
 ```
 
-Expected: all tests pass. Inspect the collected names and confirm there is explicit coverage for algorithm, required claims, type strictness, string safety, audience shape, role cardinality, UUIDv4, lifetime, future `iat`, expiration, and naive clocks.
+Expected: all strict tests pass.
 
-- [ ] **Step 7: Review and commit Task 4**
+- [ ] **Step 5: Review and commit**
 
-Review:
+Confirm skew is used only against `now`, not added to lifetime.
 
 ```powershell
 git diff --check
-git diff -- extensions/maintenance-api/app/security/internal_jwt.py `
-  extensions/maintenance-api/tests/security/test_internal_jwt.py
-```
-
-Confirm clock skew appears only in comparisons against `now`, never in `exp - iat`.
-
-Commit:
-
-```powershell
 git add extensions/maintenance-api/app/security/internal_jwt.py `
   extensions/maintenance-api/tests/security/test_internal_jwt.py
 git commit -m "test: harden internal maintenance claims"
@@ -1193,16 +1104,15 @@ git commit -m "test: harden internal maintenance claims"
 
 **Interfaces:**
 
-- Consumes: `get_settings()`, `InternalTokenVerifier`, `ActorContext`, existing `AppException`, and `register_exception_handlers()`.
-- Produces: `InternalAuthenticationError`, `get_internal_token_verifier() -> InternalTokenVerifier`, and `get_actor(...) -> ActorContext`.
-- Consumed by: Unit 6 permission dependencies and all later authenticated Maintenance routes.
+- Produces: `InternalAuthenticationError`, `get_internal_token_verifier()`, and `get_actor(...) -> ActorContext`.
+- Consumed by: Unit 6 and later authenticated routes.
 
-- [ ] **Step 1: Write failing exception-header tests**
+- [ ] **Step 1: Write failing exception tests**
 
-Add these imports to `tests/security/test_internal_jwt.py`:
+Add import:
 
 ```python
-from app.core.exceptions import InternalAuthenticationError
+from app.core.exceptions import AppException, InternalAuthenticationError
 ```
 
 Append:
@@ -1219,33 +1129,37 @@ def test_internal_authentication_error_has_fixed_contract() -> None:
 
 
 def test_app_exception_headers_are_defensively_copied() -> None:
-    source = {"WWW-Authenticate": "Bearer"}
-    error = InternalAuthenticationError()
-    source["WWW-Authenticate"] = "Basic"
+    source = {"X-Test": "original"}
+    error = AppException(
+        status_code=400,
+        code="TEST",
+        message="test",
+        headers=source,
+    )
 
-    assert error.headers == {"WWW-Authenticate": "Bearer"}
+    source["X-Test"] = "mutated"
+    assert error.headers == {"X-Test": "original"}
 ```
 
-- [ ] **Step 2: Run the exception tests and observe RED**
-
-Run:
+- [ ] **Step 2: Run and observe RED**
 
 ```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "authentication_error or defensively" -v
+python -m pytest tests/security/test_internal_jwt.py `
+  -k "authentication_error or defensively" -v
 ```
 
-Expected: collection fails because `InternalAuthenticationError` and `AppException.headers` do not exist.
+Expected: import or attribute failures because the exception contract lacks headers and the new exception.
 
-- [ ] **Step 3: Extend the project exception contract minimally**
+- [ ] **Step 3: Extend the exception contract minimally**
 
-Update imports in `app/core/exceptions.py`:
+Change imports in `app/core/exceptions.py`:
 
 ```python
 from collections.abc import Mapping
 from typing import Any
 ```
 
-Extend `AppException.__init__`:
+Extend `AppException`:
 
 ```python
 class AppException(Exception):
@@ -1266,7 +1180,7 @@ class AppException(Exception):
         self.headers = dict(headers) if headers is not None else None
 ```
 
-Add this exception after `AppException`:
+Add:
 
 ```python
 class InternalAuthenticationError(AppException):
@@ -1279,7 +1193,7 @@ class InternalAuthenticationError(AppException):
         )
 ```
 
-Pass headers in the existing handler:
+Pass headers in the existing `AppException` handler:
 
 ```python
         return JSONResponse(
@@ -1291,19 +1205,17 @@ Pass headers in the existing handler:
         )
 ```
 
-- [ ] **Step 4: Run exception and existing error regression tests**
-
-Run:
+- [ ] **Step 4: Verify exception GREEN**
 
 ```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "authentication_error or defensively" -v
+python -m pytest tests/security/test_internal_jwt.py `
+  -k "authentication_error or defensively" -v
 python -m pytest tests/test_health.py -v
-python -m ruff check app/core/exceptions.py tests/security/test_internal_jwt.py
 ```
 
-Expected: PASS. Existing 503 error bodies remain unchanged.
+Expected: pass and existing health error shape unchanged.
 
-- [ ] **Step 5: Write failing dependency and HTTP-envelope tests**
+- [ ] **Step 5: Write failing dependency tests**
 
 Add imports:
 
@@ -1318,14 +1230,14 @@ from app.core.exceptions import register_exception_handlers
 from app.security.dependencies import get_actor, get_internal_token_verifier
 ```
 
-Append fixture:
+Append:
 
 ```python
 @pytest.fixture()
 def protected_client() -> Generator[TestClient, None, None]:
     application = FastAPI()
     register_exception_handlers(application)
-    application.dependency_overrides[get_internal_token_verifier] = make_verifier
+    application.dependency_overrides[get_internal_token_verifier] = lambda: make_verifier()
 
     @application.get("/protected")
     def protected(
@@ -1341,19 +1253,11 @@ def protected_client() -> Generator[TestClient, None, None]:
 
     with TestClient(application) as client:
         yield client
-```
 
-Append tests:
 
-```python
 @pytest.mark.parametrize(
     "authorization",
-    [
-        None,
-        "Basic abc123",
-        "Bearer",
-        "Bearer invalid-token",
-    ],
+    [None, "Basic abc123", "Bearer", "Bearer invalid-token"],
 )
 def test_get_actor_returns_uniform_401(
     protected_client: TestClient, authorization: str | None
@@ -1377,10 +1281,7 @@ def test_get_actor_returns_uniform_401(
 
 def test_get_actor_returns_same_401_for_expired_token(protected_client: TestClient) -> None:
     token = encode_token(
-        canonical_payload(
-            iat=FIXED_NOW_TS - 186,
-            exp=FIXED_NOW_TS - 6,
-        )
+        canonical_payload(iat=FIXED_NOW_TS - 186, exp=FIXED_NOW_TS - 6)
     )
 
     response = protected_client.get(
@@ -1388,8 +1289,11 @@ def test_get_actor_returns_same_401_for_expired_token(protected_client: TestClie
     )
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "INTERNAL_TOKEN_INVALID"
-    assert response.json()["error"]["details"] is None
+    assert response.json()["error"] == {
+        "code": "INTERNAL_TOKEN_INVALID",
+        "message": "Internal authentication failed",
+        "details": None,
+    }
 
 
 def test_get_actor_returns_verified_actor(protected_client: TestClient) -> None:
@@ -1409,17 +1313,15 @@ def test_get_actor_returns_verified_actor(protected_client: TestClient) -> None:
 
 - [ ] **Step 6: Run dependency tests and observe RED**
 
-Run:
-
 ```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "get_actor" -v
+python -m pytest tests/security/test_internal_jwt.py -k get_actor -v
 ```
 
-Expected: collection fails because `app.security.dependencies` does not exist.
+Expected: collection fails because `app.security.dependencies` is missing.
 
-- [ ] **Step 7: Implement cached verifier construction and `get_actor`**
+- [ ] **Step 7: Implement verifier construction and `get_actor`**
 
-Create `extensions/maintenance-api/app/security/dependencies.py`:
+Create `app/security/dependencies.py`:
 
 ```python
 from functools import lru_cache
@@ -1471,7 +1373,7 @@ def get_actor(
         raise InternalAuthenticationError() from exc
 ```
 
-Update `app/security/__init__.py` to export the dependency functions:
+Update `app/security/__init__.py`:
 
 ```python
 from app.security.actor import ActorContext, MaintenanceRole
@@ -1488,36 +1390,21 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 8: Run dependency, envelope, and public-route regression tests**
-
-Run:
+- [ ] **Step 8: Verify GREEN and regressions**
 
 ```powershell
-python -m pytest tests/security/test_internal_jwt.py -k "get_actor" -v
 python -m pytest tests/security/test_internal_jwt.py -v
 python -m pytest tests/test_health.py tests/test_system.py -v
 python -m ruff check app/security app/core/config.py app/core/exceptions.py `
   tests/security/test_internal_jwt.py
 ```
 
-Expected: all commands pass. No production route was added or protected.
+Expected: all pass and no production route is protected.
 
-- [ ] **Step 9: Review and commit Task 5**
-
-Review:
+- [ ] **Step 9: Review and commit**
 
 ```powershell
 git diff --check
-git diff -- extensions/maintenance-api/app/security `
-  extensions/maintenance-api/app/core/exceptions.py `
-  extensions/maintenance-api/tests/security/test_internal_jwt.py
-```
-
-Confirm all HTTP failures instantiate the same exception and no exception detail reaches the response.
-
-Commit:
-
-```powershell
 git add extensions/maintenance-api/app/security `
   extensions/maintenance-api/app/core/exceptions.py `
   extensions/maintenance-api/tests/security/test_internal_jwt.py
@@ -1526,109 +1413,79 @@ git commit -m "feat: expose internal maintenance actor dependency"
 
 ---
 
-### Task 6: Unit 5 Integration, Regression, Security Review, and Ledger
+### Task 6: Integration, Security Review, Full Regression, and Ledger
 
 **Files:**
 
-- Modify only if a failing approved test proves a defect: Unit 5 files listed in the File Map.
-- Modify after all gates pass: `.superpowers/sdd/progress.md`.
+- Modify production files only when a newly added approved test proves a defect.
+- Modify `.superpowers/sdd/progress.md` only after every gate passes.
 
 **Interfaces:**
 
-- Consumes: complete Tasks 1–5 implementation.
-- Produces: reviewed Unit 5 completion commit and persisted recovery state for Unit 6.
+- Produces: reviewed Unit 5 completion and durable recovery state for Unit 6.
 
-- [ ] **Step 1: Verify the branch and clean starting state**
-
-Run from the repository worktree:
+- [ ] **Step 1: Verify branch and clean state**
 
 ```powershell
+cd E:\weknora_projects\maintenance-support-weknora\.worktrees\maintenance-frontend-plan05
 git branch --show-current
 git status --short
 git rev-parse HEAD
 ```
 
-Expected:
+Expected branch: `feature/maintenance-frontend-plan05`; status must be clean.
 
-```text
-feature/maintenance-frontend-plan05
-```
-
-`git status --short` must be empty before final gates.
-
-- [ ] **Step 2: Run focused Unit 5 tests**
+- [ ] **Step 2: Run focused and public regression tests**
 
 ```powershell
 cd extensions\maintenance-api
 python -m pytest tests/security/test_internal_jwt.py -v
-```
-
-Expected: PASS for settings, actor immutability, HS256 whitelist, every required claim, strict types, string safety, role cardinality, audience shape, UUIDv4, lifetime, skew, dependency, and HTTP envelope.
-
-- [ ] **Step 3: Run affected public-route regressions**
-
-```powershell
 python -m pytest tests/test_health.py tests/test_system.py -v
 ```
 
-Expected: PASS. `/`, `/health`, and `/api/v1/system/info` retain their existing behavior and response shape.
+Expected: all pass.
 
-- [ ] **Step 4: Run Ruff on the approved scope**
+- [ ] **Step 3: Run Ruff and full Maintenance API suite**
 
 ```powershell
 python -m ruff check app/security app/core/config.py app/core/exceptions.py `
   tests/conftest.py tests/security/test_internal_jwt.py
-```
-
-Expected: `All checks passed!`.
-
-- [ ] **Step 5: Run the complete Maintenance API suite**
-
-```powershell
 python -m pytest -v
 ```
 
-Expected: all existing non-performance, non-external tests pass under the new required settings bootstrap.
+Expected: Ruff reports `All checks passed!`; all non-performance, non-external tests pass.
 
-If a failure is unrelated to Unit 5, record the exact failing test and existing baseline evidence before changing any file. Do not broaden Unit 5 to repair unrelated behavior.
-
-- [ ] **Step 6: Run static security scans over changed code**
+- [ ] **Step 4: Run static security checks**
 
 From the repository root:
 
 ```powershell
+cd ..\..
 $files = @(
   "extensions/maintenance-api/app/security/__init__.py",
   "extensions/maintenance-api/app/security/actor.py",
   "extensions/maintenance-api/app/security/internal_jwt.py",
   "extensions/maintenance-api/app/security/dependencies.py",
   "extensions/maintenance-api/app/core/config.py",
-  "extensions/maintenance-api/app/core/exceptions.py",
-  "extensions/maintenance-api/tests/security/test_internal_jwt.py"
+  "extensions/maintenance-api/app/core/exceptions.py"
 )
 
-Select-String -Path $files -Pattern 'print\(|logger\.|logging\.|token\s*=.*log|secret\s*=.*log'
+Select-String -Path $files -Pattern 'print\(|logger\.|logging\.'
 Select-String -Path extensions/maintenance-api/app/security/internal_jwt.py `
   -Pattern 'algorithms=\["HS256"\]'
 Select-String -Path extensions/maintenance-api/app/security/internal_jwt.py `
   -Pattern 'verify_exp.*False|verify_iat.*False'
 ```
 
-Expected:
+Expected: no logging/print matches; exactly one fixed HS256 whitelist; manual time checks remain authoritative.
 
-- the first command returns no logging or print statements;
-- the second command finds exactly the fixed HS256 whitelist;
-- the third command confirms built-in wall-clock checks are disabled so the injectable manual clock is authoritative.
-
-- [ ] **Step 7: Confirm no router or unrelated code changed**
-
-Run:
+- [ ] **Step 5: Confirm approved scope**
 
 ```powershell
 git diff --name-only 21b6a92f913661593f80ebee412b6f36ed9d1931...HEAD
 ```
 
-The list may contain only:
+Before the ledger commit, only these paths may appear:
 
 ```text
 docs/superpowers/plans/2026-07-25-maintenance-unit05-internal-jwt-implementation.md
@@ -1644,51 +1501,45 @@ extensions/maintenance-api/tests/conftest.py
 extensions/maintenance-api/tests/security/test_internal_jwt.py
 ```
 
-Before the ledger update, `app/main.py`, `app/api/v1/router.py`, endpoint modules, repositories, services, models, migrations, and all Go files must be absent.
+`app/main.py`, `app/api/v1/router.py`, endpoint modules, repositories, services, models, migrations, and all Go files must be absent.
 
-- [ ] **Step 8: Perform the final specification review**
+- [ ] **Step 6: Perform final specification review**
 
-Check each statement against tests and code:
+Verify each statement against code and tests:
 
-1. Settings construction fails without a secret.
-2. Secret length uses UTF-8 bytes and is at least 32.
-3. `SecretStr` masks diagnostics.
-4. Only HS256 is accepted.
-5. All nine claims are required.
-6. Audience and role are exact one-element arrays.
-7. Actor strings reject whitespace, category-C characters, and values above 128 UTF-8 bytes.
-8. `jti` is canonical lowercase UUIDv4.
-9. Numeric dates reject bool and non-int values.
-10. Lifetime remains positive and at most 180 seconds.
-11. Skew affects only `now` comparisons.
-12. `ActorContext` is frozen, slotted, and single-role.
-13. Every HTTP authentication failure has the same 401 body and Bearer challenge.
-14. Existing routers remain unprotected in Unit 5.
-15. No sensitive values are logged.
+1. Settings fail without a safe secret.
+2. Secret length uses UTF-8 bytes and diagnostics mask the value.
+3. Only HS256 is accepted.
+4. All nine claims are required.
+5. Audience and role are exact one-element arrays.
+6. Actor strings reject surrounding whitespace, control/format characters, and values above 128 UTF-8 bytes.
+7. `jti` is canonical lowercase UUIDv4.
+8. Numeric dates reject booleans and non-integers.
+9. Lifetime is positive and at most 180 seconds.
+10. Skew affects only comparisons against current time.
+11. `ActorContext` is frozen, slotted, and single-role.
+12. Every HTTP authentication failure has the same 401 body and Bearer challenge.
+13. Existing routers remain unprotected.
+14. No sensitive values are logged.
 
-Any failed statement requires a new focused regression test before changing production code.
+Any failed item requires a focused failing regression test before production changes.
 
-- [ ] **Step 9: Update the durable progress ledger only after every gate passes**
+- [ ] **Step 7: Update the durable ledger**
 
-In `.superpowers/sdd/progress.md`, replace the Unit 5 line with:
+Replace the Unit 5 line in `.superpowers/sdd/progress.md` with:
 
 ```text
 - Unit 5: complete — FastAPI internal HS256 JWT verification implemented with fail-closed SecretStr settings, strict single-role claims, canonical UUIDv4 token IDs, deterministic lifetime and clock-skew checks, immutable ActorContext projection, uniform 401 Bearer errors, focused and full-suite verification, and security review clean.
 ```
 
-Do not change the Unit 6 line.
-
 Commit:
 
 ```powershell
-cd ..\..
 git add .superpowers/sdd/progress.md
 git commit -m "docs: mark maintenance unit 5 complete"
 ```
 
-- [ ] **Step 10: Final clean-state evidence**
-
-Run:
+- [ ] **Step 8: Record final clean evidence**
 
 ```powershell
 git status --short
@@ -1696,11 +1547,7 @@ git log --oneline -8
 git diff --check 21b6a92f913661593f80ebee412b6f36ed9d1931...HEAD
 ```
 
-Expected:
-
-- clean working tree;
-- task-isolated commits visible;
-- no whitespace errors.
+Expected: clean worktree and no whitespace errors.
 
 ---
 
@@ -1708,6 +1555,7 @@ Expected:
 
 ```text
 docs: add maintenance unit 5 implementation plan
+docs: correct maintenance unit 5 task boundaries
 feat: configure internal maintenance identity
 feat: define maintenance actor context
 feat: verify internal maintenance tokens
