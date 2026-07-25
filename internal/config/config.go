@@ -583,7 +583,7 @@ func LoadConfig() (*Config, error) {
 	applyKnowledgeBaseEnvOverrides(&cfg)
 	applyAuthAndTenantDefaults(&cfg)
 	applyAuditDefaults(&cfg)
-	if err := applyMaintenanceEnv(&cfg); err != nil {
+	if err := applyMaintenanceConfig(&cfg); err != nil {
 		return nil, err
 	}
 
