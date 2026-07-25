@@ -13,6 +13,14 @@ import (
 	"github.com/Tencent/WeKnora/internal/maintenanceproxy"
 )
 
+type routerTestResponseWriter struct {
+	*httptest.ResponseRecorder
+}
+
+func (writer *routerTestResponseWriter) CloseNotify() <-chan bool {
+	return make(chan bool)
+}
+
 func newRouterTestProxy(t *testing.T, upstreamURL string) *maintenanceproxy.Proxy {
 	t.Helper()
 
@@ -76,8 +84,9 @@ func TestRegisterMaintenanceRoutesForwardsPathAndQuery(t *testing.T) {
 	RegisterMaintenanceRoutes(engine, newRouterTestProxy(t, upstream.URL))
 
 	recorder := httptest.NewRecorder()
+	writer := &routerTestResponseWriter{ResponseRecorder: recorder}
 	request := httptest.NewRequest(http.MethodGet, "/api/maintenance/jobs?page=2", nil)
-	engine.ServeHTTP(recorder, request)
+	engine.ServeHTTP(writer, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
