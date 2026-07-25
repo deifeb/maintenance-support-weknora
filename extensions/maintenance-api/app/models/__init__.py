@@ -29,11 +29,14 @@ from app.models.demand_scenario import (
 )
 from app.models.equipment import ConfigurationItem, ConfigurationVersion, EquipmentModel
 from app.models.inventory import Warehouse, WarehouseInventory
+from app.models.mixins import TenantScopedMixin, VersionedMixin
 from app.models.reliability import ReliabilityProfile
 from app.models.repair import RepairProfile
 from app.models.supplier import Supplier, SupplierOffer
 
 __all__ = [
+    "VersionedMixin",
+    "TenantScopedMixin",
     "EquipmentModel",
     "ConfigurationVersion",
     "ConfigurationItem",

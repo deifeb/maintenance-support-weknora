@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -18,17 +19,28 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.enums import WarehouseStatus
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 if TYPE_CHECKING:
     from app.models.catalog import SparePart
 
 
-class Warehouse(Base, ActiveMixin, TimestampMixin):
+class Warehouse(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "warehouses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     warehouse_type: Mapped[str | None] = mapped_column(String(100))
     location: Mapped[str | None] = mapped_column(String(500))
@@ -44,8 +56,22 @@ class Warehouse(Base, ActiveMixin, TimestampMixin):
 
     inventories: Mapped[list["WarehouseInventory"]] = relationship(back_populates="warehouse")
 
+    __table_args__ = (
+        Index(
+            "uq_warehouses_tenant_code",
+            "tenant_id",
+            "code",
+            unique=True,
+        ),
+    )
 
-class WarehouseInventory(Base, TimestampMixin):
+
+class WarehouseInventory(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "warehouse_inventories"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

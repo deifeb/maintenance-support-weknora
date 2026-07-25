@@ -6,10 +6,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.enums import AIBlockingLevel, AIReviewFindingStatus, AIReviewRunStatus, AISeverity
-from app.models.mixins import TimestampMixin
+from app.models.mixins import TenantScopedMixin, TimestampMixin, VersionedMixin
 
 
-class AIReviewRun(Base, TimestampMixin):
+class AIReviewRun(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_review_runs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int | None] = mapped_column(
@@ -31,7 +36,11 @@ class AIReviewRun(Base, TimestampMixin):
     summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
-class AIReviewFinding(Base, TimestampMixin):
+class AIReviewFinding(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_review_findings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     review_run_id: Mapped[int] = mapped_column(
