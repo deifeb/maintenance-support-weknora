@@ -1,13 +1,75 @@
 from __future__ import annotations
 
+import base64
+import json
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
 
+import jwt
 import pytest
 from app.core.config import Settings
 from app.security.actor import ActorContext, MaintenanceRole
+from app.security.internal_jwt import InternalTokenError, InternalTokenVerifier
 from pydantic import ValidationError
 
 TEST_SECRET = "unit-five-internal-jwt-secret-0001"
+FIXED_NOW = datetime(2026, 7, 25, 8, 0, 0, tzinfo=timezone.utc)
+FIXED_NOW_TS = int(FIXED_NOW.timestamp())
+CANONICAL_JTI = "5ea49880-7b27-4d9e-a383-1219b8164dc0"
+
+
+def fixed_clock() -> datetime:
+    return FIXED_NOW
+
+
+def canonical_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "sub": "user-1",
+        "tenant_id": "12",
+        "roles": ["contributor"],
+        "aud": ["maintenance-api"],
+        "iss": "weknora",
+        "iat": FIXED_NOW_TS,
+        "exp": FIXED_NOW_TS + 180,
+        "jti": CANONICAL_JTI,
+        "request_id": "request-1",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def encode_token(
+    payload: dict[str, object] | None = None,
+    *,
+    secret: str = TEST_SECRET,
+    algorithm: str = "HS256",
+) -> str:
+    source = canonical_payload() if payload is None else payload
+    return jwt.encode(source, secret, algorithm=algorithm)
+
+
+def make_verifier(
+    *,
+    max_lifetime_seconds: int = 180,
+    clock_skew_seconds: int = 5,
+    clock: Callable[[], datetime] = fixed_clock,
+) -> InternalTokenVerifier:
+    return InternalTokenVerifier(
+        secret=TEST_SECRET,
+        issuer="weknora",
+        audience="maintenance-api",
+        max_lifetime_seconds=max_lifetime_seconds,
+        clock_skew_seconds=clock_skew_seconds,
+        clock=clock,
+    )
+
+
+def replace_algorithm_header(token: str, algorithm: str) -> str:
+    header = json.dumps({"alg": algorithm, "typ": "JWT"}, separators=(",", ":")).encode()
+    encoded_header = base64.urlsafe_b64encode(header).rstrip(b"=").decode()
+    _, payload, signature = token.split(".")
+    return f"{encoded_header}.{payload}.{signature}"
 
 
 def test_settings_require_internal_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,7 +164,7 @@ def test_actor_context_is_immutable_and_single_role() -> None:
         tenant_id="12",
         role=MaintenanceRole.CONTRIBUTOR,
         request_id="request-1",
-        token_id="5ea49880-7b27-4d9e-a383-1219b8164dc0",
+        token_id=CANONICAL_JTI,
     )
 
     assert actor.role is MaintenanceRole.CONTRIBUTOR
@@ -116,9 +178,92 @@ def test_actor_context_uses_slots() -> None:
         tenant_id="12",
         role=MaintenanceRole.VIEWER,
         request_id="request-1",
-        token_id="5ea49880-7b27-4d9e-a383-1219b8164dc0",
+        token_id=CANONICAL_JTI,
     )
 
     assert not hasattr(actor, "__dict__")
     with pytest.raises((AttributeError, TypeError)):
         object.__setattr__(actor, "unexpected", "value")
+
+
+def test_verifier_returns_canonical_actor() -> None:
+    actor = make_verifier().verify(encode_token())
+
+    assert actor == ActorContext(
+        user_id="user-1",
+        tenant_id="12",
+        role=MaintenanceRole.CONTRIBUTOR,
+        request_id="request-1",
+        token_id=CANONICAL_JTI,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"secret": "short"}, "32 UTF-8 bytes"),
+        ({"issuer": " "}, "issuer"),
+        ({"audience": " "}, "audience"),
+        ({"max_lifetime_seconds": 0}, "maximum lifetime"),
+        ({"max_lifetime_seconds": 181}, "maximum lifetime"),
+        ({"clock_skew_seconds": -1}, "clock skew"),
+        ({"clock_skew_seconds": 31}, "clock skew"),
+    ],
+)
+def test_verifier_rejects_unsafe_constructor_values(
+    kwargs: dict[str, object], message: str
+) -> None:
+    arguments: dict[str, object] = {
+        "secret": TEST_SECRET,
+        "issuer": "weknora",
+        "audience": "maintenance-api",
+        "max_lifetime_seconds": 180,
+        "clock_skew_seconds": 5,
+        "clock": fixed_clock,
+    }
+    arguments.update(kwargs)
+
+    with pytest.raises(ValueError, match=message):
+        InternalTokenVerifier(**arguments)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("token", ["", "   ", "not-a-jwt"])
+def test_verifier_rejects_empty_or_malformed_token(token: str) -> None:
+    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
+        make_verifier().verify(token)
+
+
+def test_verifier_rejects_wrong_secret() -> None:
+    token = encode_token(secret="different-secret-value-with-32-bytes")
+
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(token)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        canonical_payload(iss="other"),
+        canonical_payload(aud=["other"]),
+    ],
+)
+def test_verifier_rejects_wrong_issuer_or_audience(payload: dict[str, object]) -> None:
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(payload))
+
+
+@pytest.mark.parametrize("claim", list(canonical_payload()))
+def test_verifier_requires_every_claim(claim: str) -> None:
+    payload = canonical_payload()
+    del payload[claim]
+
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(encode_token(payload))
+
+
+@pytest.mark.parametrize("algorithm", ["none", "HS384", "HS512", "RS256"])
+def test_verifier_rejects_every_non_hs256_header(algorithm: str) -> None:
+    forged = replace_algorithm_header(encode_token(), algorithm)
+
+    with pytest.raises(InternalTokenError):
+        make_verifier().verify(forged)
