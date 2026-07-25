@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 from app.core.config import Settings
+from app.security.actor import ActorContext, MaintenanceRole
 from pydantic import ValidationError
 
 TEST_SECRET = "unit-five-internal-jwt-secret-0001"
@@ -91,3 +94,31 @@ def test_settings_accept_bounded_clock_skew(value: int) -> None:
     )
 
     assert settings.internal_jwt_clock_skew_seconds == value
+
+
+def test_actor_context_is_immutable_and_single_role() -> None:
+    actor = ActorContext(
+        user_id="user-1",
+        tenant_id="12",
+        role=MaintenanceRole.CONTRIBUTOR,
+        request_id="request-1",
+        token_id="5ea49880-7b27-4d9e-a383-1219b8164dc0",
+    )
+
+    assert actor.role is MaintenanceRole.CONTRIBUTOR
+    with pytest.raises(FrozenInstanceError):
+        actor.role = MaintenanceRole.ADMIN  # type: ignore[misc]
+
+
+def test_actor_context_uses_slots() -> None:
+    actor = ActorContext(
+        user_id="user-1",
+        tenant_id="12",
+        role=MaintenanceRole.VIEWER,
+        request_id="request-1",
+        token_id="5ea49880-7b27-4d9e-a383-1219b8164dc0",
+    )
+
+    assert not hasattr(actor, "__dict__")
+    with pytest.raises((AttributeError, TypeError)):
+        object.__setattr__(actor, "unexpected", "value")
