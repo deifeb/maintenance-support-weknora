@@ -267,3 +267,77 @@ def test_verifier_rejects_every_non_hs256_header(algorithm: str) -> None:
 
     with pytest.raises(InternalTokenError):
         make_verifier().verify(forged)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        canonical_payload(exp=FIXED_NOW_TS - 5),
+        canonical_payload(
+            iat=FIXED_NOW_TS + 6,
+            exp=FIXED_NOW_TS + 6 + 180,
+        ),
+        canonical_payload(
+            iat=FIXED_NOW_TS,
+            exp=FIXED_NOW_TS + 181,
+        ),
+        canonical_payload(
+            iat=FIXED_NOW_TS,
+            exp=FIXED_NOW_TS,
+        ),
+    ],
+)
+def test_verifier_rejects_invalid_time_windows(payload: dict[str, object]) -> None:
+    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
+        make_verifier().verify(encode_token(payload))
+
+
+@pytest.mark.parametrize(
+    ("claim", "value"),
+    [
+        ("iat", True),
+        ("iat", "1784966400"),
+        ("iat", 1784966400.5),
+        ("exp", False),
+        ("exp", "1784966580"),
+        ("exp", 1784966580.5),
+    ],
+)
+def test_verifier_requires_integer_numeric_dates(
+    claim: str,
+    value: object,
+) -> None:
+    payload = canonical_payload(**{claim: value})
+
+    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
+        make_verifier().verify(encode_token(payload))
+
+
+def test_verifier_accepts_clock_skew_inside_boundaries() -> None:
+    payload = canonical_payload(
+        iat=FIXED_NOW_TS + 5,
+        exp=FIXED_NOW_TS + 5 + 180,
+    )
+
+    actor = make_verifier().verify(encode_token(payload))
+
+    assert actor.user_id == "user-1"
+
+
+def test_verifier_accepts_recent_expiry_inside_clock_skew() -> None:
+    payload = canonical_payload(
+        iat=FIXED_NOW_TS - 184,
+        exp=FIXED_NOW_TS - 4,
+    )
+
+    actor = make_verifier().verify(encode_token(payload))
+
+    assert actor.token_id == CANONICAL_JTI
+
+
+def test_verifier_rejects_naive_clock_result() -> None:
+    def naive_clock() -> datetime:
+        return FIXED_NOW.replace(tzinfo=None)
+
+    with pytest.raises(InternalTokenError, match="invalid internal JWT"):
+        make_verifier(clock=naive_clock).verify(encode_token())

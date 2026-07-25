@@ -95,6 +95,9 @@ class InternalTokenVerifier:
             request_id = self._required_text(claims, "request_id")
             token_id = self._required_text(claims, "jti")
             role = self._single_role(claims["roles"])
+            issued_at = self._numeric_date(claims, "iat")
+            expires_at = self._numeric_date(claims, "exp")
+            self._validate_time_window(issued_at=issued_at, expires_at=expires_at)
 
             return ActorContext(
                 user_id=user_id,
@@ -114,6 +117,30 @@ class InternalTokenVerifier:
         if not isinstance(value, str) or not value.strip():
             raise InternalTokenError("invalid internal JWT")
         return value
+
+    @staticmethod
+    def _numeric_date(claims: dict[str, Any], name: str) -> int:
+        value = claims[name]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise InternalTokenError("invalid internal JWT")
+        return value
+
+    def _validate_time_window(self, *, issued_at: int, expires_at: int) -> None:
+        now = self._clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise InternalTokenError("invalid internal JWT")
+
+        now_timestamp = now.astimezone(timezone.utc).timestamp()
+        lifetime = expires_at - issued_at
+
+        if lifetime <= 0 or lifetime > self._max_lifetime_seconds:
+            raise InternalTokenError("invalid internal JWT")
+
+        if issued_at > now_timestamp + self._clock_skew_seconds:
+            raise InternalTokenError("invalid internal JWT")
+
+        if expires_at <= now_timestamp - self._clock_skew_seconds:
+            raise InternalTokenError("invalid internal JWT")
 
     @staticmethod
     def _single_role(value: object) -> MaintenanceRole:
