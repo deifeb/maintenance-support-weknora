@@ -1,6 +1,9 @@
 package container
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +128,40 @@ func TestNewMaintenanceProxyRejectsNilConfig(t *testing.T) {
 	}
 	if proxy != nil {
 		t.Fatalf("proxy = %#v, want nil", proxy)
+	}
+}
+
+func TestBuildContainerRegistersMaintenanceProxyAfterConfig(t *testing.T) {
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() failed")
+	}
+
+	source, err := os.ReadFile(filepath.Join(filepath.Dir(testFile), "container.go"))
+	if err != nil {
+		t.Fatalf("read container.go: %v", err)
+	}
+	text := string(source)
+
+	configIndex := strings.Index(text, "must(container.Provide(config.LoadConfig))")
+	maintenanceIndex := strings.Index(text, "must(container.Provide(newMaintenanceProxy))")
+	langfuseIndex := strings.Index(text, "must(container.Provide(initLangfuse))")
+
+	if configIndex < 0 {
+		t.Fatal("config.LoadConfig provider registration is missing")
+	}
+	if maintenanceIndex < 0 {
+		t.Fatal("newMaintenanceProxy provider registration is missing")
+	}
+	if langfuseIndex < 0 {
+		t.Fatal("initLangfuse provider registration is missing")
+	}
+	if !(configIndex < maintenanceIndex && maintenanceIndex < langfuseIndex) {
+		t.Fatalf(
+			"provider order is invalid: config=%d maintenance=%d langfuse=%d",
+			configIndex,
+			maintenanceIndex,
+			langfuseIndex,
+		)
 	}
 }
