@@ -8,6 +8,11 @@ _TEST_DB = Path(_TEST_DIR.name) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
 os.environ["APP_VERSION"] = "0.2.0"
 os.environ["DATABASE_ECHO"] = "false"
+os.environ["INTERNAL_JWT_SECRET"] = "unit-five-internal-jwt-secret-0001"
+os.environ["INTERNAL_JWT_ISSUER"] = "weknora"
+os.environ["INTERNAL_JWT_AUDIENCE"] = "maintenance-api"
+os.environ["INTERNAL_JWT_MAX_LIFETIME_SECONDS"] = "180"
+os.environ["INTERNAL_JWT_CLOCK_SKEW_SECONDS"] = "5"
 
 import app.models  # noqa: F401
 import pytest
