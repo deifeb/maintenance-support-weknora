@@ -147,7 +147,7 @@ class InternalTokenError(ValueError):
 
 class InternalTokenVerifier:
     def verify(self, token: str) -> ActorContext:
-        ...
+        """Verify the internal token and return a trusted actor."""
 ```
 
 The verifier constructor accepts:
@@ -286,8 +286,10 @@ Expected example payload:
 6. verify issuer against the configured issuer;
 7. verify audience against the configured audience;
 8. require `aud` to be a JSON array containing exactly one string equal to the configured audience;
-9. verify expiration with the configured clock skew;
-10. reject an issued-at time later than `now + clock_skew`.
+9. disable PyJWT's wall-clock `exp` and `iat` decisions while retaining required-claim, signature, issuer, and audience verification;
+10. validate `iat` and `exp` manually against the injected UTC clock and configured skew.
+
+Manual time validation is required because the verifier must use a deterministic injected clock and must reject bool, float, and string numeric dates before applying time arithmetic.
 
 ### 8.3 Strict types
 
@@ -308,7 +310,7 @@ No implicit type coercion is permitted.
 - contain no Unicode control characters;
 - contain at most 128 UTF-8 bytes.
 
-The verifier returns the trimmed form in `ActorContext` only when the original value contains no leading or trailing whitespace. Tokens with surrounding whitespace are rejected rather than silently normalized.
+The verifier returns the original string in `ActorContext` only when the value equals its trimmed form. Tokens with surrounding whitespace are rejected rather than silently normalized.
 
 Issuer and audience are compared to their already validated configured values. They are not projected into `ActorContext`.
 
@@ -333,42 +335,50 @@ admin
 
 Unknown values, mixed case, blanks, duplicate arrays, and multi-role arrays are rejected.
 
-### 8.7 Lifetime
+### 8.7 Lifetime and clock skew
 
-After PyJWT cryptographic and registered-claim verification:
+Let `now` be `int(clock().timestamp())`, where the injected clock returns an aware UTC datetime.
+
+The verifier requires:
 
 ```text
 exp > iat
 exp - iat <= configured maximum lifetime
+iat <= now + configured clock skew
+exp > now - configured clock skew
 ```
 
 The configured maximum is at most 180 seconds.
 
 Clock skew affects current-time comparisons only. It does not enlarge the allowed token lifetime.
 
+With the default five-second skew:
+
 Accepted boundaries:
 
-- `iat == now + 5` with five-second skew;
-- `exp == now - 5` with five-second skew, subject to PyJWT boundary behavior captured by tests;
-- `exp - iat == 180` with maximum lifetime 180.
+- `iat == now + 5`;
+- `exp == now - 4`;
+- `exp - iat == 180` when the configured maximum is 180.
 
 Rejected boundaries:
 
 - `iat > now + 5`;
+- `exp == now - 5` or any earlier expiration;
 - `exp <= iat`;
-- `exp - iat > 180`;
-- expiration beyond the configured skew allowance.
+- `exp - iat > 180`.
+
+This strict boundary makes a token valid for less than five full seconds after its expiration instant, never five seconds or more.
 
 ### 8.8 Actor construction
 
 A valid payload is projected to:
 
 ```text
-user_id   <- sub
-tenant_id <- tenant_id
-role      <- MaintenanceRole(roles[0])
+user_id    <- sub
+tenant_id   <- tenant_id
+role        <- MaintenanceRole(roles[0])
 request_id <- request_id
-token_id  <- jti
+token_id    <- jti
 ```
 
 Only verified values reach the actor.
@@ -400,7 +410,7 @@ Add:
 
 ```python
 class InternalAuthenticationError(AppException):
-    ...
+    """Stable 401 for every internal authentication failure."""
 ```
 
 It has the fixed contract:
@@ -507,8 +517,8 @@ Cover:
 - actor assignment raises `FrozenInstanceError`;
 - arbitrary attribute insertion fails because slots are enabled;
 - exact 180-second lifetime is accepted;
-- future `iat` at the allowed skew boundary is accepted;
-- recently expired token within the skew boundary is accepted according to the selected PyJWT boundary semantics.
+- `iat == now + skew` is accepted;
+- `exp == now - skew + 1` is accepted.
 
 ### 11.3 Cryptographic and registered-claim rejection tests
 
@@ -523,7 +533,7 @@ Cover:
 - wrong issuer;
 - wrong audience;
 - missing each required claim individually;
-- expired beyond skew;
+- `exp == now - skew` and earlier expiration;
 - future `iat` beyond skew;
 - `exp <= iat`;
 - lifetime above the configured maximum.
@@ -616,6 +626,7 @@ Before completion, review the implementation for:
 - accidental acceptance of multiple algorithms;
 - Python bool-to-int confusion for numeric dates;
 - PyJWT audience shape permissiveness bypassing the array contract;
+- PyJWT wall-clock validation bypassing the injected test clock;
 - time skew accidentally added to maximum lifetime;
 - normalization that silently accepts surrounding whitespace;
 - raw exception details escaping through `AppException`;
