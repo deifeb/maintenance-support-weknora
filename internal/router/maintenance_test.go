@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -136,5 +138,55 @@ func TestRegisterMaintenanceRoutesDelegatesMethodAuthorityToProxy(t *testing.T) 
 	}
 	if !strings.Contains(recorder.Body.String(), `"code":"MAINTENANCE_METHOD_NOT_ALLOWED"`) {
 		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestRouterParamsIncludesMaintenanceProxy(t *testing.T) {
+	field, ok := reflect.TypeOf(RouterParams{}).FieldByName("MaintenanceProxy")
+	if !ok {
+		t.Fatal("RouterParams.MaintenanceProxy is missing")
+	}
+
+	wantType := reflect.TypeOf((*maintenanceproxy.Proxy)(nil))
+	if field.Type != wantType {
+		t.Fatalf("RouterParams.MaintenanceProxy type = %v, want %v", field.Type, wantType)
+	}
+}
+
+func TestNewRouterRegistersMaintenanceInAuthenticatedOrder(t *testing.T) {
+	sourceBytes, err := os.ReadFile("router.go")
+	if err != nil {
+		t.Fatalf("read router.go: %v", err)
+	}
+	source := string(sourceBytes)
+
+	markers := []struct {
+		name string
+		text string
+	}{
+		{name: "authentication middleware", text: "r.Use(middleware.Auth("},
+		{name: "authenticated file routes", text: "serveFilesWithResources("},
+		{name: "Langfuse middleware", text: "r.Use(langfuse.GinMiddleware())"},
+		{name: "audit middleware", text: "r.Use(middleware.AuditServiceProvider(params.AuditLogService))"},
+		{name: "Maintenance route registration", text: "RegisterMaintenanceRoutes(r, params.MaintenanceProxy)"},
+		{name: "API v1 group", text: `v1 := r.Group("/api/v1")`},
+	}
+
+	previousIndex := -1
+	previousName := ""
+	for _, marker := range markers {
+		index := strings.Index(source, marker.text)
+		if index < 0 {
+			t.Fatalf("%s is missing from NewRouter", marker.name)
+		}
+		if index <= previousIndex {
+			t.Fatalf("%s must appear after %s", marker.name, previousName)
+		}
+		previousIndex = index
+		previousName = marker.name
+	}
+
+	if strings.Contains(source, `"/api/v1/maintenance`) {
+		t.Fatal("Maintenance route must not be registered under /api/v1")
 	}
 }
