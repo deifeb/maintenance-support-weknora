@@ -53,11 +53,11 @@ func newActorTestContextFromValues(values map[types.ContextKey]any) *gin.Context
 
 func validActorContextValues() map[types.ContextKey]any {
 	return map[types.ContextKey]any{
-		types.RequestIDContextKey:    "req-valid",
-		types.PrincipalContextKey:    types.Principal{Type: types.PrincipalWebUser, ID: "user-1"},
-		types.UserIDContextKey:       "user-1",
-		types.TenantIDContextKey:     uint64(12),
-		types.TenantRoleContextKey:   types.TenantRoleContributor,
+		types.RequestIDContextKey:   "req-valid",
+		types.PrincipalContextKey:   types.Principal{Type: types.PrincipalWebUser, ID: "user-1"},
+		types.UserIDContextKey:      "user-1",
+		types.TenantIDContextKey:    uint64(12),
+		types.TenantRoleContextKey:  types.TenantRoleContributor,
 		types.SystemAdminContextKey: false,
 	}
 }
@@ -166,7 +166,7 @@ func TestResolveWebActorRejectsIncompleteIdentity(t *testing.T) {
 	if !errors.Is(err, errMaintenanceActorUnavailable) {
 		t.Fatalf("nil context error = %v, want errMaintenanceActorUnavailable", err)
 	}
-	if actor != (Actor{}) {
+	if !reflect.DeepEqual(actor, Actor{}) {
 		t.Fatalf("nil context actor = %#v, want empty Actor", actor)
 	}
 
@@ -176,7 +176,7 @@ func TestResolveWebActorRejectsIncompleteIdentity(t *testing.T) {
 	if !errors.Is(err, errMaintenanceActorUnavailable) {
 		t.Fatalf("nil request error = %v, want errMaintenanceActorUnavailable", err)
 	}
-	if actor != (Actor{}) {
+	if !reflect.DeepEqual(actor, Actor{}) {
 		t.Fatalf("nil request actor = %#v, want empty Actor", actor)
 	}
 
