@@ -28,6 +28,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/container"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/router"
 	"github.com/Tencent/WeKnora/internal/runtime"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/joho/godotenv"
@@ -189,10 +190,10 @@ func main() {
 	go func() {
 		err := c.Invoke(func(
 			cfg *config.Config,
-			router *gin.Engine,
+			applicationHandler *router.ApplicationHandler,
 			resourceCleaner interfaces.ResourceCleaner,
 		) error {
-			server := &http.Server{Handler: router}
+			server := &http.Server{Handler: applicationHandler}
 
 			runtime.LogGinRouteCount(context.Background())
 
