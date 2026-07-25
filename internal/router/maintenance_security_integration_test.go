@@ -235,7 +235,7 @@ func TestMaintenanceOptionsDistinguishesCORSPreflightFromOrdinaryRequest(t *test
 
 	preflightRecorder := httptest.NewRecorder()
 	preflight := httptest.NewRequest(http.MethodOptions, "/api/maintenance/jobs", nil)
-	preflight.Header.Set("Origin", "https://example.com")
+	preflight.Header.Set("Origin", "https://frontend.example.test")
 	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
 	preflight.Header.Set("Access-Control-Request-Headers", "Authorization")
 	engine.ServeHTTP(preflightRecorder, preflight)
