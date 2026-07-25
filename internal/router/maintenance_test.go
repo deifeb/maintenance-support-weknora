@@ -95,3 +95,46 @@ func TestRegisterMaintenanceRoutesForwardsPathAndQuery(t *testing.T) {
 		t.Fatalf("upstream URI = %q, want /api/jobs?page=2", uri)
 	}
 }
+
+func TestRegisterMaintenanceRoutesDelegatesMethodAuthorityToProxy(t *testing.T) {
+	engine := gin.New()
+	RegisterMaintenanceRoutes(engine, newRouterTestProxy(t, "http://127.0.0.1:8100"))
+
+	methods := make(map[string]bool)
+	for _, route := range engine.Routes() {
+		if route.Path == "/api/maintenance/*path" {
+			methods[route.Method] = true
+		}
+	}
+
+	for _, method := range []string{
+		http.MethodGet,
+		http.MethodHead,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+		http.MethodConnect,
+		http.MethodTrace,
+	} {
+		if !methods[method] {
+			t.Errorf("route method %s is not registered", method)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	writer := &routerTestResponseWriter{ResponseRecorder: recorder}
+	request := httptest.NewRequest(http.MethodConnect, "/api/maintenance/jobs", nil)
+	engine.ServeHTTP(writer, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405; body=%s", recorder.Code, recorder.Body.String())
+	}
+	if allow := recorder.Header().Get("Allow"); allow != "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS" {
+		t.Fatalf("Allow = %q", allow)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"MAINTENANCE_METHOD_NOT_ALLOWED"`) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
