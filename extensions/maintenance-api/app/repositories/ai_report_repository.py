@@ -68,6 +68,37 @@ def _require_owned(
 
 
 class AIReportRepository:
+    def require_create_sources_owned(
+        self,
+        session: Session,
+        tenant_id: str,
+        *,
+        session_id: int | None = None,
+        scenario_version_id: int | None = None,
+        calculation_run_id: int | None = None,
+        review_run_id: int | None = None,
+    ) -> None:
+        linked_sources = (
+            (AISession, session_id),
+            (
+                DemandScenarioVersion,
+                scenario_version_id,
+            ),
+            (
+                DemandCalculationRun,
+                calculation_run_id,
+            ),
+            (AIReviewRun, review_run_id),
+        )
+        for model, identifier in linked_sources:
+            if identifier is not None:
+                _require_owned(
+                    session,
+                    tenant_id,
+                    model,
+                    identifier,
+                )
+
     def create_job(
         self,
         session: Session,

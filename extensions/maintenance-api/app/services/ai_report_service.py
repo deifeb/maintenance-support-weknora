@@ -150,13 +150,33 @@ class AIReportService:
         actor: ActorContext,
         payload: AIReportCreateRequest,
     ) -> AIReportJob:
-        job = self.repository.create_job(
-            session,
-            actor.tenant_id,
-            title=payload.title,
-            report_type=payload.report_type,
-            session_id=payload.session_id,
-        )
+        try:
+            self.repository.require_create_sources_owned(
+                session,
+                actor.tenant_id,
+                session_id=payload.session_id,
+                scenario_version_id=(
+                    payload.scenario_version_id
+                ),
+                calculation_run_id=(
+                    payload.calculation_run_id
+                ),
+                review_run_id=(
+                    payload.review_run_id
+                ),
+            )
+            job = self.repository.create_job(
+                session,
+                actor.tenant_id,
+                title=payload.title,
+                report_type=payload.report_type,
+                session_id=payload.session_id,
+            )
+        except LookupError as exc:
+            raise NotFoundError(
+                "ai_report_source",
+                "linked",
+            ) from exc
         metadata = dict(payload.metadata)
         metadata["_draft_sections"] = [
             row.model_dump(mode="json")
