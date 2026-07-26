@@ -85,6 +85,28 @@ class AIConfirmationService:
         session.refresh(row)
         return row, token
 
+    def latest_pending(
+        self,
+        session: Session,
+        actor: ActorContext,
+        session_id: int,
+    ):
+        try:
+            rows = (
+                self.repository
+                .list_pending_confirmations(
+                    session,
+                    actor.tenant_id,
+                    session_id,
+                )
+            )
+        except LookupError as exc:
+            raise NotFoundError(
+                "ai_session",
+                session_id,
+            ) from exc
+        return rows[-1] if rows else None
+
     def approve(
         self,
         session: Session,

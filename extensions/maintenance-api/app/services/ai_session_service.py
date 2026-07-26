@@ -1,14 +1,38 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
+from app.models import (
+    AIConfirmationRequest,
+    AISession,
+)
+from app.models.enums import AISessionStatus
 from app.repositories import DemandScenarioVersionRepository
 from app.repositories.ai_session_repository import (
     AISessionRepository,
     ai_session_repository,
 )
-from app.security.actor import ActorContext
+from app.security.actor import (
+    ActorContext,
+    MaintenanceRole,
+)
+from app.security.permissions import require_role
+from app.services.ai_confirmation_service import (
+    AIConfirmationService,
+    ai_confirmation_service,
+)
+
+
+@dataclass(slots=True)
+class AISessionCancelResult:
+    session: AISession
+    confirmation: (
+        AIConfirmationRequest | None
+    ) = None
+    confirmation_token: str | None = None
 
 
 class AISessionService:
@@ -19,11 +43,21 @@ class AISessionService:
         scenario_repository: (
             DemandScenarioVersionRepository | None
         ) = None,
+        confirmation_service: (
+            AIConfirmationService | None
+        ) = None,
     ) -> None:
-        self.repository = repository or ai_session_repository
+        self.repository = (
+            repository
+            or ai_session_repository
+        )
         self.scenario_repository = (
             scenario_repository
             or DemandScenarioVersionRepository()
+        )
+        self.confirmation_service = (
+            confirmation_service
+            or ai_confirmation_service
         )
 
     def create(
@@ -78,6 +112,103 @@ class AISessionService:
                 session_id,
             )
         return row
+
+    def latest_snapshot(
+        self,
+        session: Session,
+        actor: ActorContext,
+        session_id: int,
+    ):
+        self.get(
+            session,
+            actor,
+            session_id,
+        )
+        try:
+            return self.repository.latest_snapshot(
+                session,
+                actor.tenant_id,
+                session_id,
+            )
+        except LookupError as exc:
+            raise NotFoundError(
+                "ai_session",
+                session_id,
+            ) from exc
+
+    def cancel(
+        self,
+        session: Session,
+        actor: ActorContext,
+        session_id: int,
+    ) -> AISessionCancelResult:
+        row = self.get(
+            session,
+            actor,
+            session_id,
+        )
+        has_active_task = (
+            row.active_calculation_id
+            is not None
+            or row.active_report_job_id
+            is not None
+        )
+
+        if has_active_task:
+            require_role(
+                actor,
+                MaintenanceRole.ADMIN,
+            )
+            confirmation, token = (
+                self.confirmation_service
+                .create(
+                    session,
+                    actor,
+                    session_id=session_id,
+                    operation_name=(
+                        "cancel_active_ai_task"
+                    ),
+                    confirmation_level=(
+                        "SECONDARY"
+                    ),
+                    input_payload={
+                        "active_calculation_id": (
+                            row
+                            .active_calculation_id
+                        ),
+                        "active_report_job_id": (
+                            row
+                            .active_report_job_id
+                        ),
+                    },
+                    risk_level="HIGH",
+                )
+            )
+            row.status = (
+                AISessionStatus
+                .CONFIRMATION_REQUIRED
+            )
+            session.commit()
+            session.refresh(row)
+            return AISessionCancelResult(
+                session=row,
+                confirmation=confirmation,
+                confirmation_token=token,
+            )
+
+        row.status = AISessionStatus.CANCELLED
+        session.commit()
+        session.refresh(row)
+        self.append_event(
+            session,
+            actor,
+            session_id,
+            "CANCELLED",
+            {},
+        )
+        return AISessionCancelResult(
+            session=row
+        )
 
     def add_message(
         self,

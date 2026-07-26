@@ -1,6 +1,8 @@
 import os
 import tempfile
+import uuid
 from collections.abc import Callable, Generator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _TEST_DIR = tempfile.TemporaryDirectory(prefix="maintenance_master_data_tests_")
@@ -15,6 +17,7 @@ os.environ["INTERNAL_JWT_MAX_LIFETIME_SECONDS"] = "180"
 os.environ["INTERNAL_JWT_CLOCK_SKEW_SECONDS"] = "5"
 
 import app.models  # noqa: F401
+import jwt
 import pytest
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
@@ -73,6 +76,49 @@ def actor_context() -> Callable[..., ActorContext]:
             request_id=request_id,
             token_id=token_id,
         )
+
+    return build
+
+
+@pytest.fixture()
+def internal_auth_headers() -> Callable[..., dict[str, str]]:
+    def build(
+        *,
+        tenant_id: str = "tenant-a",
+        user_id: str = "user-a",
+        role: MaintenanceRole = MaintenanceRole.CONTRIBUTOR,
+        request_id: str | None = None,
+    ) -> dict[str, str]:
+        now = datetime.now(timezone.utc)
+        payload = {
+            "sub": user_id,
+            "tenant_id": tenant_id,
+            "roles": [role.value],
+            "aud": ["maintenance-api"],
+            "iss": "weknora",
+            "iat": int(now.timestamp()),
+            "exp": int(
+                (
+                    now
+                    + timedelta(seconds=180)
+                ).timestamp()
+            ),
+            "jti": str(uuid.uuid4()),
+            "request_id": (
+                request_id
+                or f"request-{uuid.uuid4()}"
+            ),
+        }
+        token = jwt.encode(
+            payload,
+            os.environ[
+                "INTERNAL_JWT_SECRET"
+            ],
+            algorithm="HS256",
+        )
+        return {
+            "Authorization": f"Bearer {token}"
+        }
 
     return build
 

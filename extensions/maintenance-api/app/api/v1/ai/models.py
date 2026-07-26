@@ -1,15 +1,31 @@
-from fastapi import APIRouter
-from maintenance_ai.enums import ModelCapability, SensitivityLevel
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
+from maintenance_ai.enums import (
+    ModelCapability,
+    SensitivityLevel,
+)
 from maintenance_ai.exceptions import (
     ProviderUnavailableError,
     SensitiveRemoteCallBlockedError,
 )
-from maintenance_ai.routing import ModelRegistry, ModelRouter
+from maintenance_ai.routing import (
+    ModelRegistry,
+    ModelRouter,
+)
 
 from app.core.config import get_settings
-from app.core.exceptions import BusinessValidationError
+from app.core.exceptions import (
+    BusinessValidationError,
+)
 from app.core.responses import success_response
-from app.services.ai_model_runtime import AIModelRuntime
+from app.security.actor import ActorContext
+from app.security.permissions import require_viewer
+from app.services.ai_model_runtime import (
+    AIModelRuntime,
+)
 
 router = APIRouter()
 
@@ -30,83 +46,179 @@ def _load_registry() -> ModelRegistry:
 
 
 @router.get("/providers/health")
-async def provider_health():
+async def provider_health(
+    actor: Annotated[
+        ActorContext,
+        Depends(require_viewer),
+    ],
+):
     runtime = AIModelRuntime.from_settings()
     runtime_results = await runtime.health()
     registry = runtime.router.registry
     results = []
-    for name, definition in registry.models.items():
+    for name, definition in (
+        registry.models.items()
+    ):
         health = runtime_results.get(name)
         if health is None:
             health = {
-                "provider": definition.provider.value,
+                "provider": (
+                    definition.provider.value
+                ),
                 "model": definition.model,
-                "status": "DISABLED" if not definition.enabled else "UNAVAILABLE",
-                "detail": "provider is not enabled or credentials are incomplete",
+                "status": (
+                    "DISABLED"
+                    if not definition.enabled
+                    else "UNAVAILABLE"
+                ),
+                "detail": (
+                    "provider is not enabled or "
+                    "credentials are incomplete"
+                ),
                 "latency_ms": 0,
             }
-        results.append({"name": name, **health})
-    results.append({"name": "RULE_FALLBACK", **runtime_results["RULE_FALLBACK"]})
-    return success_response(results)
+        results.append(
+            {"name": name, **health}
+        )
+    results.append(
+        {
+            "name": "RULE_FALLBACK",
+            **runtime_results[
+                "RULE_FALLBACK"
+            ],
+        }
+    )
+    return success_response(
+        results,
+        actor=actor,
+    )
 
 
 @router.get("/model-routes")
-def model_routes():
+def model_routes(
+    actor: Annotated[
+        ActorContext,
+        Depends(require_viewer),
+    ],
+):
     registry = _load_registry()
     return success_response(
         {
             name: {
                 "primary": route.primary,
-                "fallbacks": list(route.fallbacks),
+                "fallbacks": list(
+                    route.fallbacks
+                ),
                 "required_capabilities": sorted(
-                    capability.value for capability in route.required_capabilities
+                    capability.value
+                    for capability
+                    in route
+                    .required_capabilities
                 ),
             }
-            for name, route in registry.routes.items()
-        }
+            for name, route
+            in registry.routes.items()
+        },
+        actor=actor,
     )
 
 
 @router.post("/model-routes/preview")
-def model_route_preview(payload: dict):
+def model_route_preview(
+    payload: dict,
+    actor: Annotated[
+        ActorContext,
+        Depends(require_viewer),
+    ],
+):
     registry = _load_registry()
-    function_name = str(payload.get("function_name", "scenario_parsing"))
-    sensitivity = SensitivityLevel(str(payload.get("sensitivity_level", "INTERNAL")))
+    function_name = str(
+        payload.get(
+            "function_name",
+            "scenario_parsing",
+        )
+    )
+    sensitivity = SensitivityLevel(
+        str(
+            payload.get(
+                "sensitivity_level",
+                "INTERNAL",
+            )
+        )
+    )
     override = payload.get("model_override")
-    required = {ModelCapability(str(value)) for value in payload.get("required_capabilities", [])}
+    required = {
+        ModelCapability(str(value))
+        for value
+        in payload.get(
+            "required_capabilities",
+            [],
+        )
+    }
     try:
-        decision = ModelRouter(registry).route(
+        decision = ModelRouter(
+            registry
+        ).route(
             function_name,
             sensitivity,
             required or None,
-            override=str(override) if override else None,
+            override=(
+                str(override)
+                if override
+                else None
+            ),
         )
     except SensitiveRemoteCallBlockedError as exc:
         raise BusinessValidationError(
-            "sensitive data cannot be sent to the requested remote model",
-            code="SENSITIVE_REMOTE_CALL_BLOCKED",
-            details={"model_override": override},
+            (
+                "sensitive data cannot be sent "
+                "to the requested remote model"
+            ),
+            code=(
+                "SENSITIVE_REMOTE_CALL_BLOCKED"
+            ),
+            details={
+                "model_override": override
+            },
         ) from exc
     except ProviderUnavailableError as exc:
         raise BusinessValidationError(
-            "no eligible model is available for this request",
+            (
+                "no eligible model is "
+                "available for this request"
+            ),
             code="PROVIDER_UNAVAILABLE",
             details={"reason": str(exc)},
         ) from exc
 
-    selected_definition = registry.models.get(decision.selected)
+    selected_definition = (
+        registry.models.get(
+            decision.selected
+        )
+    )
     return success_response(
         {
             "function_name": function_name,
-            "sensitivity_level": sensitivity.value,
+            "sensitivity_level": (
+                sensitivity.value
+            ),
             "selected": decision.selected,
             "provider": (
                 "RULE_FALLBACK"
                 if selected_definition is None
-                else selected_definition.provider.value
+                else (
+                    selected_definition
+                    .provider
+                    .value
+                )
             ),
-            "candidates": list(decision.candidates),
-            "filtered": list(decision.filtered),
+            "candidates": list(
+                decision.candidates
+            ),
+            "filtered": list(
+                decision.filtered
+            ),
             "reason": decision.reason,
-        }
+        },
+        actor=actor,
     )

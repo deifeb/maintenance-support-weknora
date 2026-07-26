@@ -12,7 +12,37 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import BusinessValidationError
 from app.models.enums import AIConfirmationLevel
-from app.security.actor import ActorContext
+from app.security.actor import (
+    ActorContext,
+    MaintenanceRole,
+)
+
+_CONTRIBUTOR_TOOL_PERMISSIONS = frozenset(
+    {
+        "SCENARIO_DRAFT",
+        "CALCULATION_EXECUTE",
+        "CALCULATION_CANCEL",
+        "REPORT_CREATE",
+        "REVIEW_EXECUTE",
+    }
+)
+
+_ROLE_TOOL_PERMISSIONS = {
+    MaintenanceRole.VIEWER: frozenset(),
+    MaintenanceRole.CONTRIBUTOR: (
+        _CONTRIBUTOR_TOOL_PERMISSIONS
+    ),
+    MaintenanceRole.ADMIN: (
+        _CONTRIBUTOR_TOOL_PERMISSIONS
+        | frozenset({"SCENARIO_PUBLISH"})
+    ),
+}
+
+
+def permissions_for_actor(
+    actor: ActorContext,
+) -> frozenset[str]:
+    return _ROLE_TOOL_PERMISSIONS[actor.role]
 
 
 class FlexiblePayload(BaseModel):

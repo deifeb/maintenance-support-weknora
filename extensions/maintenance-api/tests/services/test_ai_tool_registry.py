@@ -5,12 +5,16 @@ from collections.abc import Callable
 import pytest
 from app.core.exceptions import BusinessValidationError
 from app.models.enums import AIConfirmationLevel
-from app.security.actor import ActorContext
+from app.security.actor import (
+    ActorContext,
+    MaintenanceRole,
+)
 from app.services.ai_tool_registry import (
     ToolDefinition,
     ToolExecutionContext,
     ToolRegistry,
     build_default_tool_registry,
+    permissions_for_actor,
 )
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -164,4 +168,51 @@ def test_tool_context_derives_identity_from_actor(
     assert (
         "tenant_id"
         not in ToolExecutionContext.model_fields
+    )
+
+
+def test_tool_permissions_are_derived_from_actor_role(
+    actor_context: Callable[
+        ...,
+        ActorContext,
+    ],
+) -> None:
+    viewer = actor_context(
+        role=MaintenanceRole.VIEWER
+    )
+    contributor = actor_context(
+        role=MaintenanceRole.CONTRIBUTOR
+    )
+    admin = actor_context(
+        role=MaintenanceRole.ADMIN
+    )
+
+    assert (
+        permissions_for_actor(viewer)
+        == frozenset()
+    )
+    assert (
+        permissions_for_actor(
+            contributor
+        )
+        == frozenset(
+            {
+                "SCENARIO_DRAFT",
+                "CALCULATION_EXECUTE",
+                "CALCULATION_CANCEL",
+                "REPORT_CREATE",
+                "REVIEW_EXECUTE",
+            }
+        )
+    )
+    assert (
+        permissions_for_actor(admin)
+        == (
+            permissions_for_actor(
+                contributor
+            )
+            | frozenset(
+                {"SCENARIO_PUBLISH"}
+            )
+        )
     )
