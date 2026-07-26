@@ -1,10 +1,23 @@
+from datetime import datetime, timezone
+
 import pytest
+from app.core.exceptions import NotFoundError
+from app.models import (
+    DemandCalculation,
+    DemandCalculationRun,
+)
+from app.models.enums import (
+    CalculationExecutionType,
+    CalculationStatus,
+    DemandExecutionMode,
+)
 from app.services.ai_review_engine import (
     ReviewContext,
     ReviewFindingDraft,
 )
 from app.services.ai_review_service import (
     AIReviewService,
+    load_review_context,
 )
 
 
@@ -98,3 +111,55 @@ async def test_review_service_preserves_rule_severity(
         finding.blocking_level.value
         == "BLOCK_REPORT_FINALIZATION"
     )
+
+def test_review_context_rejects_foreign_calculation_run(
+    session,
+    actor_context,
+) -> None:
+    owner = actor_context(
+        tenant_id="tenant-calculation-owner",
+        user_id="calculation-owner",
+    )
+    foreign = actor_context(
+        tenant_id="tenant-calculation-foreign",
+        user_id="foreign-reviewer",
+    )
+    now = datetime.now(timezone.utc)
+    calculation = DemandCalculation(
+        tenant_id=owner.tenant_id,
+        calculation_code="CAL-075C-FOREIGN",
+        calculation_name="Task 7.5C foreign calculation",
+        execution_type=(
+            CalculationExecutionType.SYNCHRONOUS
+        ),
+        requested_mode=(
+            DemandExecutionMode.ANALYTICAL
+        ),
+        status=CalculationStatus.SUCCEEDED,
+        input_snapshot_json={
+            "scenario_version_id": None
+        },
+        input_snapshot_hash="7" * 64,
+        inventory_snapshot_at=now,
+        submitted_at=now,
+    )
+    session.add(calculation)
+    session.flush()
+    run = DemandCalculationRun(
+        tenant_id=owner.tenant_id,
+        calculation_id=calculation.id,
+        run_mode=DemandExecutionMode.ANALYTICAL,
+        status=CalculationStatus.SUCCEEDED,
+        attempt_number=1,
+        engine_version="test-engine",
+        formula_version="test-formula",
+    )
+    session.add(run)
+    session.commit()
+
+    with pytest.raises(NotFoundError):
+        load_review_context(
+            session,
+            foreign,
+            run.id,
+        )
