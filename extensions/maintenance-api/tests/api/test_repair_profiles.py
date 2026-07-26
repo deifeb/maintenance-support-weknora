@@ -1,7 +1,7 @@
 from app.models import SparePart
 
 
-def test_repair_profile_crud(client, session):
+def test_repair_profile_crud(authenticated_client, session):
     spare = SparePart(
         code="SP-RP",
         name="可修件",
@@ -21,13 +21,13 @@ def test_repair_profile_crud(client, session):
         "repair_turnaround_hours": "72",
         "data_source_type": "MAINTENANCE_RECORD",
     }
-    created = client.post("/api/v1/demand/repair-profiles", json=payload)
+    created = authenticated_client.post("/api/v1/demand/repair-profiles", json=payload)
     assert created.status_code == 201, created.text
     identifier = created.json()["data"]["id"]
-    listed = client.get("/api/v1/demand/repair-profiles")
+    listed = authenticated_client.get("/api/v1/demand/repair-profiles")
     assert listed.status_code == 200
     assert listed.json()["data"]["total"] == 1
-    updated = client.put(
+    updated = authenticated_client.put(
         f"/api/v1/demand/repair-profiles/{identifier}", json={"repair_turnaround_hours": "48"}
     )
     assert updated.status_code == 200

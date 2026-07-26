@@ -22,6 +22,7 @@ import pytest
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.security.actor import ActorContext, MaintenanceRole
+from app.security.dependencies import get_actor
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -57,6 +58,25 @@ def client() -> Generator[TestClient, None, None]:
 
     with TestClient(create_app()) as test_client:
         yield test_client
+
+
+@pytest.fixture()
+def authenticated_client(
+    actor_contributor: ActorContext,
+) -> Generator[TestClient, None, None]:
+    from app.main import create_app
+
+    app = create_app()
+
+    def override_actor() -> ActorContext:
+        return actor_contributor
+
+    app.dependency_overrides[get_actor] = override_actor
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture()

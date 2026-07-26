@@ -3,7 +3,7 @@ import time
 from app.models import SparePart
 
 
-def test_async_calculation_completes(client, session):
+def test_async_calculation_completes(authenticated_client, session):
     spare = SparePart(
         code="SP-ASYNC",
         name="异步器材",
@@ -52,7 +52,7 @@ def test_async_calculation_completes(client, session):
             },
         },
     }
-    created = client.post("/api/v1/demand/calculations", json=payload)
+    created = authenticated_client.post("/api/v1/demand/calculations", json=payload)
     assert created.status_code == 200, created.text
     calculation_id = created.json()["data"]["id"]
     status = created.json()["data"]["status"]
@@ -60,7 +60,7 @@ def test_async_calculation_completes(client, session):
         if status in {"SUCCEEDED", "PARTIAL_SUCCESS", "FAILED"}:
             break
         time.sleep(0.05)
-        status = client.get(f"/api/v1/demand/calculations/{calculation_id}/status").json()["data"][
+        status = authenticated_client.get(f"/api/v1/demand/calculations/{calculation_id}/status").json()["data"][
             "status"
         ]
     assert status in {"SUCCEEDED", "PARTIAL_SUCCESS"}

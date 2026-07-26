@@ -60,14 +60,14 @@ def _payload(spare_id):
     }
 
 
-def test_sync_calculation_persists_results(client, session):
+def test_sync_calculation_persists_results(authenticated_client, session):
     spare = _create_spare(session)
-    response = client.post("/api/v1/demand/calculations", json=_payload(spare.id))
+    response = authenticated_client.post("/api/v1/demand/calculations", json=_payload(spare.id))
     assert response.status_code == 200, response.text
     body = response.json()["data"]
     assert body["status"] == "SUCCEEDED"
 
-    result = client.get(f"/api/v1/demand/calculations/{body['id']}/results/items")
+    result = authenticated_client.get(f"/api/v1/demand/calculations/{body['id']}/results/items")
     assert result.status_code == 200
     items = result.json()["data"]
     assert len(items) == 1
@@ -75,21 +75,21 @@ def test_sync_calculation_persists_results(client, session):
     assert float(items[0]["net_demand_gap"]) >= 0
 
 
-def test_idempotency_key_returns_same_calculation(client, session):
+def test_idempotency_key_returns_same_calculation(authenticated_client, session):
     spare = _create_spare(session)
     headers = {"Idempotency-Key": "same-request"}
-    first = client.post("/api/v1/demand/calculations", json=_payload(spare.id), headers=headers)
-    second = client.post("/api/v1/demand/calculations", json=_payload(spare.id), headers=headers)
+    first = authenticated_client.post("/api/v1/demand/calculations", json=_payload(spare.id), headers=headers)
+    second = authenticated_client.post("/api/v1/demand/calculations", json=_payload(spare.id), headers=headers)
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["data"]["id"] == second.json()["data"]["id"]
 
 
-def test_json_and_excel_exports(client, session):
+def test_json_and_excel_exports(authenticated_client, session):
     spare = _create_spare(session)
-    created = client.post("/api/v1/demand/calculations", json=_payload(spare.id)).json()["data"]
-    json_export = client.get(f"/api/v1/demand/calculations/{created['id']}/export?format=json")
-    excel_export = client.get(f"/api/v1/demand/calculations/{created['id']}/export?format=xlsx")
+    created = authenticated_client.post("/api/v1/demand/calculations", json=_payload(spare.id)).json()["data"]
+    json_export = authenticated_client.get(f"/api/v1/demand/calculations/{created['id']}/export?format=json")
+    excel_export = authenticated_client.get(f"/api/v1/demand/calculations/{created['id']}/export?format=xlsx")
     assert json_export.status_code == 200
     assert json_export.headers["content-type"].startswith("application/json")
     assert excel_export.status_code == 200
