@@ -14,6 +14,8 @@ from app.schemas.reliability import (
     ReliabilityProfileRead,
     ReliabilityProfileUpdate,
 )
+from app.security.actor import ActorContext
+from app.security.permissions import require_contributor, require_viewer
 from app.services import reliability_service
 
 router = APIRouter(prefix="/reliability-profiles", tags=["master-data: reliability"])
@@ -23,8 +25,12 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 @router.post(
     "", response_model=SuccessResponse[ReliabilityProfileRead], status_code=status.HTTP_201_CREATED
 )
-def create_profile(payload: ReliabilityProfileCreate, session: SessionDep):
-    item = reliability_service.create_profile(session, payload)
+def create_profile(
+    payload: ReliabilityProfileCreate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = reliability_service.create_profile(session, actor, payload)
     return success_response(
         ReliabilityProfileRead.model_validate(item), "Reliability profile created"
     )
@@ -33,6 +39,7 @@ def create_profile(payload: ReliabilityProfileCreate, session: SessionDep):
 @router.get("", response_model=SuccessResponse[PageData[ReliabilityProfileRead]])
 def list_profiles(
     session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
     params: Annotated[dict, Depends(list_params)],
     spare_part_id: int | None = Query(default=None),
     configuration_version_id: int | None = Query(default=None),
@@ -44,40 +51,58 @@ def list_profiles(
         "model_type": model_type,
     }
     return success_response(
-        reliability_service.list(session, **params, filters=filters), "Query completed"
+        reliability_service.list(session, actor, **params, filters=filters), "Query completed"
     )
 
 
 @router.get("/{identifier}", response_model=SuccessResponse[ReliabilityProfileRead])
-def get_profile(identifier: int, session: SessionDep):
+def get_profile(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
+):
     return success_response(
-        ReliabilityProfileRead.model_validate(reliability_service.get(session, identifier))
+        ReliabilityProfileRead.model_validate(reliability_service.get(session, actor, identifier))
     )
 
 
 @router.put("/{identifier}", response_model=SuccessResponse[ReliabilityProfileRead])
-def update_profile(identifier: int, payload: ReliabilityProfileUpdate, session: SessionDep):
+def update_profile(
+    identifier: int,
+    payload: ReliabilityProfileUpdate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
     return success_response(
         ReliabilityProfileRead.model_validate(
-            reliability_service.update_profile(session, identifier, payload)
+            reliability_service.update_profile(session, actor, identifier, payload)
         ),
         "Reliability profile updated",
     )
 
 
 @router.patch("/{identifier}/active", response_model=SuccessResponse[ReliabilityProfileRead])
-def set_profile_active(identifier: int, payload: ActivePatch, session: SessionDep):
+def set_profile_active(
+    identifier: int,
+    payload: ActivePatch,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
     return success_response(
         ReliabilityProfileRead.model_validate(
-            reliability_service.set_active(session, identifier, payload.is_active)
+            reliability_service.set_active(session, actor, identifier, payload.is_active)
         ),
         "Reliability profile status updated",
     )
 
 
 @router.delete("/{identifier}", response_model=SuccessResponse[DeleteResult])
-def delete_profile(identifier: int, session: SessionDep):
-    reliability_service.delete(session, identifier)
+def delete_profile(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    reliability_service.delete(session, actor, identifier)
     return success_response(
         DeleteResult(deleted=True, resource="reliability_profile", identifier=identifier)
     )

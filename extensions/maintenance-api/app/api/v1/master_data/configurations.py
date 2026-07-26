@@ -19,6 +19,8 @@ from app.schemas.equipment import (
     ConfigurationVersionRead,
     ConfigurationVersionUpdate,
 )
+from app.security.actor import ActorContext
+from app.security.permissions import require_contributor, require_viewer
 from app.services import configuration_service
 
 router = APIRouter(tags=["master-data: configurations"])
@@ -30,8 +32,12 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
     response_model=SuccessResponse[ConfigurationVersionRead],
     status_code=status.HTTP_201_CREATED,
 )
-def create_version(payload: ConfigurationVersionCreate, session: SessionDep):
-    item = configuration_service.create_version(session, payload)
+def create_version(
+    payload: ConfigurationVersionCreate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.create_version(session, actor, payload)
     return success_response(
         ConfigurationVersionRead.model_validate(item), "Configuration version created"
     )
@@ -43,6 +49,7 @@ def create_version(payload: ConfigurationVersionCreate, session: SessionDep):
 )
 def list_versions(
     session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
     params: Annotated[dict, Depends(list_params)],
     equipment_model_id: int | None = Query(default=None),
     status_filter: ConfigurationStatus | None = Query(default=None, alias="status"),
@@ -52,7 +59,7 @@ def list_versions(
         "status": status_filter,
     }
     return success_response(
-        configuration_service.list(session, **params, filters=filters),
+        configuration_service.list(session, actor, **params, filters=filters),
         "Query completed",
     )
 
@@ -61,9 +68,15 @@ def list_versions(
     "/configuration-versions/{identifier}",
     response_model=SuccessResponse[ConfigurationVersionRead],
 )
-def get_version(identifier: int, session: SessionDep):
+def get_version(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
+):
     return success_response(
-        ConfigurationVersionRead.model_validate(configuration_service.get(session, identifier))
+        ConfigurationVersionRead.model_validate(
+            configuration_service.get(session, actor, identifier)
+        )
     )
 
 
@@ -71,8 +84,13 @@ def get_version(identifier: int, session: SessionDep):
     "/configuration-versions/{identifier}",
     response_model=SuccessResponse[ConfigurationVersionRead],
 )
-def update_version(identifier: int, payload: ConfigurationVersionUpdate, session: SessionDep):
-    item = configuration_service.update_version(session, identifier, payload)
+def update_version(
+    identifier: int,
+    payload: ConfigurationVersionUpdate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.update_version(session, actor, identifier, payload)
     return success_response(
         ConfigurationVersionRead.model_validate(item), "Configuration version updated"
     )
@@ -82,8 +100,12 @@ def update_version(identifier: int, payload: ConfigurationVersionUpdate, session
     "/configuration-versions/{identifier}",
     response_model=SuccessResponse[DeleteResult],
 )
-def delete_version(identifier: int, session: SessionDep):
-    configuration_service.delete(session, identifier)
+def delete_version(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    configuration_service.delete(session, actor, identifier)
     return success_response(
         DeleteResult(deleted=True, resource="configuration_version", identifier=identifier)
     )
@@ -93,8 +115,12 @@ def delete_version(identifier: int, session: SessionDep):
     "/configuration-versions/{identifier}/publish",
     response_model=SuccessResponse[ConfigurationVersionRead],
 )
-def publish_version(identifier: int, session: SessionDep):
-    item = configuration_service.publish(session, identifier)
+def publish_version(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.publish(session, actor, identifier)
     return success_response(
         ConfigurationVersionRead.model_validate(item), "Configuration published"
     )
@@ -104,8 +130,12 @@ def publish_version(identifier: int, session: SessionDep):
     "/configuration-versions/{identifier}/retire",
     response_model=SuccessResponse[ConfigurationVersionRead],
 )
-def retire_version(identifier: int, session: SessionDep):
-    item = configuration_service.retire(session, identifier)
+def retire_version(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.retire(session, actor, identifier)
     return success_response(ConfigurationVersionRead.model_validate(item), "Configuration retired")
 
 
@@ -114,8 +144,13 @@ def retire_version(identifier: int, session: SessionDep):
     response_model=SuccessResponse[ConfigurationVersionRead],
     status_code=status.HTTP_201_CREATED,
 )
-def clone_version(identifier: int, payload: ConfigurationCloneRequest, session: SessionDep):
-    item = configuration_service.clone(session, identifier, payload)
+def clone_version(
+    identifier: int,
+    payload: ConfigurationCloneRequest,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.clone(session, actor, identifier, payload)
     return success_response(ConfigurationVersionRead.model_validate(item), "Configuration cloned")
 
 
@@ -123,9 +158,13 @@ def clone_version(identifier: int, payload: ConfigurationCloneRequest, session: 
     "/configuration-versions/{identifier}/tree",
     response_model=SuccessResponse[ConfigurationTree],
 )
-def get_tree(identifier: int, session: SessionDep):
+def get_tree(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
+):
     return success_response(
-        configuration_service.tree(session, identifier), "Configuration tree retrieved"
+        configuration_service.tree(session, actor, identifier), "Configuration tree retrieved"
     )
 
 
@@ -134,8 +173,12 @@ def get_tree(identifier: int, session: SessionDep):
     response_model=SuccessResponse[ConfigurationItemRead],
     status_code=status.HTTP_201_CREATED,
 )
-def create_item(payload: ConfigurationItemCreate, session: SessionDep):
-    item = configuration_service.create_item(session, payload)
+def create_item(
+    payload: ConfigurationItemCreate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.create_item(session, actor, payload)
     return success_response(
         ConfigurationItemRead.model_validate(item), "Configuration item created"
     )
@@ -145,8 +188,13 @@ def create_item(payload: ConfigurationItemCreate, session: SessionDep):
     "/configuration-items/{identifier}",
     response_model=SuccessResponse[ConfigurationItemRead],
 )
-def update_item(identifier: int, payload: ConfigurationItemUpdate, session: SessionDep):
-    item = configuration_service.update_item(session, identifier, payload)
+def update_item(
+    identifier: int,
+    payload: ConfigurationItemUpdate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = configuration_service.update_item(session, actor, identifier, payload)
     return success_response(
         ConfigurationItemRead.model_validate(item), "Configuration item updated"
     )
@@ -156,8 +204,12 @@ def update_item(identifier: int, payload: ConfigurationItemUpdate, session: Sess
     "/configuration-items/{identifier}",
     response_model=SuccessResponse[DeleteResult],
 )
-def delete_item(identifier: int, session: SessionDep):
-    configuration_service.delete_item(session, identifier)
+def delete_item(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    configuration_service.delete_item(session, actor, identifier)
     return success_response(
         DeleteResult(deleted=True, resource="configuration_item", identifier=identifier)
     )

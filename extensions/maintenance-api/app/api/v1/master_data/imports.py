@@ -9,6 +9,8 @@ from app.core.responses import success_response
 from app.db.session import get_db_session
 from app.schemas.common import SuccessResponse
 from app.schemas.import_data import ImportExecutionResult, ImportValidationResult
+from app.security.actor import ActorContext
+from app.security.permissions import require_contributor, require_viewer
 from app.services.import_service import master_data_import_service
 
 router = APIRouter(prefix="/import", tags=["master-data: import"])
@@ -16,7 +18,9 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 
 
 @router.get("/template")
-def download_template() -> StreamingResponse:
+def download_template(
+    actor: Annotated[ActorContext, Depends(require_viewer)],
+) -> StreamingResponse:
     content = master_data_import_service.template_bytes()
     return StreamingResponse(
         BytesIO(content),
@@ -30,6 +34,7 @@ def download_template() -> StreamingResponse:
 @router.post("/validate", response_model=SuccessResponse[ImportValidationResult])
 async def validate_import(
     session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
     file: UploadFile = File(...),
 ):
     content = await file.read()
@@ -44,6 +49,7 @@ async def validate_import(
 @router.post("/execute", response_model=SuccessResponse[ImportExecutionResult])
 async def execute_import(
     session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
     file: UploadFile = File(...),
 ):
     content = await file.read()
