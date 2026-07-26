@@ -57,11 +57,19 @@ def make_router(
     )
 
 
-def create_ai_session(session, *, status=None, message_count: int = 0, event_count: int = 0):
+def create_ai_session(
+    session,
+    *,
+    status=None,
+    message_count: int = 0,
+    event_count: int = 0,
+    tenant_id: str = "tenant-a",
+):
     from app.models import AIEvent, AIMessage, AISession
     from app.models.enums import AIExecutionMode, AIMessageRole, AIMessageType, AISessionStatus
 
     row = AISession(
+        tenant_id=tenant_id,
         session_code=f"AI-TEST-{datetime.now(timezone.utc).timestamp():.6f}",
         title="测试 AI 会话",
         status=status or AISessionStatus.CREATED,
@@ -76,6 +84,7 @@ def create_ai_session(session, *, status=None, message_count: int = 0, event_cou
     for index in range(1, message_count + 1):
         session.add(
             AIMessage(
+                tenant_id=tenant_id,
                 session_id=row.id,
                 role=AIMessageRole.USER,
                 message_type=AIMessageType.USER_TEXT,
@@ -86,6 +95,7 @@ def create_ai_session(session, *, status=None, message_count: int = 0, event_cou
     for index in range(1, event_count + 1):
         session.add(
             AIEvent(
+                tenant_id=tenant_id,
                 session_id=row.id,
                 sequence=index,
                 event_type="TEST_EVENT",
@@ -98,12 +108,22 @@ def create_ai_session(session, *, status=None, message_count: int = 0, event_cou
     return row
 
 
-def create_ai_session_with_messages(session, *, count: int):
+def create_ai_session_with_messages(
+    session,
+    *,
+    count: int,
+    tenant_id: str = "tenant-a",
+):
     from app.models import AISessionSnapshot
 
-    row = create_ai_session(session, message_count=count)
+    row = create_ai_session(
+        session,
+        message_count=count,
+        tenant_id=tenant_id,
+    )
     session.add(
         AISessionSnapshot(
+            tenant_id=tenant_id,
             session_id=row.id,
             snapshot_version=1,
             current_state=row.status.value,
@@ -119,8 +139,17 @@ def create_ai_session_with_messages(session, *, count: int):
     return row
 
 
-def create_ai_session_with_events(session, *, count: int):
-    return create_ai_session(session, event_count=count)
+def create_ai_session_with_events(
+    session,
+    *,
+    count: int,
+    tenant_id: str = "tenant-a",
+):
+    return create_ai_session(
+        session,
+        event_count=count,
+        tenant_id=tenant_id,
+    )
 
 
 def latest_model_call(session):
@@ -129,11 +158,19 @@ def latest_model_call(session):
     return session.scalar(select(AIModelCall).order_by(AIModelCall.id.desc()))
 
 
-def create_ready_ai_session(session):
+def create_ready_ai_session(
+    session,
+    *,
+    tenant_id: str = "tenant-a",
+):
     from app.models import AISessionSnapshot
     from app.models.enums import AISessionStatus
 
-    row = create_ai_session(session, status=AISessionStatus.PLANNED)
+    row = create_ai_session(
+        session,
+        status=AISessionStatus.PLANNED,
+        tenant_id=tenant_id,
+    )
     row.active_scenario_version_id = 1
 
     def field(value, risk="HIGH"):
@@ -148,6 +185,7 @@ def create_ready_ai_session(session):
 
     session.add(
         AISessionSnapshot(
+            tenant_id=tenant_id,
             session_id=row.id,
             snapshot_version=1,
             current_state=AISessionStatus.PLANNED.value,
@@ -176,7 +214,11 @@ def create_ready_ai_session(session):
     return row
 
 
-def create_session_with_completed_query_step(session):
+def create_session_with_completed_query_step(
+    session,
+    *,
+    tenant_id: str = "tenant-a",
+):
     from app.models import AIExecutionPlan, AIPlanStep, AIToolCall
     from app.models.enums import (
         AIPlanStatus,
@@ -185,8 +227,13 @@ def create_session_with_completed_query_step(session):
         AIToolCallStatus,
     )
 
-    row = create_ai_session(session, status=AISessionStatus.PARTIALLY_COMPLETED)
+    row = create_ai_session(
+        session,
+        status=AISessionStatus.PARTIALLY_COMPLETED,
+        tenant_id=tenant_id,
+    )
     plan = AIExecutionPlan(
+        tenant_id=tenant_id,
         session_id=row.id,
         goal="查询计算状态",
         intent="TASK_STATUS_QUERY",
@@ -197,6 +244,7 @@ def create_session_with_completed_query_step(session):
     session.add(plan)
     session.flush()
     step = AIPlanStep(
+        tenant_id=tenant_id,
         plan_id=plan.id,
         step_index=1,
         step_code="query-status",
@@ -213,6 +261,7 @@ def create_session_with_completed_query_step(session):
     session.flush()
     session.add(
         AIToolCall(
+            tenant_id=tenant_id,
             session_id=row.id,
             plan_step_id=step.id,
             tool_name="get_calculation_status",

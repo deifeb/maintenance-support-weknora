@@ -1,3 +1,7 @@
+from app.repositories.ai_evidence_repository import (
+    AIEvidenceRepository,
+    ai_evidence_repository,
+)
 from app.repositories.ai_execution_repository import (
     AIExecutionRepository,
     ai_execution_repository,
@@ -48,6 +52,7 @@ from app.repositories.warehouse_repository import WarehouseRepository
 
 __all__ = [
     "AIExecutionRepository",
+    "AIEvidenceRepository",
     "AIReportRepository",
     "AIReviewRepository",
     "AISessionRepository",
@@ -75,6 +80,7 @@ __all__ = [
     "SupplierRepository",
     "WarehouseRepository",
     "ai_execution_repository",
+    "ai_evidence_repository",
     "ai_report_repository",
     "ai_review_repository",
     "ai_session_repository",
