@@ -2,7 +2,13 @@ from app.models import SparePart
 
 
 def _create_spare(session):
-    spare = SparePart(code="SP-CALC", name="计算器材", unit="件", is_repairable=True)
+    spare = SparePart(
+        code="SP-CALC",
+        name="计算器材",
+        unit="件",
+        is_repairable=True,
+        tenant_id="tenant-a",
+    )
     session.add(spare)
     session.commit()
     session.refresh(spare)

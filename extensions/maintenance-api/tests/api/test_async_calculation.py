@@ -4,7 +4,13 @@ from app.models import SparePart
 
 
 def test_async_calculation_completes(client, session):
-    spare = SparePart(code="SP-ASYNC", name="异步器材", unit="件", is_repairable=False)
+    spare = SparePart(
+        code="SP-ASYNC",
+        name="异步器材",
+        unit="件",
+        is_repairable=False,
+        tenant_id="tenant-a",
+    )
     session.add(spare)
     session.commit()
     session.refresh(spare)

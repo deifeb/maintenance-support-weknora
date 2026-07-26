@@ -2,7 +2,13 @@ from app.models import SparePart
 
 
 def test_repair_profile_crud(client, session):
-    spare = SparePart(code="SP-RP", name="可修件", unit="件", is_repairable=True)
+    spare = SparePart(
+        code="SP-RP",
+        name="可修件",
+        unit="件",
+        is_repairable=True,
+        tenant_id="tenant-a",
+    )
     session.add(spare)
     session.commit()
     session.refresh(spare)
