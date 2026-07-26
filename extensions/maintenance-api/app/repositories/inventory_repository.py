@@ -29,3 +29,31 @@ class InventoryRepository(BaseRepository[WarehouseInventory]):
                 WarehouseInventory.spare_part_id == spare_part_id,
             )
         )
+
+    def list_for_spare(
+        self,
+        session: Session,
+        tenant_id: str,
+        spare_part_id: int,
+    ) -> list[WarehouseInventory]:
+        return list(
+            session.scalars(
+                select(WarehouseInventory)
+                .options(
+                    tenant_loader_criteria(tenant_id)
+                )
+                .execution_options(
+                    populate_existing=True
+                )
+                .where(
+                    WarehouseInventory.tenant_id
+                    == tenant_id,
+                    WarehouseInventory.spare_part_id
+                    == spare_part_id,
+                )
+                .order_by(
+                    WarehouseInventory.warehouse_id,
+                    WarehouseInventory.id,
+                )
+            ).all()
+        )

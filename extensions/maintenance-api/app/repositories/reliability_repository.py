@@ -5,10 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import ReliabilityProfile
 from app.models.enums import ReliabilityModelType
-from app.repositories.base import (
-    BaseRepository,
-    tenant_loader_criteria,
-)
+from app.repositories.base import BaseRepository, tenant_loader_criteria
 
 
 class ReliabilityRepository(BaseRepository[ReliabilityProfile]):
@@ -74,3 +71,43 @@ class ReliabilityRepository(BaseRepository[ReliabilityProfile]):
                 ReliabilityProfile.id != exclude_id
             )
         return session.scalar(stmt.limit(1))
+
+    def list_active_for_selection(
+        self,
+        session: Session,
+        tenant_id: str,
+        spare_part_id: int,
+        valid_at: date,
+    ) -> list[ReliabilityProfile]:
+        return list(
+            session.scalars(
+                select(ReliabilityProfile)
+                .options(
+                    tenant_loader_criteria(tenant_id)
+                )
+                .execution_options(
+                    populate_existing=True
+                )
+                .where(
+                    ReliabilityProfile.tenant_id
+                    == tenant_id,
+                    ReliabilityProfile.spare_part_id
+                    == spare_part_id,
+                    ReliabilityProfile.is_active.is_(
+                        True
+                    ),
+                    or_(
+                        ReliabilityProfile.valid_from
+                        .is_(None),
+                        ReliabilityProfile.valid_from
+                        <= valid_at,
+                    ),
+                    or_(
+                        ReliabilityProfile.valid_to
+                        .is_(None),
+                        ReliabilityProfile.valid_to
+                        > valid_at,
+                    ),
+                )
+            ).all()
+        )

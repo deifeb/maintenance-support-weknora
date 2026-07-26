@@ -1,25 +1,27 @@
 from threading import Lock
 
+TaskKey = tuple[str, int]
+
 
 class TaskRegistry:
     def __init__(self) -> None:
-        self._running: set[int] = set()
+        self._running: set[TaskKey] = set()
         self._lock = Lock()
 
-    def register(self, calculation_id: int) -> bool:
+    def register(self, key: TaskKey) -> bool:
         with self._lock:
-            if calculation_id in self._running:
+            if key in self._running:
                 return False
-            self._running.add(calculation_id)
+            self._running.add(key)
             return True
 
-    def unregister(self, calculation_id: int) -> None:
+    def unregister(self, key: TaskKey) -> None:
         with self._lock:
-            self._running.discard(calculation_id)
+            self._running.discard(key)
 
-    def is_running(self, calculation_id: int) -> bool:
+    def is_running(self, key: TaskKey) -> bool:
         with self._lock:
-            return calculation_id in self._running
+            return key in self._running
 
 
 registry = TaskRegistry()

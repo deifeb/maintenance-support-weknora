@@ -4,10 +4,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import RepairProfile
-from app.repositories.base import (
-    BaseRepository,
-    tenant_loader_criteria,
-)
+from app.repositories.base import BaseRepository, tenant_loader_criteria
 
 
 class RepairRepository(BaseRepository[RepairProfile]):
@@ -134,3 +131,45 @@ class RepairRepository(BaseRepository[RepairProfile]):
             ),
         )
         return sum(int(value or 0) for value in counts)
+
+    def list_active_for_selection(
+        self,
+        session: Session,
+        tenant_id: str,
+        spare_part_id: int,
+        valid_at: date,
+    ) -> list[RepairProfile]:
+        return list(
+            session.scalars(
+                select(RepairProfile)
+                .options(
+                    tenant_loader_criteria(tenant_id)
+                )
+                .execution_options(
+                    populate_existing=True
+                )
+                .where(
+                    RepairProfile.tenant_id
+                    == tenant_id,
+                    RepairProfile.spare_part_id
+                    == spare_part_id,
+                    RepairProfile.is_active.is_(
+                        True
+                    ),
+                    or_(
+                        RepairProfile.valid_from.is_(
+                            None
+                        ),
+                        RepairProfile.valid_from
+                        <= valid_at,
+                    ),
+                    or_(
+                        RepairProfile.valid_to.is_(
+                            None
+                        ),
+                        RepairProfile.valid_to
+                        > valid_at,
+                    ),
+                )
+            ).all()
+        )
