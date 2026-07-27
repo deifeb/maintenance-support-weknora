@@ -256,3 +256,35 @@ func TestMaintenanceConfigAcceptsValidEnabledConfig(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
+
+func TestMaintenanceConfigRejectsExampleSecretWhenEnabled(
+	t *testing.T,
+) {
+	cfg := DefaultMaintenanceConfig()
+	cfg.Enabled = true
+	cfg.SigningSecret =
+		"replace-with-at-least-32-random-bytes"
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "signing secret") {
+		t.Fatalf(
+			"Validate() error = %v, want example signing secret error",
+			err,
+		)
+	}
+}
+
+func TestMaintenanceConfigAllowsExampleSecretWhenDisabled(
+	t *testing.T,
+) {
+	cfg := DefaultMaintenanceConfig()
+	cfg.SigningSecret =
+		"replace-with-at-least-32-random-bytes"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf(
+			"disabled Validate() error = %v",
+			err,
+		)
+	}
+}

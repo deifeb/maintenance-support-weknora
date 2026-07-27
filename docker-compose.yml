@@ -348,6 +348,15 @@ services:
       - OIDC_AUTH_SCOPES=${OIDC_AUTH_SCOPES:-}
       - OIDC_USER_INFO_MAPPING_USER_NAME=${OIDC_USER_INFO_MAPPING_USER_NAME:-}
       - OIDC_USER_INFO_MAPPING_EMAIL=${OIDC_USER_INFO_MAPPING_EMAIL:-}
+
+      # ========== Maintenance API 私有代理 ==========
+      - WEKNORA_MAINTENANCE_ENABLED=${WEKNORA_MAINTENANCE_ENABLED:-false}
+      - WEKNORA_MAINTENANCE_BASE_URL=${WEKNORA_MAINTENANCE_BASE_URL:-http://maintenance-api:8100}
+      - WEKNORA_MAINTENANCE_SIGNING_SECRET=${WEKNORA_MAINTENANCE_SIGNING_SECRET:-}
+      - WEKNORA_MAINTENANCE_ISSUER=${WEKNORA_MAINTENANCE_ISSUER:-weknora}
+      - WEKNORA_MAINTENANCE_AUDIENCE=${WEKNORA_MAINTENANCE_AUDIENCE:-maintenance-api}
+      - WEKNORA_MAINTENANCE_TOKEN_TTL=${WEKNORA_MAINTENANCE_TOKEN_TTL:-3m}
+      - WEKNORA_MAINTENANCE_REQUEST_TIMEOUT=${WEKNORA_MAINTENANCE_REQUEST_TIMEOUT:-30s}
     depends_on:
       redis:
         condition: service_started
@@ -360,6 +369,42 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+
+  maintenance-api:
+    build:
+      context: ./extensions
+      dockerfile: maintenance-api/Dockerfile
+    container_name: WeKnora-maintenance-api
+    expose:
+      - "8100"
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      INTERNAL_JWT_SECRET: ${WEKNORA_MAINTENANCE_SIGNING_SECRET:?set WEKNORA_MAINTENANCE_SIGNING_SECRET}
+      INTERNAL_JWT_ISSUER: ${WEKNORA_MAINTENANCE_ISSUER:-weknora}
+      INTERNAL_JWT_AUDIENCE: ${WEKNORA_MAINTENANCE_AUDIENCE:-maintenance-api}
+      INTERNAL_JWT_MAX_LIFETIME_SECONDS: "180"
+      INTERNAL_JWT_CLOCK_SKEW_SECONDS: "5"
+      DATABASE_URL: sqlite:////app/data/maintenance.db
+    volumes:
+      - maintenance-data:/app/data
+      - maintenance-exports:/app/exports
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - WeKnora-network
+    restart: unless-stopped
 
   # Sandbox 镜像：仅用于 build/pull，非常驻服务；app 执行 Skills 时按需 docker run 该镜像，用毕即释
   sandbox:
@@ -1007,6 +1052,8 @@ volumes:
   postgres-data:
   data-files:
   docreader-tmp:
+  maintenance-data:
+  maintenance-exports:
   minio_data:
   neo4j-data:
   qdrant_data:

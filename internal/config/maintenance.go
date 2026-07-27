@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const maintenanceInternalTokenTTL = 180 * time.Second
+const (
+	maintenanceInternalTokenTTL     = 180 * time.Second
+	maintenanceExampleSigningSecret = "replace-with-at-least-32-random-bytes"
+)
 
 // MaintenanceConfig controls the private WeKnora-to-Maintenance API
 // integration. SigningSecret is supplied only through the environment and is
@@ -80,7 +83,11 @@ func (c *MaintenanceConfig) Validate() error {
 	if c.TokenTTL != maintenanceInternalTokenTTL {
 		return fmt.Errorf("maintenance token_ttl must be exactly 180 seconds when enabled")
 	}
-	if len([]byte(strings.TrimSpace(c.SigningSecret))) < 32 {
+	signingSecret := strings.TrimSpace(c.SigningSecret)
+	if signingSecret == maintenanceExampleSigningSecret {
+		return fmt.Errorf("maintenance signing secret must be replaced before enabling the proxy")
+	}
+	if len([]byte(signingSecret)) < 32 {
 		return fmt.Errorf("maintenance signing secret must contain at least 32 bytes")
 	}
 	return nil

@@ -159,3 +159,46 @@ python -m pytest tests\external\test_openai_compatible_smoke.py `
 ```
 
 Ollama 测试要求配置的本地模型已经存在；系统不会自动下载大型模型。OpenAI-compatible 未完整配置时测试会跳过。
+
+
+## WeKnora 私有代理与生产部署
+
+Maintenance API 只通过 Compose 的 `WeKnora-network` 接收 WeKnora
+应用代理请求。`maintenance-api` 服务仅声明内部 `expose: 8100`，
+不配置浏览器可访问的宿主机 `ports`。浏览器始终调用
+`/api/maintenance/*`，不得直接连接该 Python 服务。
+
+WeKnora 与 Maintenance API 必须配置完全相同的内部 JWT 密钥。
+生产环境拒绝 `.env.example` 中的示例占位符。使用 PowerShell
+生成 48 字节随机密钥：
+
+```powershell
+$secretBytes = New-Object byte[] 48
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $rng.GetBytes($secretBytes)
+}
+finally {
+    $rng.Dispose()
+}
+$secret = [Convert]::ToBase64String($secretBytes)
+
+$env:WEKNORA_MAINTENANCE_SIGNING_SECRET = $secret
+$env:INTERNAL_JWT_SECRET = $secret
+```
+
+将同一个 `$secret` 持久写入部署密钥存储或根目录 `.env` 的
+`WEKNORA_MAINTENANCE_SIGNING_SECRET`。不要把真实密钥提交到 Git。
+
+在启动或升级服务前，必须先成功完成数据库迁移；迁移失败时不能把
+服务视为就绪：
+
+```powershell
+docker compose run --rm maintenance-api `
+    python -m alembic upgrade head
+docker compose up -d maintenance-api app
+```
+
+`/health` 保持无认证，用于容器内部健康检查，但 Maintenance API
+没有浏览器可访问的宿主机端口。`MAINTENANCE_LEGACY_TENANT_ID`
+只允许在明确的一次性旧数据回填中使用，不是运行时租户选择机制。

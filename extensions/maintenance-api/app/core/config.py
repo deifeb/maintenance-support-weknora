@@ -1,13 +1,21 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import (
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATABASE_PATH = (SERVICE_ROOT / "data" / "maintenance.db").as_posix()
 DEFAULT_AI_CONFIG_DIR = SERVICE_ROOT / "config"
 DEFAULT_AI_REPORT_EXPORT_DIR = SERVICE_ROOT / "exports" / "ai-reports"
+EXAMPLE_INTERNAL_JWT_SECRET = (
+    "replace-with-at-least-32-random-bytes"
+)
 
 
 class Settings(BaseSettings):
@@ -77,6 +85,19 @@ class Settings(BaseSettings):
         if not normalized:
             raise ValueError("internal JWT issuer and audience must not be blank")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        if (
+            self.app_env.strip().lower() == "production"
+            and self.internal_jwt_secret.get_secret_value()
+            == EXAMPLE_INTERNAL_JWT_SECRET
+        ):
+            raise ValueError(
+                "INTERNAL_JWT_SECRET must be replaced "
+                "in production"
+            )
+        return self
 
     model_config = SettingsConfigDict(
         env_file=SERVICE_ROOT / ".env",
