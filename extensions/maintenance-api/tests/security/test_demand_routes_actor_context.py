@@ -398,6 +398,7 @@ def test_repair_routes_ignore_untrusted_tenant_and_hide_other_tenant(
     actor_b = actor_context(
         tenant_id="tenant-b",
         user_id="user-b",
+        role=MaintenanceRole.ADMIN,
     )
     spare = SparePart(
         code="SP-TENANT-REPAIR",
@@ -795,3 +796,175 @@ def test_comparison_route_hides_other_tenant(
         },
     )
     assert hidden.status_code == 404
+
+
+
+_CALCULATION_REPAIR_ROLE_ALIASES = {
+    "calculations.py": {
+        "list_calculations": "ViewerDep",
+        "get_calculation": "ViewerDep",
+        "get_status": "ViewerDep",
+        "result_items": "ViewerDep",
+        "runs": "ViewerDep",
+        "comparison": "ViewerDep",
+        "export": "ViewerDep",
+        "preview": "ContributorDep",
+        "submit": "ContributorDep",
+        "cancel": "ContributorDep",
+        "retry": "ContributorDep",
+        "replay": "ContributorDep",
+        "rerun_latest": "ContributorDep",
+    },
+    "repair_profiles.py": {
+        "list_profiles": "ViewerDep",
+        "get_profile": "ViewerDep",
+        "create_profile": "ContributorDep",
+        "update_profile": "ContributorDep",
+        "set_active": "ContributorDep",
+        "delete_profile": "AdminDep",
+    },
+}
+
+
+def test_calculation_and_repair_use_exact_role_aliases(
+) -> None:
+    failures: list[str] = []
+
+    for filename, expected in (
+        _CALCULATION_REPAIR_ROLE_ALIASES.items()
+    ):
+        functions = _functions(_tree(filename))
+        for name, alias in expected.items():
+            actual = _actor_annotation(functions[name])
+            if actual != alias:
+                failures.append(
+                    f"{filename}:{name}: "
+                    f"expected={alias}, actual={actual}"
+                )
+
+    assert failures == [], "\n".join(failures)
+
+
+def test_calculation_and_repair_role_floors_and_metadata(
+    authenticated_client,
+    session,
+    actor_context,
+) -> None:
+    contributor = actor_context(
+        tenant_id="tenant-a",
+        user_id="contributor-a",
+        role=MaintenanceRole.CONTRIBUTOR,
+        request_id="request-contributor-demand",
+    )
+    _use_actor(authenticated_client, contributor)
+
+    spare = SparePart(
+        code="SP-ROLE-META",
+        name="role metadata spare",
+        unit="piece",
+        is_repairable=True,
+        tenant_id="tenant-a",
+    )
+    session.add(spare)
+    session.commit()
+    session.refresh(spare)
+
+    calculation = authenticated_client.post(
+        "/api/v1/demand/calculations",
+        json=_calculation_payload(spare),
+    )
+    assert calculation.status_code == 200, calculation.text
+    calculation_id = calculation.json()["data"]["id"]
+    assert calculation.json()["meta"] == {
+        "request_id": "request-contributor-demand",
+        "tenant_id": "tenant-a",
+        "version": None,
+    }
+
+    profile = authenticated_client.post(
+        "/api/v1/demand/repair-profiles",
+        json={
+            "profile_code": "RP-ROLE-META",
+            "profile_name": "role metadata profile",
+            "spare_part_id": spare.id,
+            "repair_success_rate": "0.85",
+            "condemnation_rate": "0.10",
+            "repair_turnaround_hours": "72",
+            "data_source_type": "MAINTENANCE_RECORD",
+        },
+    )
+    assert profile.status_code == 201, profile.text
+    profile_id = profile.json()["data"]["id"]
+    assert profile.json()["meta"]["tenant_id"] == "tenant-a"
+    assert profile.json()["meta"]["request_id"] == (
+        "request-contributor-demand"
+    )
+    assert profile.json()["meta"]["version"] == 1
+
+    contributor_delete = authenticated_client.delete(
+        f"/api/v1/demand/repair-profiles/{profile_id}"
+    )
+    assert contributor_delete.status_code == 403
+
+    viewer = actor_context(
+        tenant_id="tenant-a",
+        user_id="viewer-a",
+        role=MaintenanceRole.VIEWER,
+        request_id="request-viewer-demand",
+    )
+    _use_actor(authenticated_client, viewer)
+
+    calculation_list = authenticated_client.get(
+        "/api/v1/demand/calculations"
+    )
+    assert calculation_list.status_code == 200
+    assert calculation_list.json()["meta"] == {
+        "request_id": "request-viewer-demand",
+        "tenant_id": "tenant-a",
+        "version": None,
+    }
+
+    calculation_detail = authenticated_client.get(
+        f"/api/v1/demand/calculations/{calculation_id}"
+    )
+    assert calculation_detail.status_code == 200
+    assert calculation_detail.json()["meta"]["tenant_id"] == (
+        "tenant-a"
+    )
+
+    profile_list = authenticated_client.get(
+        "/api/v1/demand/repair-profiles"
+    )
+    assert profile_list.status_code == 200
+    assert profile_list.json()["meta"]["request_id"] == (
+        "request-viewer-demand"
+    )
+
+    denied_cancel = authenticated_client.post(
+        f"/api/v1/demand/calculations/{calculation_id}/cancel"
+    )
+    assert denied_cancel.status_code == 403
+
+    denied_profile_update = authenticated_client.patch(
+        f"/api/v1/demand/repair-profiles/{profile_id}/active",
+        json={"is_active": False},
+    )
+    assert denied_profile_update.status_code == 403
+
+    admin = actor_context(
+        tenant_id="tenant-a",
+        user_id="admin-a",
+        role=MaintenanceRole.ADMIN,
+        request_id="request-admin-demand",
+    )
+    _use_actor(authenticated_client, admin)
+
+    deleted = authenticated_client.delete(
+        f"/api/v1/demand/repair-profiles/{profile_id}"
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["meta"] == {
+        "request_id": "request-admin-demand",
+        "tenant_id": "tenant-a",
+        "version": None,
+    }

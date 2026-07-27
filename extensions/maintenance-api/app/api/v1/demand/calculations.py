@@ -13,13 +13,23 @@ from app.models import DemandCalculation, DemandCalculationRun
 from app.models.enums import CalculationExecutionType, CalculationStatus
 from app.schemas.demand_calculation import CalculationCreateRequest, CalculationPreviewRequest
 from app.security.actor import ActorContext
-from app.security.dependencies import get_actor
+from app.security.permissions import (
+    require_contributor,
+    require_viewer,
+)
 from app.services.demand_calculation_service import calculation_service
 from app.workers.executor import demand_task_executor
 
 router = APIRouter(prefix="/calculations", tags=["demand: calculations"])
 SessionDep = Annotated[Session, Depends(get_db_session)]
-ActorDep = Annotated[ActorContext, Depends(get_actor)]
+ViewerDep = Annotated[
+    ActorContext,
+    Depends(require_viewer),
+]
+ContributorDep = Annotated[
+    ActorContext,
+    Depends(require_contributor),
+]
 
 
 def _calculation_dict(row: DemandCalculation):
@@ -47,14 +57,15 @@ def _calculation_dict(row: DemandCalculation):
 def preview(
     payload: CalculationPreviewRequest,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
     return success_response(
         calculation_service.preview(
             session,
             actor,
             payload,
-        )
+        ),
+        actor=actor,
     )
 
 
@@ -62,7 +73,7 @@ def preview(
 def submit(
     payload: CalculationCreateRequest,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
     idempotency_key: Annotated[
         str | None,
         Header(alias="Idempotency-Key"),
@@ -90,13 +101,14 @@ def submit(
     return success_response(
         _calculation_dict(calculation),
         "Calculation submitted",
+        actor=actor,
     )
 
 
 @router.get("")
 def list_calculations(
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     status: CalculationStatus | None = None,
@@ -128,7 +140,8 @@ def list_calculations(
             ],
             "page": page,
             "page_size": page_size,
-        }
+        },
+        actor=actor,
     )
 
 
@@ -136,7 +149,7 @@ def list_calculations(
 def get_calculation(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
 ):
     return success_response(
         _calculation_dict(
@@ -145,7 +158,8 @@ def get_calculation(
                 actor,
                 calculation_id,
             )
-        )
+        ),
+        actor=actor,
     )
 
 
@@ -153,7 +167,7 @@ def get_calculation(
 def get_status(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
 ):
     row = calculation_service.get(
         session,
@@ -168,7 +182,8 @@ def get_status(
             "current_stage": row.current_stage,
             "error_code": row.error_code,
             "error_message": row.error_message,
-        }
+        },
+        actor=actor,
     )
 
 
@@ -176,7 +191,7 @@ def get_status(
 def cancel(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
     return success_response(
         _calculation_dict(
@@ -187,6 +202,7 @@ def cancel(
             )
         ),
         "Cancellation requested",
+        actor=actor,
     )
 
 
@@ -194,7 +210,7 @@ def cancel(
 def retry(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
     row = calculation_service.get(
         session,
@@ -232,6 +248,7 @@ def retry(
     return success_response(
         _calculation_dict(row),
         "Calculation retried",
+        actor=actor,
     )
 
 
@@ -239,7 +256,7 @@ def retry(
 def replay(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
     source = calculation_service.get(
         session,
@@ -278,7 +295,8 @@ def replay(
             created.id,
         )
     return success_response(
-        _calculation_dict(created)
+        _calculation_dict(created),
+        actor=actor,
     )
 
 
@@ -286,7 +304,7 @@ def replay(
 def rerun_latest(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
     source = calculation_service.get(
         session,
@@ -324,7 +342,8 @@ def rerun_latest(
             created.id,
         )
     return success_response(
-        _calculation_dict(created)
+        _calculation_dict(created),
+        actor=actor,
     )
 
 
@@ -332,7 +351,7 @@ def rerun_latest(
 def result_items(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
 ):
     calculation = session.scalar(
         select(DemandCalculation)
@@ -387,14 +406,14 @@ def result_items(
                     "warnings": item.warning_codes_json,
                 }
             )
-    return success_response(rows)
+    return success_response(rows, actor=actor)
 
 
 @router.get("/{calculation_id}/runs")
 def runs(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
 ):
     calculation_service.get(
         session,
@@ -423,7 +442,8 @@ def runs(
                 "stop_reason": row.stop_reason,
             }
             for row in rows
-        ]
+        ],
+        actor=actor,
     )
 
 
@@ -431,7 +451,7 @@ def runs(
 def comparison(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
 ):
     row = calculation_service.get(
         session,
@@ -441,7 +461,8 @@ def comparison(
     return success_response(
         (row.result_summary_json or {}).get(
             "comparison"
-        )
+        ),
+        actor=actor,
     )
 
 
@@ -449,7 +470,7 @@ def comparison(
 def export(
     calculation_id: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
     format: str = Query(
         "xlsx",
         pattern="^(xlsx|json)$",

@@ -8,14 +8,21 @@ from app.core.responses import success_response
 from app.db.session import get_db_session
 from app.models.enums import DataSourceType
 from app.schemas.base import ActivePatch, DeleteResult
-from app.schemas.common import PageData, SuccessResponse
+from app.schemas.common import (
+    MaintenanceSuccessResponse,
+    PageData,
+)
 from app.schemas.repair import (
     RepairProfileCreate,
     RepairProfileRead,
     RepairProfileUpdate,
 )
 from app.security.actor import ActorContext
-from app.security.dependencies import get_actor
+from app.security.permissions import (
+    require_admin,
+    require_contributor,
+    require_viewer,
+)
 from app.services.repair_service import repair_service
 
 router = APIRouter(
@@ -23,40 +30,54 @@ router = APIRouter(
     tags=["demand: repair profiles"],
 )
 SessionDep = Annotated[Session, Depends(get_db_session)]
-ActorDep = Annotated[ActorContext, Depends(get_actor)]
+ViewerDep = Annotated[
+    ActorContext,
+    Depends(require_viewer),
+]
+ContributorDep = Annotated[
+    ActorContext,
+    Depends(require_contributor),
+]
+AdminDep = Annotated[
+    ActorContext,
+    Depends(require_admin),
+]
 
 
 @router.post(
     "",
-    response_model=SuccessResponse[RepairProfileRead],
+    response_model=MaintenanceSuccessResponse[
+        RepairProfileRead
+    ],
     status_code=status.HTTP_201_CREATED,
 )
 def create_profile(
     payload: RepairProfileCreate,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
+    row = repair_service.create_profile(
+        session,
+        actor,
+        payload,
+    )
     return success_response(
-        RepairProfileRead.model_validate(
-            repair_service.create_profile(
-                session,
-                actor,
-                payload,
-            )
-        ),
+        RepairProfileRead.model_validate(row),
         "Repair profile created",
+        actor=actor,
+        version=row.version,
     )
 
 
 @router.get(
     "",
-    response_model=SuccessResponse[
+    response_model=MaintenanceSuccessResponse[
         PageData[RepairProfileRead]
     ],
 )
 def list_profiles(
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
     params: Annotated[dict, Depends(list_params)],
     spare_part_id: int | None = Query(default=None),
     configuration_version_id: int | None = Query(
@@ -83,82 +104,94 @@ def list_profiles(
             filters=filters,
         ),
         "Query completed",
+        actor=actor,
     )
 
 
 @router.get(
     "/{identifier}",
-    response_model=SuccessResponse[RepairProfileRead],
+    response_model=MaintenanceSuccessResponse[
+        RepairProfileRead
+    ],
 )
 def get_profile(
     identifier: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ViewerDep,
 ):
+    row = repair_service.get(
+        session,
+        actor,
+        identifier,
+    )
     return success_response(
-        RepairProfileRead.model_validate(
-            repair_service.get(
-                session,
-                actor,
-                identifier,
-            )
-        )
+        RepairProfileRead.model_validate(row),
+        actor=actor,
+        version=row.version,
     )
 
 
 @router.put(
     "/{identifier}",
-    response_model=SuccessResponse[RepairProfileRead],
+    response_model=MaintenanceSuccessResponse[
+        RepairProfileRead
+    ],
 )
 def update_profile(
     identifier: int,
     payload: RepairProfileUpdate,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
+    row = repair_service.update_profile(
+        session,
+        actor,
+        identifier,
+        payload,
+    )
     return success_response(
-        RepairProfileRead.model_validate(
-            repair_service.update_profile(
-                session,
-                actor,
-                identifier,
-                payload,
-            )
-        ),
+        RepairProfileRead.model_validate(row),
         "Repair profile updated",
+        actor=actor,
+        version=row.version,
     )
 
 
 @router.patch(
     "/{identifier}/active",
-    response_model=SuccessResponse[RepairProfileRead],
+    response_model=MaintenanceSuccessResponse[
+        RepairProfileRead
+    ],
 )
 def set_active(
     identifier: int,
     payload: ActivePatch,
     session: SessionDep,
-    actor: ActorDep,
+    actor: ContributorDep,
 ):
+    row = repair_service.set_active(
+        session,
+        actor,
+        identifier,
+        payload.is_active,
+    )
     return success_response(
-        RepairProfileRead.model_validate(
-            repair_service.set_active(
-                session,
-                actor,
-                identifier,
-                payload.is_active,
-            )
-        )
+        RepairProfileRead.model_validate(row),
+        actor=actor,
+        version=row.version,
     )
 
 
 @router.delete(
     "/{identifier}",
-    response_model=SuccessResponse[DeleteResult],
+    response_model=MaintenanceSuccessResponse[
+        DeleteResult
+    ],
 )
 def delete_profile(
     identifier: int,
     session: SessionDep,
-    actor: ActorDep,
+    actor: AdminDep,
 ):
     repair_service.delete(
         session,
@@ -170,5 +203,6 @@ def delete_profile(
             deleted=True,
             resource="repair_profile",
             identifier=identifier,
-        )
+        ),
+        actor=actor,
     )
