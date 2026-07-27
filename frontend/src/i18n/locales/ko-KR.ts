@@ -4,6 +4,7 @@ export default {
     agents: "에이전트",
     integrations: "게시 및 통합",
     organizations: "공유 스페이스",
+    maintenance: "정비 관리",
     chat: "대화",
     newChat: "새 대화",
     createChat: "대화 생성",
@@ -43,6 +44,18 @@ export default {
     otherSources: "기타 출처",
     noSessions: "대화가 없습니다",
     loadMoreSessions: "더 보기",
+  },
+  maintenance: {
+    placeholder: "이 기능은 해당 구현 단계에서 활성화됩니다",
+    pages: {
+      dashboard: "대시보드",
+      masterData: "마스터 데이터",
+      scenarios: "시나리오",
+      calculations: "계산",
+      inventoryGap: "재고 부족",
+      reviews: "검토",
+      reports: "보고서",
+    },
   },
   chatHeader: {
     moreActions: "대화 추가 작업",

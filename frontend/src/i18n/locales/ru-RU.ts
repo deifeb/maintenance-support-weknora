@@ -42,7 +42,20 @@ export default {
     loadMoreSessions: 'Загрузить ещё',
     agents: 'Агенты',
     integrations: 'Публикация и интеграция',
-    organizations: 'Общие пространства'
+    organizations: 'Общие пространства',
+    maintenance: 'Техобслуживание',
+  },
+  maintenance: {
+    placeholder: 'Эта функция будет включена на соответствующем этапе реализации',
+    pages: {
+      dashboard: 'Обзор',
+      masterData: 'Основные данные',
+      scenarios: 'Сценарии',
+      calculations: 'Расчёты',
+      inventoryGap: 'Дефицит запасов',
+      reviews: 'Проверки',
+      reports: 'Отчёты',
+    },
   },
   chatHeader: {
     moreActions: 'Другие действия с диалогом',

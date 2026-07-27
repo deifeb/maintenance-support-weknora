@@ -4,6 +4,7 @@ export default {
     agents: "智能体",
     integrations: "发布集成",
     organizations: "共享空间",
+    maintenance: "维修保障",
     chat: "对话",
     newChat: "新对话",
     createChat: "创建对话",
@@ -43,6 +44,18 @@ export default {
     otherSources: "其他来源",
     noSessions: "暂无对话",
     loadMoreSessions: "加载更多",
+  },
+  maintenance: {
+    placeholder: "该功能将在对应实施阶段启用",
+    pages: {
+      dashboard: "概览",
+      masterData: "主数据",
+      scenarios: "情景方案",
+      calculations: "需求计算",
+      inventoryGap: "库存缺口",
+      reviews: "审核中心",
+      reports: "报表中心",
+    },
   },
   chatHeader: {
     moreActions: "更多对话操作",

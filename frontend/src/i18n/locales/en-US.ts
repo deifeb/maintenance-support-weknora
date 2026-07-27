@@ -4,6 +4,7 @@ export default {
     agents: 'Agents',
     integrations: 'Publish & Integrations',
     organizations: 'Shared Spaces',
+    maintenance: 'Maintenance',
     chat: 'Chat',
     newChat: 'New Chat',
     createChat: 'Create Chat',
@@ -43,6 +44,18 @@ export default {
     otherSources: 'Other sources',
     noSessions: 'No conversations yet',
     loadMoreSessions: 'Load more',
+  },
+  maintenance: {
+    placeholder: 'This feature will be enabled in its implementation phase',
+    pages: {
+      dashboard: 'Dashboard',
+      masterData: 'Master Data',
+      scenarios: 'Scenarios',
+      calculations: 'Calculations',
+      inventoryGap: 'Inventory Gaps',
+      reviews: 'Reviews',
+      reports: 'Reports',
+    },
   },
   chatHeader: {
     moreActions: 'More conversation actions',
