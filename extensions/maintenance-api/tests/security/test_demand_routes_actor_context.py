@@ -6,9 +6,11 @@ from pathlib import Path
 import pytest
 from app.models import (
     DemandCalculation,
+    DemandScenarioTemplate,
     RepairProfile,
     SparePart,
 )
+from app.security.actor import MaintenanceRole
 from app.security.dependencies import get_actor
 from sqlalchemy import select
 
@@ -21,6 +23,31 @@ _API_ROOT = (
 )
 
 _ROUTE_FUNCTIONS = {
+    "scenarios.py": {
+        "create_scenario",
+        "list_scenarios",
+        "get_scenario",
+        "update_scenario",
+        "delete_scenario",
+        "create_version",
+        "list_versions",
+        "get_version",
+        "update_version",
+        "validate_version",
+        "publish_version",
+        "clone_version",
+        "retire_version",
+        "full_version",
+        "add_stage",
+        "add_fleet_group",
+        "add_age_group",
+        "add_fleet_usage",
+        "add_override",
+        "add_shock",
+    },
+    "comparisons.py": {
+        "compare",
+    },
     "calculations.py": {
         "preview",
         "submit",
@@ -47,6 +74,8 @@ _ROUTE_FUNCTIONS = {
 }
 
 _SERVICE_NAMES = {
+    "scenarios.py": "scenario_service",
+    "comparisons.py": "calculation_service",
     "calculations.py": "calculation_service",
     "repair_profiles.py": "repair_service",
 }
@@ -78,6 +107,12 @@ def _functions(
 def _has_actor_parameter(
     function: ast.FunctionDef,
 ) -> bool:
+    accepted = {
+        "ActorDep",
+        "ViewerDep",
+        "ContributorDep",
+        "AdminDep",
+    }
     arguments = [
         *function.args.posonlyargs,
         *function.args.args,
@@ -86,7 +121,8 @@ def _has_actor_parameter(
     return any(
         argument.arg == "actor"
         and argument.annotation is not None
-        and ast.unparse(argument.annotation) == "ActorDep"
+        and ast.unparse(argument.annotation)
+        in accepted
         for argument in arguments
     )
 
@@ -460,3 +496,302 @@ def test_repair_routes_ignore_untrusted_tenant_and_hide_other_tenant(
         )
     )
     assert deleted.status_code == 404
+
+
+def test_demand_success_responses_include_actor_metadata(
+) -> None:
+    failures: list[str] = []
+
+    for filename in _ROUTE_FUNCTIONS:
+        functions = _functions(_tree(filename))
+        for name in _ROUTE_FUNCTIONS[filename]:
+            function = functions[name]
+            calls = [
+                node
+                for node in ast.walk(function)
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "success_response"
+                )
+            ]
+            for call in calls:
+                has_actor = any(
+                    keyword.arg == "actor"
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id == "actor"
+                    for keyword in call.keywords
+                )
+                if not has_actor:
+                    failures.append(
+                        f"{filename}:{name}:{call.lineno}"
+                    )
+
+    assert failures == [], "\n".join(failures)
+
+_SCENARIO_COMPARISON_ROLES = {
+    "scenarios.py": {
+        "list_scenarios": "ViewerDep",
+        "get_scenario": "ViewerDep",
+        "list_versions": "ViewerDep",
+        "get_version": "ViewerDep",
+        "full_version": "ViewerDep",
+        "create_scenario": "ContributorDep",
+        "update_scenario": "ContributorDep",
+        "create_version": "ContributorDep",
+        "update_version": "ContributorDep",
+        "validate_version": "ContributorDep",
+        "clone_version": "ContributorDep",
+        "add_stage": "ContributorDep",
+        "add_fleet_group": "ContributorDep",
+        "add_age_group": "ContributorDep",
+        "add_fleet_usage": "ContributorDep",
+        "add_override": "ContributorDep",
+        "add_shock": "ContributorDep",
+        "delete_scenario": "AdminDep",
+        "publish_version": "AdminDep",
+        "retire_version": "AdminDep",
+    },
+    "comparisons.py": {
+        "compare": "ViewerDep",
+    },
+}
+
+
+def _actor_annotation(
+    function: ast.FunctionDef,
+) -> str | None:
+    for argument in [
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    ]:
+        if (
+            argument.arg == "actor"
+            and argument.annotation is not None
+        ):
+            return ast.unparse(argument.annotation)
+    return None
+
+
+def test_scenario_and_comparison_use_exact_role_aliases(
+) -> None:
+    failures: list[str] = []
+
+    for filename, expected in (
+        _SCENARIO_COMPARISON_ROLES.items()
+    ):
+        functions = _functions(_tree(filename))
+        for name, alias in expected.items():
+            actual = _actor_annotation(functions[name])
+            if actual != alias:
+                failures.append(
+                    f"{filename}:{name}: "
+                    f"expected={alias}, actual={actual}"
+                )
+
+    assert failures == [], "\n".join(failures)
+
+
+def test_scenario_and_comparison_metadata_is_actor_aware(
+) -> None:
+    failures: list[str] = []
+
+    for filename, expected in (
+        _SCENARIO_COMPARISON_ROLES.items()
+    ):
+        functions = _functions(_tree(filename))
+        for name in expected:
+            calls = [
+                node
+                for node in ast.walk(functions[name])
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "success_response"
+                )
+            ]
+            for call in calls:
+                has_actor = any(
+                    keyword.arg == "actor"
+                    and isinstance(
+                        keyword.value,
+                        ast.Name,
+                    )
+                    and keyword.value.id == "actor"
+                    for keyword in call.keywords
+                )
+                if not has_actor:
+                    failures.append(
+                        f"{filename}:{name}:{call.lineno}"
+                    )
+
+    assert failures == [], "\n".join(failures)
+
+
+def test_scenario_route_roles_tenant_and_metadata(
+    authenticated_client,
+    session,
+    actor_context,
+) -> None:
+    viewer = actor_context(
+        tenant_id="tenant-a",
+        user_id="viewer-a",
+        role=MaintenanceRole.VIEWER,
+        request_id="request-viewer-a",
+    )
+    _use_actor(authenticated_client, viewer)
+
+    listed = authenticated_client.get(
+        "/api/v1/demand/scenarios"
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["meta"] == {
+        "request_id": "request-viewer-a",
+        "tenant_id": "tenant-a",
+        "version": None,
+    }
+
+    denied = authenticated_client.post(
+        "/api/v1/demand/scenarios",
+        json={
+            "code": "SC-VIEWER",
+            "name": "viewer cannot create",
+        },
+    )
+    assert denied.status_code == 403
+
+    contributor = actor_context(
+        tenant_id="tenant-a",
+        user_id="contributor-a",
+        role=MaintenanceRole.CONTRIBUTOR,
+        request_id="request-contributor-a",
+    )
+    _use_actor(authenticated_client, contributor)
+    created = authenticated_client.post(
+        "/api/v1/demand/scenarios?tenant_id=tenant-b",
+        headers={
+            "X-Tenant-ID": "tenant-b",
+        },
+        json={
+            "tenant_id": "tenant-b",
+            "code": "SC-TENANT",
+            "name": "tenant scenario",
+        },
+    )
+    assert created.status_code == 201, created.text
+    scenario_id = created.json()["data"]["id"]
+    assert created.json()["meta"]["tenant_id"] == "tenant-a"
+    assert created.json()["meta"]["request_id"] == (
+        "request-contributor-a"
+    )
+
+    session.expire_all()
+    scenario = session.scalar(
+        select(DemandScenarioTemplate).where(
+            DemandScenarioTemplate.id == scenario_id
+        )
+    )
+    assert scenario is not None
+    assert scenario.tenant_id == "tenant-a"
+
+    contributor_delete = authenticated_client.delete(
+        f"/api/v1/demand/scenarios/{scenario_id}"
+    )
+    assert contributor_delete.status_code == 403
+
+    other_tenant = actor_context(
+        tenant_id="tenant-b",
+        user_id="viewer-b",
+        role=MaintenanceRole.VIEWER,
+    )
+    _use_actor(authenticated_client, other_tenant)
+    hidden = authenticated_client.get(
+        f"/api/v1/demand/scenarios/{scenario_id}"
+    )
+    assert hidden.status_code == 404
+
+    admin = actor_context(
+        tenant_id="tenant-a",
+        user_id="admin-a",
+        role=MaintenanceRole.ADMIN,
+        request_id="request-admin-a",
+    )
+    _use_actor(authenticated_client, admin)
+    deleted = authenticated_client.delete(
+        f"/api/v1/demand/scenarios/{scenario_id}"
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["meta"]["tenant_id"] == "tenant-a"
+
+
+def test_comparison_route_hides_other_tenant(
+    authenticated_client,
+    session,
+    actor_context,
+) -> None:
+    actor_a = actor_context(
+        tenant_id="tenant-a",
+        user_id="contributor-a",
+        role=MaintenanceRole.CONTRIBUTOR,
+        request_id="request-compare-a",
+    )
+    spare = SparePart(
+        code="SP-COMPARE",
+        name="comparison spare",
+        unit="piece",
+        is_repairable=False,
+        tenant_id="tenant-a",
+    )
+    session.add(spare)
+    session.commit()
+    session.refresh(spare)
+
+    _use_actor(authenticated_client, actor_a)
+    first_payload = _calculation_payload(spare)
+    second_payload = _calculation_payload(spare)
+    first_payload["calculation_name"] = "comparison left"
+    second_payload["calculation_name"] = "comparison right"
+
+    first = authenticated_client.post(
+        "/api/v1/demand/calculations",
+        json=first_payload,
+    )
+    second = authenticated_client.post(
+        "/api/v1/demand/calculations",
+        json=second_payload,
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    left_id = first.json()["data"]["id"]
+    right_id = second.json()["data"]["id"]
+
+    same_tenant = authenticated_client.post(
+        "/api/v1/demand/comparisons",
+        json={
+            "left_calculation_id": left_id,
+            "right_calculation_id": right_id,
+        },
+    )
+    assert same_tenant.status_code == 200, same_tenant.text
+    assert same_tenant.json()["meta"] == {
+        "request_id": "request-compare-a",
+        "tenant_id": "tenant-a",
+        "version": None,
+    }
+
+    actor_b = actor_context(
+        tenant_id="tenant-b",
+        user_id="viewer-b",
+        role=MaintenanceRole.VIEWER,
+    )
+    _use_actor(authenticated_client, actor_b)
+    hidden = authenticated_client.post(
+        "/api/v1/demand/comparisons",
+        json={
+            "left_calculation_id": left_id,
+            "right_calculation_id": right_id,
+        },
+    )
+    assert hidden.status_code == 404
