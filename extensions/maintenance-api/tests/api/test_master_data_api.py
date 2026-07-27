@@ -18,26 +18,74 @@ def test_simple_resource_crud(
     payload,
     internal_auth_headers,
 ) -> None:
-    headers = internal_auth_headers(
+    contributor_headers = internal_auth_headers(
+        tenant_id="tenant-a",
+        user_id="contributor-a",
         role=MaintenanceRole.CONTRIBUTOR,
+        request_id="request-master-contributor",
     )
-    created = client.post(f"/api/v1/master-data/{path}", json=payload, headers=headers)
+    created = client.post(
+        f"/api/v1/master-data/{path}",
+        json=payload,
+        headers=contributor_headers,
+    )
     assert created.status_code == 201, created.text
+    assert created.json()["meta"]["tenant_id"] == "tenant-a"
+    assert created.json()["meta"]["request_id"] == (
+        "request-master-contributor"
+    )
+    assert created.json()["meta"]["version"] == 1
     identifier = created.json()["data"]["id"]
-    listed = client.get(f"/api/v1/master-data/{path}", headers=headers)
+
+    listed = client.get(
+        f"/api/v1/master-data/{path}",
+        headers=contributor_headers,
+    )
     assert listed.status_code == 200
     assert listed.json()["data"]["total"] == 1
-    fetched = client.get(f"/api/v1/master-data/{path}/{identifier}", headers=headers)
+    assert listed.json()["meta"]["tenant_id"] == "tenant-a"
+
+    fetched = client.get(
+        f"/api/v1/master-data/{path}/{identifier}",
+        headers=contributor_headers,
+    )
     assert fetched.status_code == 200
+    assert fetched.json()["meta"]["request_id"] == (
+        "request-master-contributor"
+    )
+
     deactivated = client.patch(
         f"/api/v1/master-data/{path}/{identifier}/active",
         json={"is_active": False},
-        headers=headers,
+        headers=contributor_headers,
     )
     assert deactivated.status_code == 200
-    deleted = client.delete(f"/api/v1/master-data/{path}/{identifier}", headers=headers)
-    assert deleted.status_code == 200
+    assert deactivated.json()["meta"]["version"] >= (
+        created.json()["meta"]["version"]
+    )
 
+    contributor_delete = client.delete(
+        f"/api/v1/master-data/{path}/{identifier}",
+        headers=contributor_headers,
+    )
+    assert contributor_delete.status_code == 403
+
+    admin_headers = internal_auth_headers(
+        tenant_id="tenant-a",
+        user_id="admin-a",
+        role=MaintenanceRole.ADMIN,
+        request_id="request-master-admin",
+    )
+    deleted = client.delete(
+        f"/api/v1/master-data/{path}/{identifier}",
+        headers=admin_headers,
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["meta"] == {
+        "request_id": "request-master-admin",
+        "tenant_id": "tenant-a",
+        "version": None,
+    }
 
 def test_configuration_api_flow(
     client,

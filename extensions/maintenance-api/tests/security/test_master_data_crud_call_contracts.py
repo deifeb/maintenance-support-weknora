@@ -173,7 +173,7 @@ HTTP_ROLE_DEPENDENCIES = {
     "post": "require_contributor",
     "put": "require_contributor",
     "patch": "require_contributor",
-    "delete": "require_contributor",
+    "delete": "require_admin",
 }
 
 
@@ -270,3 +270,41 @@ def test_master_data_routes_use_http_role_dependencies() -> None:
         "required HTTP-role ActorContext dependency:\n"
         + "\n".join(failures)
     )
+
+
+def test_master_data_success_responses_include_actor_metadata(
+) -> None:
+    failures: list[str] = []
+
+    for path in sorted(MASTER_DATA_ROOT.rglob("*.py")):
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        for function in tree.body:
+            if not isinstance(
+                function,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+            if _route_http_method(function) is None:
+                continue
+            for call in ast.walk(function):
+                if not (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "success_response"
+                ):
+                    continue
+                has_actor = any(
+                    keyword.arg == "actor"
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id == "actor"
+                    for keyword in call.keywords
+                )
+                if not has_actor:
+                    failures.append(
+                        f"{path}:{function.name}:{call.lineno}"
+                    )
+
+    assert failures == [], "\n".join(failures)

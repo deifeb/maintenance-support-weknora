@@ -294,3 +294,43 @@ def test_ai_routers_do_not_directly_load_tenant_rows() -> None:
             encoding="utf-8"
         )
         assert "session.get(" not in source
+
+
+def test_ai_success_responses_include_actor_metadata() -> None:
+    failures: list[str] = []
+
+    for path in AI_ROUTE_FILES:
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        for function in tree.body:
+            if not isinstance(
+                function,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+            if not any(
+                _is_router_endpoint(decorator)
+                for decorator in function.decorator_list
+            ):
+                continue
+            for call in ast.walk(function):
+                if not (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "success_response"
+                ):
+                    continue
+                has_actor = any(
+                    keyword.arg == "actor"
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id == "actor"
+                    for keyword in call.keywords
+                )
+                if not has_actor:
+                    failures.append(
+                        f"{path}:{function.name}:{call.lineno}"
+                    )
+
+    assert failures == [], "\n".join(failures)

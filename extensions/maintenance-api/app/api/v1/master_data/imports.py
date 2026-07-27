@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.responses import success_response
 from app.db.session import get_db_session
-from app.schemas.common import SuccessResponse
+from app.schemas.common import MaintenanceSuccessResponse
 from app.schemas.import_data import ImportExecutionResult, ImportValidationResult
 from app.security.actor import ActorContext
 from app.security.permissions import require_contributor, require_viewer
@@ -31,7 +31,7 @@ def download_template(
     )
 
 
-@router.post("/validate", response_model=SuccessResponse[ImportValidationResult])
+@router.post("/validate", response_model=MaintenanceSuccessResponse[ImportValidationResult])
 async def validate_import(
     session: SessionDep,
     actor: Annotated[ActorContext, Depends(require_contributor)],
@@ -43,10 +43,10 @@ async def validate_import(
         content=content,
         filename=file.filename or "upload.xlsx",
     )
-    return success_response(result, "Workbook validation completed")
+    return success_response(result, "Workbook validation completed", actor=actor)
 
 
-@router.post("/execute", response_model=SuccessResponse[ImportExecutionResult])
+@router.post("/execute", response_model=MaintenanceSuccessResponse[ImportExecutionResult])
 async def execute_import(
     session: SessionDep,
     actor: Annotated[ActorContext, Depends(require_contributor)],
@@ -58,4 +58,4 @@ async def execute_import(
         content=content,
         filename=file.filename or "upload.xlsx",
     )
-    return success_response(result, "Workbook imported")
+    return success_response(result, "Workbook imported", actor=actor)
