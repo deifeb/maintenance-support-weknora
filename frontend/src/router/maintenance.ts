@@ -26,6 +26,17 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         meta: { ...maintenanceRouteMeta },
       },
       {
+        path: 'master-data/configurations/:configurationId',
+        name: 'maintenanceConfigurationDetail',
+        component: () => import(
+          '@/views/maintenance/master-data/ConfigurationDetail.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
         path: 'scenarios',
         name: 'maintenanceScenarios',
         component: () => import('@/views/maintenance/scenarios/ScenarioList.vue'),

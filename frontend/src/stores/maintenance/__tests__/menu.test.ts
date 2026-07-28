@@ -37,10 +37,11 @@ test('maintenance routes expose stable names and dashboard redirect', () => {
   assert.equal(parent.path, 'maintenance')
   assert.equal(parent.name, 'maintenance')
   assert.equal(parent.redirect, '/platform/maintenance/dashboard')
-  assert.deepEqual(
-    parent.children?.map((route) => route.name),
-    expectedRouteNames,
-  )
+  const menuRoutes = (parent.children ?? [])
+    .filter((route) => route.meta?.hideInMaintenanceMenu !== true)
+    .map((route) => route.name)
+
+  assert.deepEqual(menuRoutes, expectedRouteNames)
 })
 
 test('all maintenance routes require authentication and initialization', () => {
@@ -58,17 +59,32 @@ test('all maintenance routes require authentication and initialization', () => {
 })
 
 test('maintenance menu and route definitions stay aligned', () => {
-  const routeNames = maintenanceRouteRecords[0].children?.map(
-    (route) => route.name,
-  )
+  const menuRoutes = (maintenanceRouteRecords[0].children ?? [])
+    .filter((route) => route.meta?.hideInMaintenanceMenu !== true)
+    .map((route) => route.name)
 
   assert.deepEqual(
     maintenanceMenuChildren.map((item) => item.routeName),
-    routeNames,
+    menuRoutes,
   )
   assert.ok(
     maintenanceMenuChildren.every(
       (item) => item.titleKey.startsWith('maintenance.pages.'),
     ),
   )
+})
+
+test('configuration detail route is authenticated and hidden from menu alignment', () => {
+  const children = maintenanceRouteRecords[0].children ?? []
+  const detail = children.find(
+    (route) => route.name === 'maintenanceConfigurationDetail',
+  )
+
+  assert.equal(
+    detail?.path,
+    'master-data/configurations/:configurationId',
+  )
+  assert.equal(detail?.meta?.requiresAuth, true)
+  assert.equal(detail?.meta?.requiresInit, true)
+  assert.equal(detail?.meta?.hideInMaintenanceMenu, true)
 })

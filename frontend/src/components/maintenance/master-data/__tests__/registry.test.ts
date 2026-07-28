@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { permissionsForRole } from '../../../../stores/maintenance/permission-matrix.ts'
@@ -6,6 +7,7 @@ import {
   AVAILABLE_MASTER_DATA_RESOURCES,
   MASTER_DATA_RESOURCE_KEYS,
   MASTER_DATA_RESOURCES,
+  isMasterDataResourceKey,
   serializeMasterDataForm,
 } from '../MasterDataRegistry.ts'
 import { createMasterDataApi } from '../../../../api/maintenance/master-data.ts'
@@ -202,4 +204,57 @@ test('master data API builds the backend paging query once', async () => {
   assert.deepEqual(calls, [
     '/v1/master-data/parts?page=2&page_size=50&keyword=pump&include_inactive=true&sort_by=name&sort_order=desc',
   ])
+})
+
+test('configuration resource declares its detail route', () => {
+  assert.deepEqual(MASTER_DATA_RESOURCES.configurations.detailRoute, {
+    name: 'maintenanceConfigurationDetail',
+    param: 'configurationId',
+  })
+})
+
+test('master data resource key guard accepts only scalar registry keys', () => {
+  assert.equal(isMasterDataResourceKey('configurations'), true)
+  assert.equal(isMasterDataResourceKey('spareParts'), true)
+  assert.equal(isMasterDataResourceKey('unknown'), false)
+  assert.equal(isMasterDataResourceKey(['spareParts']), false)
+})
+
+test('configuration row actions enforce draft-only generic editing', () => {
+  const contributor = permissionsForRole('contributor')
+  const configuration = MASTER_DATA_RESOURCES.configurations
+
+  assert.deepEqual(
+    configuration
+      .actions(contributor, { status: 'DRAFT' })
+      .map((action) => action.kind),
+    ['view', 'edit'],
+  )
+  assert.deepEqual(
+    configuration
+      .actions(contributor, { status: 'PUBLISHED' })
+      .map((action) => action.kind),
+    ['view'],
+  )
+  assert.deepEqual(
+    configuration
+      .actions(contributor, { status: 'RETIRED' })
+      .map((action) => action.kind),
+    ['view'],
+  )
+})
+
+test('master data list asks the registry for actions for each row', () => {
+  const source = readFileSync(
+    new URL(
+      '../../../../views/maintenance/master-data/MasterDataListPage.vue',
+      import.meta.url,
+    ),
+    'utf8',
+  )
+
+  assert.match(
+    source,
+    /props\.resource\.actions\(\s*permissionsStore\.permissions,\s*row,\s*\)/,
+  )
 })

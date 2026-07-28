@@ -146,6 +146,7 @@ import {
   ref,
   watch,
 } from 'vue'
+import { useRouter } from 'vue-router'
 
 import MaintenanceEmptyState from '@/components/maintenance/common/MaintenanceEmptyState.vue'
 import MaintenanceErrorState from '@/components/maintenance/common/MaintenanceErrorState.vue'
@@ -168,6 +169,7 @@ const props = defineProps<{
   resource: MasterDataResourceDefinition
 }>()
 
+const router = useRouter()
 const permissionsStore = useMaintenancePermissionsStore()
 const keywordDraft = ref('')
 const drawerOpen = ref(false)
@@ -239,7 +241,10 @@ watch(
 function actionsForRow(
   row: MasterDataRecord,
 ): MasterDataRowAction[] {
-  return currentActions.value.filter((action) => {
+  return props.resource.actions(
+    permissionsStore.permissions,
+    row,
+  ).filter((action) => {
     if (action.kind !== 'deactivate') {
       return true
     }
@@ -276,6 +281,23 @@ async function handleRowAction(
 ): Promise<void> {
   actionError.value = null
 
+  const identifier = recordIdentifier(row)
+  const detailRoute = props.resource.detailRoute
+
+  if (
+    action.kind === 'view'
+    && detailRoute
+    && identifier !== null
+  ) {
+    await router.push({
+      name: detailRoute.name,
+      params: {
+        [detailRoute.param]: identifier,
+      },
+    })
+    return
+  }
+
   if (action.kind === 'view') {
     drawerMode.value = 'view'
     selectedRecord.value = row
@@ -284,13 +306,20 @@ async function handleRowAction(
   }
 
   if (action.kind === 'edit') {
+    const canEdit = props.resource
+      .actions(permissionsStore.permissions, row)
+      .some((candidate) => candidate.kind === 'edit')
+
+    if (!canEdit) {
+      return
+    }
+
     drawerMode.value = 'edit'
     selectedRecord.value = row
     drawerOpen.value = true
     return
   }
 
-  const identifier = recordIdentifier(row)
   if (identifier === null || !props.resource.operations.deactivate) {
     return
   }
@@ -308,7 +337,24 @@ async function handleRowAction(
 }
 
 async function saveRecord(values: MasterDataRecord): Promise<void> {
-  if (saving.value || drawerMode.value === 'view') {
+  const canEditSelected = (
+    drawerMode.value !== 'edit'
+    || (
+      selectedRecord.value !== null
+      && props.resource
+        .actions(
+          permissionsStore.permissions,
+          selectedRecord.value,
+        )
+        .some((action) => action.kind === 'edit')
+    )
+  )
+
+  if (
+    saving.value
+    || drawerMode.value === 'view'
+    || !canEditSelected
+  ) {
     return
   }
 

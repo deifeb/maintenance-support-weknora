@@ -77,6 +77,13 @@ export interface MasterDataOperations {
   deactivate: boolean
 }
 
+export interface MasterDataDetailRoute {
+  name:
+    | 'maintenanceConfigurationDetail'
+    | 'maintenanceSparePartDetail'
+  param: 'configurationId' | 'sparePartId'
+}
+
 export interface MasterDataResourceDefinition<
   T extends MasterDataRecord = MasterDataRecord,
 > {
@@ -87,13 +94,22 @@ export interface MasterDataResourceDefinition<
   description: string
   endpoint: string
   rowKey: keyof T & string
+  detailRoute?: MasterDataDetailRoute
   availability: MasterDataAvailability
   operations: MasterDataOperations
   writeCapability: MasterDataWriteCapability
   columns: Array<MasterDataColumn<T>>
   form: Array<MasterDataFormField<T>>
-  actions: (permissions: MaintenancePermissions) => MasterDataRowAction[]
+  actions: (
+    permissions: MaintenancePermissions,
+    record?: MasterDataRecord,
+  ) => MasterDataRowAction[]
 }
+
+type MasterDataRowActionFilter = (
+  action: MasterDataRowAction,
+  record: MasterDataRecord,
+) => boolean
 
 const ACTIVE_OPERATIONS: Readonly<MasterDataOperations> = {
   list: true,
@@ -113,8 +129,12 @@ function standardActions(
   operations: MasterDataOperations,
   availability: MasterDataAvailability,
   writeCapability: MasterDataWriteCapability,
-): (permissions: MaintenancePermissions) => MasterDataRowAction[] {
-  return (permissions) => {
+  rowActionFilter?: MasterDataRowActionFilter,
+): (
+  permissions: MaintenancePermissions,
+  record?: MasterDataRecord,
+) => MasterDataRowAction[] {
+  return (permissions, record) => {
     const actions: MasterDataRowAction[] = [
       { key: 'view', kind: 'view', label: '查看' },
     ]
@@ -131,7 +151,13 @@ function standardActions(
       actions.push({ key: 'deactivate', kind: 'deactivate', label: '停用' })
     }
 
-    return actions
+    if (!record || !rowActionFilter) {
+      return actions
+    }
+
+    return actions.filter(
+      (action) => rowActionFilter(action, record),
+    )
   }
 }
 
@@ -141,17 +167,24 @@ function defineResource(
     'actions' | 'writeCapability'
   > & {
     writeCapability?: MasterDataWriteCapability
+    rowActionFilter?: MasterDataRowActionFilter
   },
 ): MasterDataResourceDefinition {
-  const writeCapability = definition.writeCapability ?? 'editMasterData'
+  const {
+    writeCapability: requestedWriteCapability,
+    rowActionFilter,
+    ...resource
+  } = definition
+  const writeCapability = requestedWriteCapability ?? 'editMasterData'
 
   return {
-    ...definition,
+    ...resource,
     writeCapability,
     actions: standardActions(
-      definition.operations,
-      definition.availability,
+      resource.operations,
+      resource.availability,
       writeCapability,
+      rowActionFilter,
     ),
   }
 }
@@ -220,8 +253,16 @@ export const MASTER_DATA_RESOURCES: Readonly<
     description: '维护设备配置版本及其生效状态。配置树将在后续专用页面中提供。',
     endpoint: '/v1/master-data/configuration-versions',
     rowKey: 'id',
+    detailRoute: {
+      name: 'maintenanceConfigurationDetail',
+      param: 'configurationId',
+    },
     availability: 'available',
     operations: activeOperations({ deactivate: false }),
+    rowActionFilter: (action, record) => (
+      action.kind !== 'edit'
+      || record.status === 'DRAFT'
+    ),
     columns: [
       { key: 'version_code', title: '版本编码', titleKey: 'versionCode', sortable: true },
       { key: 'version_name', title: '版本名称', titleKey: 'versionName', sortable: true },
@@ -644,6 +685,18 @@ export const AVAILABLE_MASTER_DATA_RESOURCES = Object.freeze(
     (resource) => resource.availability === 'available',
   ),
 )
+
+export function isMasterDataResourceKey(
+  value: unknown,
+): value is MasterDataResourceKey {
+  return (
+    typeof value === 'string'
+    && Object.prototype.hasOwnProperty.call(
+      MASTER_DATA_RESOURCES,
+      value,
+    )
+  )
+}
 
 export function getMasterDataResource(
   key: string,

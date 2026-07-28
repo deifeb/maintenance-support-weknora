@@ -50,17 +50,48 @@
 import {
   computed,
   ref,
+  watch,
 } from 'vue'
+import {
+  useRoute,
+  useRouter,
+} from 'vue-router'
 
 import MaintenancePageHeader from '@/components/maintenance/common/MaintenancePageHeader.vue'
 import {
   MASTER_DATA_RESOURCE_LIST,
   MASTER_DATA_RESOURCES,
+  isMasterDataResourceKey,
   type MasterDataResourceKey,
 } from '@/components/maintenance/master-data/MasterDataRegistry'
 import MasterDataListPage from './MasterDataListPage.vue'
 
-const selectedKey = ref<MasterDataResourceKey>('equipmentModels')
+const route = useRoute()
+const router = useRouter()
+
+const selectedKey = ref<MasterDataResourceKey>(
+  isMasterDataResourceKey(route.query.resource)
+    ? route.query.resource
+    : 'equipmentModels',
+)
+
+watch(selectedKey, async (resource) => {
+  await router.replace({
+    query: {
+      ...route.query,
+      resource,
+    },
+  })
+})
+
+watch(
+  () => route.query.resource,
+  (resource) => {
+    selectedKey.value = isMasterDataResourceKey(resource)
+      ? resource
+      : 'equipmentModels'
+  },
+)
 
 const groups = [
   {
