@@ -323,6 +323,10 @@ export const MASTER_DATA_RESOURCES: Readonly<
     description: '维护备件目录、关键属性和默认服务水平。',
     endpoint: '/v1/master-data/spare-parts',
     rowKey: 'id',
+    detailRoute: {
+      name: 'maintenanceSparePartDetail',
+      param: 'sparePartId',
+    },
     availability: 'available',
     operations: activeOperations(),
     columns: [

@@ -1,9 +1,13 @@
 import {
+  buildQuery,
   maintenanceGet,
   maintenancePost,
   maintenancePut,
 } from './client'
-import type { MaintenanceResult } from './types'
+import type {
+  MaintenanceResult,
+  PageData,
+} from './types'
 
 export type DecimalValue = number | string
 export type ConfigurationStatus = 'DRAFT' | 'PUBLISHED' | 'RETIRED'
@@ -194,6 +198,22 @@ const defaultMasterDataDetailsClient: DetailApiClient = {
   put: maintenancePut,
 }
 
+
+function sparePartListPath(
+  endpoint: string,
+  sparePartId: number,
+): string {
+  const query = buildQuery({
+    page: 1,
+    page_size: 200,
+    include_inactive: true,
+    sort_by: 'id',
+    sort_order: 'asc',
+    spare_part_id: sparePartId,
+  })
+  return `${endpoint}?${query}`
+}
+
 export function createMasterDataDetailsApi(
   client: DetailApiClient = defaultMasterDataDetailsClient,
 ) {
@@ -242,6 +262,48 @@ export function createMasterDataDetailsApi(
       return client.put<ConfigurationTreeNodeRecord>(
         `/v1/master-data/configuration-items/${configurationItemId}`,
         body,
+      )
+    },
+
+
+    getSparePart(
+      sparePartId: number,
+    ): Promise<MaintenanceResult<SparePartDetailRecord>> {
+      return client.get<SparePartDetailRecord>(
+        `/v1/master-data/spare-parts/${sparePartId}`,
+      )
+    },
+
+    listSparePartInventory(
+      sparePartId: number,
+    ): Promise<MaintenanceResult<PageData<InventoryDetailRecord>>> {
+      return client.get<PageData<InventoryDetailRecord>>(
+        sparePartListPath(
+          '/v1/master-data/inventories',
+          sparePartId,
+        ),
+      )
+    },
+
+    listSparePartReliability(
+      sparePartId: number,
+    ): Promise<MaintenanceResult<PageData<ReliabilityDetailRecord>>> {
+      return client.get<PageData<ReliabilityDetailRecord>>(
+        sparePartListPath(
+          '/v1/master-data/reliability-profiles',
+          sparePartId,
+        ),
+      )
+    },
+
+    listSparePartSupply(
+      sparePartId: number,
+    ): Promise<MaintenanceResult<PageData<SupplierOfferDetailRecord>>> {
+      return client.get<PageData<SupplierOfferDetailRecord>>(
+        sparePartListPath(
+          '/v1/master-data/supplier-offers',
+          sparePartId,
+        ),
       )
     },
   }

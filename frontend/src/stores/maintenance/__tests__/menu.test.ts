@@ -88,3 +88,19 @@ test('configuration detail route is authenticated and hidden from menu alignment
   assert.equal(detail?.meta?.requiresInit, true)
   assert.equal(detail?.meta?.hideInMaintenanceMenu, true)
 })
+
+
+test('spare-part detail route is authenticated and hidden from menu alignment', () => {
+  const children = maintenanceRouteRecords[0].children ?? []
+  const detail = children.find(
+    (route) => route.name === 'maintenanceSparePartDetail',
+  )
+
+  assert.equal(
+    detail?.path,
+    'master-data/spare-parts/:sparePartId',
+  )
+  assert.equal(detail?.meta?.requiresAuth, true)
+  assert.equal(detail?.meta?.requiresInit, true)
+  assert.equal(detail?.meta?.hideInMaintenanceMenu, true)
+})

@@ -136,3 +136,23 @@ test('configuration item writes use explicit item endpoints', async () => {
     },
   ])
 })
+
+test('spare-part loaders use only existing filtered endpoints', async () => {
+  const { client, calls } = recordingClient()
+  const api = createMasterDataDetailsApi(client)
+
+  await api.getSparePart(41)
+  await api.listSparePartInventory(41)
+  await api.listSparePartReliability(41)
+  await api.listSparePartSupply(41)
+
+  assert.deepEqual(
+    calls.map((call) => call.path),
+    [
+      '/v1/master-data/spare-parts/41',
+      '/v1/master-data/inventories?page=1&page_size=200&include_inactive=true&sort_by=id&sort_order=asc&spare_part_id=41',
+      '/v1/master-data/reliability-profiles?page=1&page_size=200&include_inactive=true&sort_by=id&sort_order=asc&spare_part_id=41',
+      '/v1/master-data/supplier-offers?page=1&page_size=200&include_inactive=true&sort_by=id&sort_order=asc&spare_part_id=41',
+    ],
+  )
+})

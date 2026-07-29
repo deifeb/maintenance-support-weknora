@@ -258,3 +258,11 @@ test('master data list asks the registry for actions for each row', () => {
     /props\.resource\.actions\(\s*permissionsStore\.permissions,\s*row,\s*\)/,
   )
 })
+
+
+test('spare part resource declares its detail route', () => {
+  assert.deepEqual(MASTER_DATA_RESOURCES.spareParts.detailRoute, {
+    name: 'maintenanceSparePartDetail',
+    param: 'sparePartId',
+  })
+})

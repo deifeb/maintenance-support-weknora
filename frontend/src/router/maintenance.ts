@@ -37,6 +37,17 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'master-data/spare-parts/:sparePartId',
+        name: 'maintenanceSparePartDetail',
+        component: () => import(
+          '@/views/maintenance/master-data/SparePartDetail.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
         path: 'scenarios',
         name: 'maintenanceScenarios',
         component: () => import('@/views/maintenance/scenarios/ScenarioList.vue'),
