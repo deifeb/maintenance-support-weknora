@@ -36,9 +36,34 @@ export interface ImportWorkflow {
   execute(): Promise<void>
   retryStatus(): Promise<void>
   reset(resourceKey: string): void
+  cancel(): void
   setVisible(visible: boolean): void
   setActive(active: boolean): void
   subscribe(listener: (state: ImportWorkflowState) => void): () => void
+  dispose(): void
+}
+
+export interface ImportDialogObjectUrls {
+  createObjectURL(blob: Blob): string
+  revokeObjectURL(url: string): void
+}
+
+export interface ImportDialogLifecycleOptions {
+  workflow: Pick<ImportWorkflow, 'cancel' | 'dispose' | 'setVisible'>
+  api: Pick<MasterDataTransferApi, 'downloadTemplate' | 'downloadErrors'>
+  objectUrls: ImportDialogObjectUrls
+  triggerDownload: (url: string, filename: string) => void
+  onClose: () => void
+  onCompleted: () => void
+}
+
+export interface ImportDialogLifecycle {
+  deactivate(): void
+  close(): void
+  completed(): void
+  setVisible(visible: boolean): void
+  downloadTemplate(): Promise<void>
+  downloadErrors(taskId: string): Promise<void>
   dispose(): void
 }
 
@@ -84,6 +109,66 @@ function suggestedMapping(task: ImportTaskUploadResult): ImportMapping {
   return Object.fromEntries(
     task.sheets.map((sheet) => [sheet.name, { ...sheet.suggested_mapping }]),
   )
+}
+
+export function sanitizeImportDownloadTaskId(taskId: string): string {
+  const sanitized = taskId
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '')
+  return sanitized || 'task'
+}
+
+export function createImportDialogLifecycle(
+  options: ImportDialogLifecycleOptions,
+): ImportDialogLifecycle {
+  const urls = new Set<string>()
+  let disposed = false
+
+  function download(blob: Blob, filename: string): void {
+    const url = options.objectUrls.createObjectURL(blob)
+    urls.add(url)
+    try {
+      options.triggerDownload(url, filename)
+    } finally {
+      options.objectUrls.revokeObjectURL(url)
+      urls.delete(url)
+    }
+  }
+
+  function deactivate(): void {
+    if (!disposed) options.workflow.cancel()
+  }
+
+  return {
+    deactivate,
+    close(): void {
+      deactivate()
+      options.onClose()
+    },
+    completed(): void {
+      options.onCompleted()
+      deactivate()
+      options.onClose()
+    },
+    setVisible(visible: boolean): void {
+      if (!disposed) options.workflow.setVisible(visible)
+    },
+    async downloadTemplate(): Promise<void> {
+      download(await options.api.downloadTemplate(), 'master-data-import-template.xlsx')
+    },
+    async downloadErrors(taskId: string): Promise<void> {
+      const filename = `import-errors-${sanitizeImportDownloadTaskId(taskId)}.xlsx`
+      download(await options.api.downloadErrors(taskId), filename)
+    },
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      options.workflow.cancel()
+      urls.forEach((url) => options.objectUrls.revokeObjectURL(url))
+      urls.clear()
+      options.workflow.dispose()
+    },
+  }
 }
 
 export function createImportWorkflow(
@@ -245,12 +330,17 @@ export function createImportWorkflow(
     dispatch({ type: 'RESOURCE_CHANGED', resourceKey })
   }
 
+  function cancel(): void {
+    reset(state.resourceKey)
+  }
+
   function subscribe(listener: (nextState: ImportWorkflowState) => void): () => void {
     listeners.add(listener)
     return () => listeners.delete(listener)
   }
 
   function dispose(): void {
+    cancel()
     disposed = true
     stopPolling()
     selectedFile = null
@@ -267,6 +357,7 @@ export function createImportWorkflow(
     execute,
     retryStatus,
     reset,
+    cancel,
     setVisible: (visible) => poller?.setVisible(visible),
     setActive: (active) => poller?.setActive(active),
     subscribe,

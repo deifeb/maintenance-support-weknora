@@ -7,7 +7,10 @@ import type {
 } from '@/api/maintenance/imports.ts'
 import type { MaintenanceClientError, MaintenanceResult } from '@/api/maintenance/types.ts'
 import type { ImportTaskPolling, ImportTaskPollingOptions } from '../useImportTaskPolling.ts'
-import { createImportWorkflow } from '../import-workflow.ts'
+import {
+  createImportDialogLifecycle,
+  createImportWorkflow,
+} from '../import-workflow.ts'
 
 function result<T>(data: T): MaintenanceResult<T> {
   return { data, meta: { request_id: 'request-1', tenant_id: 'server-only' } }
@@ -92,12 +95,13 @@ test('workflow uploads the selected file, previews edited mappings, confirms, ex
 test('workflow invalidates stale requests, maps missing tasks to expired, and retains actionable errors', async () => {
   let resolveUpload: ((value: MaintenanceResult<ImportTaskUploadResult>) => void) | undefined
   let getTaskError: MaintenanceClientError | undefined
+  let previewError = error(422, 'INVALID_MAPPING')
   const workflow = createImportWorkflow({
     resourceKey: 'parts',
     api: {
       downloadTemplate: async () => new Blob(), downloadErrors: async () => new Blob(), exportResource: async () => new Blob(),
       uploadTask: () => new Promise((resolve) => { resolveUpload = resolve }),
-      previewTask: async () => { throw error(422, 'INVALID_MAPPING') },
+      previewTask: async () => { throw previewError },
       executeTask: async () => result(task('QUEUED')),
       getTask: async () => {
         if (getTaskError) throw getTaskError
@@ -123,6 +127,10 @@ test('workflow invalidates stale requests, maps missing tasks to expired, and re
   await workflow.preview()
   assert.equal(workflow.state.error?.status, 422)
   assert.equal(workflow.state.error?.retryable, false)
+  previewError = error(409, 'PREVIEW_CONFLICT')
+  await workflow.preview()
+  assert.equal(workflow.state.error?.status, 409)
+  assert.equal(workflow.state.error?.retryable, false)
 
   getTaskError = error(404, 'TASK_NOT_FOUND')
   await workflow.retryStatus()
@@ -142,4 +150,73 @@ test('workflow invalidates stale requests, maps missing tasks to expired, and re
   workflow.reset('parts')
   assert.equal(workflow.state.phase, 'selected')
   assert.equal(workflow.state.fileName, null)
+})
+
+test('invalid previews cannot be confirmed or executed', async () => {
+  const workflow = createImportWorkflow({
+    api: {
+      downloadTemplate: async () => new Blob(), downloadErrors: async () => new Blob(), exportResource: async () => new Blob(),
+      uploadTask: async () => result(upload()),
+      previewTask: async () => result(task('PREVIEW_INVALID', { can_execute: false })),
+      executeTask: async () => { assert.fail('invalid preview must not execute') },
+      getTask: async () => result(task('RUNNING')),
+    },
+  })
+  workflow.selectFile({ name: 'parts.xlsx' } as File)
+  await workflow.upload()
+  await workflow.preview()
+  workflow.confirm()
+  assert.equal(workflow.state.phase, 'previewed')
+  await assert.rejects(workflow.execute(), /confirmation/i)
+})
+
+test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits completion before close', async () => {
+  let pollOptions: ImportTaskPollingOptions | undefined
+  const visibility: boolean[] = []
+  const workflow = createImportWorkflow({
+    resourceKey: 'parts',
+    api: {
+      downloadTemplate: async () => new Blob(['template']), downloadErrors: async () => new Blob(['errors']), exportResource: async () => new Blob(),
+      uploadTask: async () => result(upload()), previewTask: async () => result(task('PREVIEW_VALID')),
+      executeTask: async () => result(task('RUNNING')), getTask: async () => result(task('RUNNING')),
+    },
+    createPoller: (options) => {
+      pollOptions = options
+      return { start: async () => undefined, stop: () => undefined, setVisible: (visible) => visibility.push(visible), setActive: () => undefined }
+    },
+  })
+  const events: string[] = []
+  const downloads: Array<[string, string]> = []
+  const revoked: string[] = []
+  const lifecycle = createImportDialogLifecycle({
+    workflow,
+    api: {
+      downloadTemplate: async () => new Blob(['template']), downloadErrors: async () => new Blob(['errors']), exportResource: async () => new Blob(),
+      uploadTask: async () => result(upload()), previewTask: async () => result(task('PREVIEW_VALID')),
+      executeTask: async () => result(task('RUNNING')), getTask: async () => result(task('RUNNING')),
+    },
+    objectUrls: { createObjectURL: () => 'blob:task', revokeObjectURL: (url) => revoked.push(url) },
+    triggerDownload: (url, filename) => downloads.push([url, filename]),
+    onCompleted: () => events.push('completed'), onClose: () => events.push('close'),
+  })
+
+  workflow.selectFile({ name: 'parts.xlsx' } as File)
+  await workflow.upload(); await workflow.preview(); workflow.confirm(); await workflow.execute()
+  assert.ok(pollOptions)
+  lifecycle.setVisible(false)
+  assert.deepEqual(visibility, [false])
+  lifecycle.close()
+  pollOptions.onTask(task('COMPLETED'))
+  assert.equal(workflow.state.phase, 'selected')
+  await lifecycle.downloadTemplate()
+  await lifecycle.downloadErrors('../../unsafe task:id')
+  assert.deepEqual(downloads, [
+    ['blob:task', 'master-data-import-template.xlsx'],
+    ['blob:task', 'import-errors-unsafe-task-id.xlsx'],
+  ])
+  assert.deepEqual(revoked, ['blob:task', 'blob:task'])
+  lifecycle.completed()
+  assert.deepEqual(events, ['close', 'completed', 'close'])
+  lifecycle.dispose()
+  assert.deepEqual(revoked, ['blob:task', 'blob:task'])
 })

@@ -12,10 +12,12 @@ test('import dialog source provides the complete permission-safe, lifecycle-safe
     source('ImportPreviewStep.vue'), source('ImportTaskResult.vue'),
   ])
 
-  for (const token of ['open: boolean', 'resourceKey: string', 'canImport: boolean', "(event: 'close')", "(event: 'completed')", 'downloadTemplate', 'downloadErrors', 'URL.createObjectURL', 'URL.revokeObjectURL', 'visibilitychange', 'removeEventListener', 'dispose', 'setVisible']) {
+  for (const token of ['open: boolean', 'resourceKey: string', 'canImport: boolean', "(event: 'close')", "(event: 'completed')", 'downloadTemplate', 'downloadErrors', 'createImportDialogLifecycle', 'visibilitychange', 'removeEventListener', 'dispose', 'setVisible']) {
     assert.match(dialog, new RegExp(token.replaceAll('.', '\\.')))
   }
   assert.match(dialog, /canImport/)
+  assert.match(dialog, /canConfirmImport/)
+  assert.match(dialog, /canExecuteImport/)
   assert.doesNotMatch(dialog, /tenant_id|tenantId|Maintenance API|VITE_MAINTENANCE|Authorization/i)
   assert.match(mapping, /source_headers/)
   assert.match(mapping, /suggested_mapping/)

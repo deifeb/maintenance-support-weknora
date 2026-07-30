@@ -15,7 +15,7 @@
         <ImportPreviewStep v-if="previewTask && ['previewed', 'confirmed'].includes(snapshot.phase)" :task="previewTask" />
         <section v-if="snapshot.phase === 'uploaded' || snapshot.phase === 'previewed' || snapshot.phase === 'confirmed'" class="master-data-import-dialog__actions">
           <t-button v-if="snapshot.phase === 'uploaded'" theme="primary" @click="run(workflow.preview)">Validate preview</t-button>
-          <template v-else><label><input type="checkbox" :checked="snapshot.confirmed" :disabled="snapshot.phase === 'confirmed'" @change="workflow.confirm"> I have reviewed the preview and want to execute this import.</label><t-button theme="primary" :disabled="snapshot.phase !== 'confirmed'" @click="run(workflow.execute)">Execute import</t-button></template>
+          <template v-else><label><input type="checkbox" :checked="snapshot.confirmed" :disabled="!canConfirm && !snapshot.confirmed" @change="workflow.confirm"> I have reviewed the preview and want to execute this import.</label><t-button theme="primary" :disabled="!canExecute" @click="run(workflow.execute)">Execute import</t-button></template>
           <t-button v-if="previewTask?.errors.length" variant="outline" @click="downloadErrors">Download error workbook</t-button>
           <t-button variant="outline" @click="startOver">Choose another file</t-button>
         </section>
@@ -28,23 +28,49 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MaintenanceErrorState from '@/components/maintenance/common/MaintenanceErrorState.vue'
-import type { ImportTaskUploadResult, ImportTaskView } from '@/api/maintenance/imports'
+import {
+  masterDataTransferApi,
+  type ImportTaskUploadResult,
+  type ImportTaskView,
+} from '@/api/maintenance/imports'
 import ImportMappingStep from './ImportMappingStep.vue'
 import ImportPreviewStep from './ImportPreviewStep.vue'
 import ImportTaskResult from './ImportTaskResult.vue'
-import { createImportWorkflow } from './import-workflow'
-import type { ImportPhase, ImportWorkflowState } from './import-state'
+import {
+  createImportDialogLifecycle,
+  createImportWorkflow,
+} from './import-workflow'
+import {
+  canConfirmImport,
+  canExecuteImport,
+  type ImportPhase,
+  type ImportWorkflowState,
+} from './import-state'
 
 const props = defineProps<{ open: boolean; resourceKey: string; canImport: boolean }>()
 const emit = defineEmits<{ (event: 'close'): void; (event: 'completed'): void }>()
 const workflow = createImportWorkflow({ resourceKey: props.resourceKey })
 const snapshot = ref<ImportWorkflowState>(workflow.state)
-const objectUrls = new Set<string>()
 const unsubscribe = workflow.subscribe((next) => { snapshot.value = next })
+const lifecycle = createImportDialogLifecycle({
+  workflow,
+  api: masterDataTransferApi,
+  objectUrls: URL,
+  triggerDownload: (url, filename) => {
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+  },
+  onClose: () => emit('close'),
+  onCompleted: () => emit('completed'),
+})
 
 const uploadTask = computed<ImportTaskUploadResult | null>(() => snapshot.value.task && !('can_execute' in snapshot.value.task) ? snapshot.value.task : null)
 const previewTask = computed<ImportTaskView | null>(() => snapshot.value.task && 'can_execute' in snapshot.value.task ? snapshot.value.task : null)
 const resultTask = computed(() => previewTask.value)
+const canConfirm = computed(() => canConfirmImport(snapshot.value))
+const canExecute = computed(() => canExecuteImport(snapshot.value))
 const resultPhase = computed<Extract<ImportPhase, 'queued' | 'running' | 'completed' | 'failed' | 'expired'> | null>(() => {
   const phase = snapshot.value.phase
   return ['queued', 'running', 'completed', 'failed', 'expired'].includes(phase)
@@ -55,18 +81,20 @@ const resultPhase = computed<Extract<ImportPhase, 'queued' | 'running' | 'comple
 function run(command: () => Promise<void>): void { void command() }
 function selectFile(event: Event): void { const file = (event.target as HTMLInputElement).files?.[0]; if (file) workflow.selectFile(file) }
 function startOver(): void { workflow.reset(props.resourceKey) }
-function close(): void { workflow.setActive(false); emit('close') }
-function completed(): void { workflow.setActive(false); emit('completed'); emit('close') }
+function close(): void { lifecycle.close() }
+function completed(): void { lifecycle.completed() }
 function retryError(): void { if (snapshot.value.task) run(workflow.retryStatus); else run(workflow.upload) }
-function downloadBlob(blob: Blob, filename: string): void { const url = URL.createObjectURL(blob); objectUrls.add(url); const link = document.createElement('a'); link.href = url; link.download = filename; link.click(); window.setTimeout(() => { URL.revokeObjectURL(url); objectUrls.delete(url) }, 0) }
-async function downloadTemplate(): Promise<void> { downloadBlob(await (await import('@/api/maintenance/imports')).masterDataTransferApi.downloadTemplate(), 'master-data-import-template.xlsx') }
-async function downloadErrors(): Promise<void> { if (snapshot.value.task) downloadBlob(await (await import('@/api/maintenance/imports')).masterDataTransferApi.downloadErrors(snapshot.value.task.task_id), `import-errors-${snapshot.value.task.task_id}.xlsx`) }
-function visibilityChanged(): void { workflow.setVisible(document.visibilityState === 'visible') }
+async function downloadTemplate(): Promise<void> { await lifecycle.downloadTemplate() }
+async function downloadErrors(): Promise<void> { if (snapshot.value.task) await lifecycle.downloadErrors(snapshot.value.task.task_id) }
+function visibilityChanged(): void { lifecycle.setVisible(document.visibilityState === 'visible') }
 
 watch(() => props.resourceKey, (resourceKey) => workflow.reset(resourceKey), { immediate: true })
-watch(() => [props.open, props.canImport], ([open, canImport]) => workflow.setActive(Boolean(open && canImport)), { immediate: true })
+watch(() => [props.open, props.canImport], ([open, canImport]) => {
+  if (open && canImport) workflow.setActive(true)
+  else lifecycle.deactivate()
+}, { immediate: true })
 onMounted(() => { document.addEventListener('visibilitychange', visibilityChanged); visibilityChanged() })
-onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); objectUrls.forEach((url) => URL.revokeObjectURL(url)); objectUrls.clear(); unsubscribe(); workflow.dispose() })
+onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); unsubscribe(); lifecycle.dispose() })
 </script>
 
 <style scoped>
