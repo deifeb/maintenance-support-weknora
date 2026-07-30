@@ -40,6 +40,20 @@ function error(status: number, code: string, retryable = false): MaintenanceClie
   return { status, code, message: code, retryable }
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve(value: T): void
+  reject(error: unknown): void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 test('workflow uploads the selected file, previews edited mappings, confirms, executes, and polls', async () => {
   const selected = { name: 'parts.xlsx' } as File
   const calls: unknown[] = []
@@ -197,6 +211,7 @@ test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits com
     },
     objectUrls: { createObjectURL: () => 'blob:task', revokeObjectURL: (url) => revoked.push(url) },
     triggerDownload: (url, filename) => downloads.push([url, filename]),
+    onError: () => assert.fail('unexpected lifecycle error'),
     onCompleted: () => events.push('completed'), onClose: () => events.push('close'),
   })
 
@@ -219,4 +234,102 @@ test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits com
   assert.deepEqual(events, ['close', 'completed', 'close'])
   lifecycle.dispose()
   assert.deepEqual(revoked, ['blob:task', 'blob:task'])
+})
+
+test('workflow serializes upload, preview, execute, and retry requests while exposing busy state', async () => {
+  const pendingUpload = deferred<MaintenanceResult<ImportTaskUploadResult>>()
+  const pendingPreview = deferred<MaintenanceResult<ImportTaskView>>()
+  const pendingExecute = deferred<MaintenanceResult<ImportTaskView>>()
+  const pendingStatus = deferred<MaintenanceResult<ImportTaskView>>()
+  const calls = { upload: 0, preview: 0, execute: 0, status: 0 }
+  const busy: boolean[] = []
+  const workflow = createImportWorkflow({
+    api: {
+      downloadTemplate: async () => new Blob(), downloadErrors: async () => new Blob(), exportResource: async () => new Blob(),
+      uploadTask: async () => { calls.upload += 1; return pendingUpload.promise },
+      previewTask: async () => { calls.preview += 1; return pendingPreview.promise },
+      executeTask: async () => { calls.execute += 1; return pendingExecute.promise },
+      getTask: async () => { calls.status += 1; return pendingStatus.promise },
+    },
+    createPoller: () => ({ start: async () => undefined, stop: () => undefined, setVisible: () => undefined, setActive: () => undefined }),
+  })
+  workflow.subscribe((_state, isBusy) => busy.push(isBusy))
+
+  workflow.selectFile({ name: 'parts.xlsx' } as File)
+  const uploads = [workflow.upload(), workflow.upload()]
+  assert.equal(calls.upload, 1)
+  assert.equal(workflow.busy, true)
+  pendingUpload.resolve(result(upload()))
+  await Promise.all(uploads)
+  assert.equal(workflow.busy, false)
+
+  const previews = [workflow.preview(), workflow.preview()]
+  assert.equal(calls.preview, 1)
+  pendingPreview.resolve(result(task('PREVIEW_VALID')))
+  await Promise.all(previews)
+
+  workflow.confirm()
+  const executes = [workflow.execute(), workflow.execute()]
+  assert.equal(calls.execute, 1)
+  pendingExecute.resolve(result(task('QUEUED')))
+  await Promise.all(executes)
+
+  const retries = [workflow.retryStatus(), workflow.retryStatus()]
+  assert.equal(calls.status, 1)
+  pendingStatus.resolve(result(task('RUNNING')))
+  await Promise.all(retries)
+  assert.equal(workflow.busy, false)
+  assert.ok(busy.includes(true))
+  assert.equal(busy.at(-1), false)
+})
+
+test('lifecycle shares the workflow request gate and reports normalized download errors without rejection', async () => {
+  const pendingUpload = deferred<MaintenanceResult<ImportTaskUploadResult>>()
+  let uploadCalls = 0
+  let templateCalls = 0
+  let errorDownloadCalls = 0
+  const reported: MaintenanceClientError[] = []
+  const workflow = createImportWorkflow({
+    api: {
+      downloadTemplate: async () => new Blob(), downloadErrors: async () => new Blob(), exportResource: async () => new Blob(),
+      uploadTask: async () => { uploadCalls += 1; return pendingUpload.promise },
+      previewTask: async () => result(task('PREVIEW_VALID')), executeTask: async () => result(task('QUEUED')),
+      getTask: async () => result(task('RUNNING')),
+    },
+  })
+  const lifecycle = createImportDialogLifecycle({
+    workflow,
+    api: {
+      downloadTemplate: async () => { templateCalls += 1; throw new Error('offline') },
+      downloadErrors: async () => { errorDownloadCalls += 1; throw error(503, 'DOWNLOAD_UNAVAILABLE', true) },
+    },
+    objectUrls: { createObjectURL: () => 'unused', revokeObjectURL: () => undefined },
+    triggerDownload: () => assert.fail('failed downloads must not trigger'),
+    onError: (next) => reported.push(next),
+    onCompleted: () => undefined,
+    onClose: () => undefined,
+  })
+
+  workflow.selectFile({ name: 'parts.xlsx' } as File)
+  const uploading = workflow.upload()
+  await lifecycle.downloadTemplate()
+  assert.equal(uploadCalls, 1)
+  assert.equal(templateCalls, 0)
+  pendingUpload.resolve(result(upload()))
+  await uploading
+
+  await lifecycle.downloadTemplate()
+  await lifecycle.downloadErrors('task-1')
+  assert.equal(workflow.busy, false)
+  assert.equal(errorDownloadCalls, 1)
+  assert.deepEqual(reported.map((next) => [next.status, next.code, next.retryable]), [
+    [undefined, 'IMPORT_REQUEST_FAILED', true],
+    [503, 'DOWNLOAD_UNAVAILABLE', true],
+  ])
+
+  lifecycle.reportWorkflowError(reported[1])
+  lifecycle.reportWorkflowError(reported[1])
+  lifecycle.reportWorkflowError(null)
+  lifecycle.reportWorkflowError(reported[1])
+  assert.equal(reported.length, 4)
 })

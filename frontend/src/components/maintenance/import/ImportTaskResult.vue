@@ -3,7 +3,7 @@
     <template v-if="phase === 'queued' || phase === 'running'"><h3>{{ phase === 'queued' ? 'Import queued' : 'Import running' }}</h3><p>The import is processing. This dialog refreshes its status automatically.</p></template>
     <template v-else-if="phase === 'completed'"><h3>Import completed</h3><p v-if="task.result">{{ task.result.total_rows }} rows processed.</p><dl v-if="task.result"><template v-for="(count, key) in task.result.created" :key="`created-${key}`"><dt>Created {{ key }}</dt><dd>{{ count }}</dd></template><template v-for="(count, key) in task.result.updated" :key="`updated-${key}`"><dt>Updated {{ key }}</dt><dd>{{ count }}</dd></template></dl><t-button theme="primary" @click="$emit('completed')">Done</t-button></template>
     <template v-else-if="phase === 'expired'"><h3>Import task expired</h3><p>Start a new upload; expired tasks cannot be resumed.</p><t-button @click="$emit('start-over')">Upload a new file</t-button></template>
-    <template v-else><h3>Import failed</h3><p>{{ task.error_message || 'The import could not be completed.' }}</p><t-button v-if="task.error_code" theme="primary" variant="outline" @click="$emit('retry-status')">Retry status</t-button><t-button variant="outline" @click="$emit('start-over')">Upload a corrected file</t-button></template>
+    <template v-else><h3>Import failed</h3><p>{{ task.error_message || 'The import could not be completed.' }}</p><t-button v-if="task.error_code" theme="primary" variant="outline" :disabled="busy" @click="$emit('retry-status')">Retry status</t-button><t-button variant="outline" @click="$emit('start-over')">Upload a corrected file</t-button></template>
   </section>
 </template>
 
@@ -11,7 +11,7 @@
 import type { ImportPhase } from './import-state'
 import type { ImportTaskView } from '@/api/maintenance/imports'
 
-defineProps<{ phase: Extract<ImportPhase, 'queued' | 'running' | 'completed' | 'failed' | 'expired'>; task: ImportTaskView }>()
+defineProps<{ phase: Extract<ImportPhase, 'queued' | 'running' | 'completed' | 'failed' | 'expired'>; task: ImportTaskView; busy: boolean }>()
 defineEmits<{ (event: 'completed'): void; (event: 'retry-status'): void; (event: 'start-over'): void }>()
 </script>
 

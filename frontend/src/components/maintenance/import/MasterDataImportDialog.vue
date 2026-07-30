@@ -3,23 +3,24 @@
     <section class="master-data-import-dialog__panel" role="dialog" aria-modal="true" aria-labelledby="master-data-import-title">
       <header><div><span>{{ resourceKey }}</span><h2 id="master-data-import-title">Import Excel data</h2></div><button type="button" aria-label="Close" @click="close">×</button></header>
       <main>
-        <MaintenanceErrorState v-if="snapshot.error" :error="snapshot.error" title="Import request needs attention" @retry="retryError" />
+        <MaintenanceErrorState v-if="displayError" :error="displayError" title="Import request needs attention" />
+        <t-button v-if="snapshot.error?.retryable" variant="outline" :disabled="busy" @click="retryError">Retry request</t-button>
         <section v-if="snapshot.phase === 'idle' || snapshot.phase === 'selected'" class="master-data-import-dialog__upload">
           <p>Download the current template, then select the completed workbook.</p>
-          <t-button variant="outline" @click="downloadTemplate">Download template</t-button>
-          <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="selectFile">
+          <t-button variant="outline" :disabled="busy" @click="downloadTemplate">Download template</t-button>
+          <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :disabled="busy" @change="selectFile">
           <strong v-if="snapshot.fileName">{{ snapshot.fileName }}</strong>
-          <t-button theme="primary" :disabled="!snapshot.fileName" @click="run(workflow.upload)">Upload and inspect</t-button>
+          <t-button theme="primary" :disabled="busy || !snapshot.fileName" @click="run(workflow.upload)">Upload and inspect</t-button>
         </section>
-        <ImportMappingStep v-else-if="snapshot.phase === 'uploaded' && uploadTask" :sheets="uploadTask.sheets" :mapping="snapshot.mapping" @mapping-change="workflow.setMapping" />
+        <ImportMappingStep v-else-if="snapshot.phase === 'uploaded' && uploadTask" :sheets="uploadTask.sheets" :mapping="snapshot.mapping" :disabled="busy" @mapping-change="workflow.setMapping" />
         <ImportPreviewStep v-if="previewTask && ['previewed', 'confirmed'].includes(snapshot.phase)" :task="previewTask" />
         <section v-if="snapshot.phase === 'uploaded' || snapshot.phase === 'previewed' || snapshot.phase === 'confirmed'" class="master-data-import-dialog__actions">
-          <t-button v-if="snapshot.phase === 'uploaded'" theme="primary" @click="run(workflow.preview)">Validate preview</t-button>
-          <template v-else><label><input type="checkbox" :checked="snapshot.confirmed" :disabled="!canConfirm && !snapshot.confirmed" @change="workflow.confirm"> I have reviewed the preview and want to execute this import.</label><t-button theme="primary" :disabled="!canExecute" @click="run(workflow.execute)">Execute import</t-button></template>
-          <t-button v-if="previewTask?.errors.length" variant="outline" @click="downloadErrors">Download error workbook</t-button>
+          <t-button v-if="snapshot.phase === 'uploaded'" theme="primary" :disabled="busy" @click="run(workflow.preview)">Validate preview</t-button>
+          <template v-else><label><input type="checkbox" :checked="snapshot.confirmed" :disabled="busy || (!canConfirm && !snapshot.confirmed)" @change="workflow.confirm"> I have reviewed the preview and want to execute this import.</label><t-button theme="primary" :disabled="busy || !canExecute" @click="run(workflow.execute)">Execute import</t-button></template>
+          <t-button v-if="previewTask?.errors.length" variant="outline" :disabled="busy" @click="downloadErrors">Download error workbook</t-button>
           <t-button variant="outline" @click="startOver">Choose another file</t-button>
         </section>
-        <ImportTaskResult v-if="resultTask && resultPhase" :phase="resultPhase" :task="resultTask" @completed="completed" @retry-status="run(workflow.retryStatus)" @start-over="startOver" />
+        <ImportTaskResult v-if="resultTask && resultPhase" :phase="resultPhase" :task="resultTask" :busy="busy" @completed="completed" @retry-status="run(workflow.retryStatus)" @start-over="startOver" />
       </main>
     </section>
   </div>
@@ -33,12 +34,14 @@ import {
   type ImportTaskUploadResult,
   type ImportTaskView,
 } from '@/api/maintenance/imports'
+import type { MaintenanceClientError } from '@/api/maintenance/types'
 import ImportMappingStep from './ImportMappingStep.vue'
 import ImportPreviewStep from './ImportPreviewStep.vue'
 import ImportTaskResult from './ImportTaskResult.vue'
 import {
   createImportDialogLifecycle,
   createImportWorkflow,
+  normalizeImportWorkflowError,
 } from './import-workflow'
 import {
   canConfirmImport,
@@ -48,10 +51,16 @@ import {
 } from './import-state'
 
 const props = defineProps<{ open: boolean; resourceKey: string; canImport: boolean }>()
-const emit = defineEmits<{ (event: 'close'): void; (event: 'completed'): void }>()
+const emit = defineEmits<{
+  (event: 'close'): void
+  (event: 'completed'): void
+  (event: 'error', error: MaintenanceClientError): void
+}>()
 const workflow = createImportWorkflow({ resourceKey: props.resourceKey })
 const snapshot = ref<ImportWorkflowState>(workflow.state)
-const unsubscribe = workflow.subscribe((next) => { snapshot.value = next })
+const workflowBusy = ref(workflow.busy)
+const commandBusy = ref(false)
+const busy = computed(() => commandBusy.value || workflowBusy.value)
 const lifecycle = createImportDialogLifecycle({
   workflow,
   api: masterDataTransferApi,
@@ -62,8 +71,14 @@ const lifecycle = createImportDialogLifecycle({
     link.download = filename
     link.click()
   },
+  onError: (error) => emit('error', error),
   onClose: () => emit('close'),
   onCompleted: () => emit('completed'),
+})
+const unsubscribe = workflow.subscribe((next, isBusy) => {
+  snapshot.value = next
+  workflowBusy.value = isBusy
+  lifecycle.reportWorkflowError(next.error)
 })
 
 const uploadTask = computed<ImportTaskUploadResult | null>(() => snapshot.value.task && !('can_execute' in snapshot.value.task) ? snapshot.value.task : null)
@@ -71,6 +86,9 @@ const previewTask = computed<ImportTaskView | null>(() => snapshot.value.task &&
 const resultTask = computed(() => previewTask.value)
 const canConfirm = computed(() => canConfirmImport(snapshot.value))
 const canExecute = computed(() => canExecuteImport(snapshot.value))
+const displayError = computed(() => snapshot.value.error === null
+  ? null
+  : { ...snapshot.value.error, retryable: false })
 const resultPhase = computed<Extract<ImportPhase, 'queued' | 'running' | 'completed' | 'failed' | 'expired'> | null>(() => {
   const phase = snapshot.value.phase
   return ['queued', 'running', 'completed', 'failed', 'expired'].includes(phase)
@@ -78,14 +96,27 @@ const resultPhase = computed<Extract<ImportPhase, 'queued' | 'running' | 'comple
     : null
 })
 
-function run(command: () => Promise<void>): void { void command() }
+async function run(command: () => Promise<void>): Promise<void> {
+  if (busy.value) return
+  commandBusy.value = true
+  try {
+    await command()
+  } catch (error) {
+    emit('error', normalizeImportWorkflowError(error))
+  } finally {
+    commandBusy.value = false
+  }
+}
 function selectFile(event: Event): void { const file = (event.target as HTMLInputElement).files?.[0]; if (file) workflow.selectFile(file) }
 function startOver(): void { workflow.reset(props.resourceKey) }
 function close(): void { lifecycle.close() }
 function completed(): void { lifecycle.completed() }
-function retryError(): void { if (snapshot.value.task) run(workflow.retryStatus); else run(workflow.upload) }
-async function downloadTemplate(): Promise<void> { await lifecycle.downloadTemplate() }
-async function downloadErrors(): Promise<void> { if (snapshot.value.task) await lifecycle.downloadErrors(snapshot.value.task.task_id) }
+function retryError(): void { void run(snapshot.value.task ? workflow.retryStatus : workflow.upload) }
+function downloadTemplate(): void { void run(lifecycle.downloadTemplate) }
+function downloadErrors(): void {
+  const taskId = snapshot.value.task?.task_id
+  if (taskId) void run(() => lifecycle.downloadErrors(taskId))
+}
 function visibilityChanged(): void { lifecycle.setVisible(document.visibilityState === 'visible') }
 
 watch(() => props.resourceKey, (resourceKey) => workflow.reset(resourceKey), { immediate: true })

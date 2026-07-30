@@ -28,6 +28,7 @@ export interface ImportWorkflowOptions {
 
 export interface ImportWorkflow {
   readonly state: ImportWorkflowState
+  readonly busy: boolean
   selectFile(file: File): void
   upload(): Promise<void>
   setMapping(sheet: string, source: string, target: string): void
@@ -39,7 +40,10 @@ export interface ImportWorkflow {
   cancel(): void
   setVisible(visible: boolean): void
   setActive(active: boolean): void
-  subscribe(listener: (state: ImportWorkflowState) => void): () => void
+  runExclusive<T>(operation: () => Promise<T>): Promise<T | undefined>
+  subscribe(
+    listener: (state: ImportWorkflowState, busy: boolean) => void,
+  ): () => void
   dispose(): void
 }
 
@@ -49,10 +53,14 @@ export interface ImportDialogObjectUrls {
 }
 
 export interface ImportDialogLifecycleOptions {
-  workflow: Pick<ImportWorkflow, 'cancel' | 'dispose' | 'setVisible'>
+  workflow: Pick<
+    ImportWorkflow,
+    'busy' | 'cancel' | 'dispose' | 'runExclusive' | 'setVisible'
+  >
   api: Pick<MasterDataTransferApi, 'downloadTemplate' | 'downloadErrors'>
   objectUrls: ImportDialogObjectUrls
   triggerDownload: (url: string, filename: string) => void
+  onError: (error: MaintenanceClientError) => void
   onClose: () => void
   onCompleted: () => void
 }
@@ -64,10 +72,11 @@ export interface ImportDialogLifecycle {
   setVisible(visible: boolean): void
   downloadTemplate(): Promise<void>
   downloadErrors(taskId: string): Promise<void>
+  reportWorkflowError(error: MaintenanceClientError | null): void
   dispose(): void
 }
 
-function asMaintenanceError(error: unknown): MaintenanceClientError {
+export function normalizeImportWorkflowError(error: unknown): MaintenanceClientError {
   if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
     return error as MaintenanceClientError
   }
@@ -123,6 +132,7 @@ export function createImportDialogLifecycle(
 ): ImportDialogLifecycle {
   const urls = new Set<string>()
   let disposed = false
+  let lastWorkflowError: MaintenanceClientError | null = null
 
   function download(blob: Blob, filename: string): void {
     const url = options.objectUrls.createObjectURL(blob)
@@ -137,6 +147,19 @@ export function createImportDialogLifecycle(
 
   function deactivate(): void {
     if (!disposed) options.workflow.cancel()
+  }
+
+  async function requestDownload(
+    request: () => Promise<Blob>,
+    filename: string,
+  ): Promise<void> {
+    await options.workflow.runExclusive(async () => {
+      try {
+        download(await request(), filename)
+      } catch (error) {
+        options.onError(normalizeImportWorkflowError(error))
+      }
+    })
   }
 
   return {
@@ -154,11 +177,23 @@ export function createImportDialogLifecycle(
       if (!disposed) options.workflow.setVisible(visible)
     },
     async downloadTemplate(): Promise<void> {
-      download(await options.api.downloadTemplate(), 'master-data-import-template.xlsx')
+      await requestDownload(
+        options.api.downloadTemplate,
+        'master-data-import-template.xlsx',
+      )
     },
     async downloadErrors(taskId: string): Promise<void> {
       const filename = `import-errors-${sanitizeImportDownloadTaskId(taskId)}.xlsx`
-      download(await options.api.downloadErrors(taskId), filename)
+      await requestDownload(() => options.api.downloadErrors(taskId), filename)
+    },
+    reportWorkflowError(error: MaintenanceClientError | null): void {
+      if (error === null) {
+        lastWorkflowError = null
+        return
+      }
+      if (error === lastWorkflowError) return
+      lastWorkflowError = error
+      options.onError(error)
     },
     dispose(): void {
       if (disposed) return
@@ -176,14 +211,18 @@ export function createImportWorkflow(
 ): ImportWorkflow {
   const api = options.api ?? masterDataTransferApi
   const pollerFactory = options.createPoller ?? createImportTaskPolling
-  const listeners = new Set<(state: ImportWorkflowState) => void>()
+  const listeners = new Set<(
+    state: ImportWorkflowState,
+    busy: boolean,
+  ) => void>()
   let state = createImportState(options.resourceKey ?? '')
   let selectedFile: File | null = null
   let poller: ImportTaskPolling | null = null
   let disposed = false
+  let requestBusy = false
 
   function publish(): void {
-    listeners.forEach((listener) => listener(state))
+    listeners.forEach((listener) => listener(state, requestBusy))
   }
 
   function dispatch(event: Parameters<typeof importReducer>[1]): void {
@@ -210,7 +249,7 @@ export function createImportWorkflow(
     taskId: string | undefined,
     rawError: unknown,
   ): void {
-    const error = asMaintenanceError(rawError)
+    const error = normalizeImportWorkflowError(rawError)
     if (taskId && isMissingTask(error) && state.task?.task_id === taskId) {
       dispatch({
         type: 'TASK_UPDATED', generation, taskId, task: expiredTask(state.task),
@@ -239,20 +278,37 @@ export function createImportWorkflow(
     dispatch({ type: 'FILE_SELECTED', fileName: file.name })
   }
 
-  async function upload(): Promise<void> {
+  async function runExclusive<T>(
+    operation: () => Promise<T>,
+  ): Promise<T | undefined> {
+    if (requestBusy || disposed) return undefined
+    requestBusy = true
+    publish()
+    try {
+      return await operation()
+    } finally {
+      requestBusy = false
+      publish()
+    }
+  }
+
+  function upload(): Promise<void> {
     if (!selectedFile) {
-      throw new Error('Select a file before uploading.')
+      return Promise.reject(new Error('Select a file before uploading.'))
     }
     const generation = state.generation
-    try {
-      const task = (await api.uploadTask(selectedFile)).data
-      dispatch({ type: 'TASK_UPLOADED', generation, task })
-      if (state.generation === generation && state.task?.task_id === task.task_id) {
-        dispatch({ type: 'MAPPING_CHANGED', mapping: suggestedMapping(task) })
+    const file = selectedFile
+    return runExclusive(async () => {
+      try {
+        const task = (await api.uploadTask(file)).data
+        dispatch({ type: 'TASK_UPLOADED', generation, task })
+        if (state.generation === generation && state.task?.task_id === task.task_id) {
+          dispatch({ type: 'MAPPING_CHANGED', mapping: suggestedMapping(task) })
+        }
+      } catch (error) {
+        applyTaskFailure(generation, undefined, error)
       }
-    } catch (error) {
-      applyTaskFailure(generation, undefined, error)
-    }
+    }).then(() => undefined)
   }
 
   function setMapping(sheet: string, source: string, target: string): void {
@@ -265,55 +321,62 @@ export function createImportWorkflow(
     dispatch({ type: 'MAPPING_CHANGED', mapping })
   }
 
-  async function preview(): Promise<void> {
+  function preview(): Promise<void> {
     const request = taskForRequest()
-    if (!request) throw new Error('Upload a file before previewing.')
-    try {
-      const task = (await api.previewTask(request.taskId, state.mapping)).data
-      dispatch({ type: 'TASK_UPDATED', ...request, task })
-    } catch (error) {
-      applyTaskFailure(request.generation, request.taskId, error)
-    }
+    if (!request) return Promise.reject(new Error('Upload a file before previewing.'))
+    const mapping = state.mapping
+    return runExclusive(async () => {
+      try {
+        const task = (await api.previewTask(request.taskId, mapping)).data
+        dispatch({ type: 'TASK_UPDATED', ...request, task })
+      } catch (error) {
+        applyTaskFailure(request.generation, request.taskId, error)
+      }
+    }).then(() => undefined)
   }
 
   function confirm(): void {
     dispatch({ type: 'CONFIRMED' })
   }
 
-  async function execute(): Promise<void> {
+  function execute(): Promise<void> {
     if (!canExecuteImport(state)) {
-      throw new Error('Explicit confirmation is required before execution.')
+      return Promise.reject(new Error('Explicit confirmation is required before execution.'))
     }
     const request = taskForRequest()
-    if (!request) throw new Error('No import task is available for execution.')
-    try {
-      const task = (await api.executeTask(request.taskId)).data
-      dispatch({ type: 'TASK_UPDATED', ...request, task })
-      if (
-        !disposed
-        && state.generation === request.generation
-        && state.task?.task_id === request.taskId
-      ) startPolling(request.generation, request.taskId)
-    } catch (error) {
-      applyTaskFailure(request.generation, request.taskId, error)
-    }
+    if (!request) return Promise.reject(new Error('No import task is available for execution.'))
+    return runExclusive(async () => {
+      try {
+        const task = (await api.executeTask(request.taskId)).data
+        dispatch({ type: 'TASK_UPDATED', ...request, task })
+        if (
+          !disposed
+          && state.generation === request.generation
+          && state.task?.task_id === request.taskId
+        ) startPolling(request.generation, request.taskId)
+      } catch (error) {
+        applyTaskFailure(request.generation, request.taskId, error)
+      }
+    }).then(() => undefined)
   }
 
-  async function retryStatus(): Promise<void> {
+  function retryStatus(): Promise<void> {
     const request = taskForRequest()
-    if (!request) return
-    try {
-      const task = (await api.getTask(request.taskId)).data
-      dispatch({ type: 'TASK_UPDATED', ...request, task })
-      if (
-        !disposed
-        && state.generation === request.generation
-        && state.task?.task_id === request.taskId
-        && !['COMPLETED', 'FAILED', 'EXPIRED'].includes(task.status.toUpperCase())
-      ) startPolling(request.generation, request.taskId)
-    } catch (error) {
-      applyTaskFailure(request.generation, request.taskId, error)
-    }
+    if (!request) return Promise.resolve()
+    return runExclusive(async () => {
+      try {
+        const task = (await api.getTask(request.taskId)).data
+        dispatch({ type: 'TASK_UPDATED', ...request, task })
+        if (
+          !disposed
+          && state.generation === request.generation
+          && state.task?.task_id === request.taskId
+          && !['COMPLETED', 'FAILED', 'EXPIRED'].includes(task.status.toUpperCase())
+        ) startPolling(request.generation, request.taskId)
+      } catch (error) {
+        applyTaskFailure(request.generation, request.taskId, error)
+      }
+    }).then(() => undefined)
   }
 
   function reset(resourceKey: string): void {
@@ -334,7 +397,9 @@ export function createImportWorkflow(
     reset(state.resourceKey)
   }
 
-  function subscribe(listener: (nextState: ImportWorkflowState) => void): () => void {
+  function subscribe(
+    listener: (nextState: ImportWorkflowState, busy: boolean) => void,
+  ): () => void {
     listeners.add(listener)
     return () => listeners.delete(listener)
   }
@@ -349,6 +414,7 @@ export function createImportWorkflow(
 
   return {
     get state() { return state },
+    get busy() { return requestBusy },
     selectFile,
     upload,
     setMapping,
@@ -358,6 +424,7 @@ export function createImportWorkflow(
     retryStatus,
     reset,
     cancel,
+    runExclusive,
     setVisible: (visible) => poller?.setVisible(visible),
     setActive: (active) => poller?.setActive(active),
     subscribe,
