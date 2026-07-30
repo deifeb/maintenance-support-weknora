@@ -139,6 +139,44 @@ test('transfer errors are normalized and reported to the page error path', async
   assert.deepEqual(harness.busy, [true, false])
 })
 
+test('a pending export cannot download into a newer resource after it resolves', async () => {
+  let resolveExport: ((blob: Blob) => void) | undefined
+  const pendingExport = new Promise<Blob>((resolve) => { resolveExport = resolve })
+  const harness = createHarness({
+    api: { exportResource: async () => pendingExport },
+  })
+
+  const exporting = harness.actions.exportCurrentResults()
+  await Promise.resolve()
+  harness.setGeneration(5)
+  harness.setResource('suppliers')
+  resolveExport?.(new Blob(['old parts export']))
+  await exporting
+
+  assert.deepEqual(harness.downloads, [])
+  assert.deepEqual(harness.errors, [])
+  assert.deepEqual(harness.busy, [true, false])
+})
+
+test('a rejected stale export cannot surface an error in a newer resource', async () => {
+  let rejectExport: ((reason?: unknown) => void) | undefined
+  const pendingExport = new Promise<Blob>((_resolve, reject) => { rejectExport = reject })
+  const harness = createHarness({
+    api: { exportResource: async () => pendingExport },
+  })
+
+  const exporting = harness.actions.exportCurrentResults()
+  await Promise.resolve()
+  harness.setGeneration(5)
+  harness.setResource('suppliers')
+  rejectExport?.(new Error('old parts export failed'))
+  await exporting
+
+  assert.deepEqual(harness.downloads, [])
+  assert.deepEqual(harness.errors, [])
+  assert.deepEqual(harness.busy, [true, false])
+})
+
 test('completion refreshes only the resource and generation that opened the dialog', async () => {
   const harness = createHarness()
 
@@ -197,4 +235,16 @@ test('page wires dialog error events into actionError and uses the injected cont
   assert.match(source, /@error="reportImportError"/)
   assert.match(source, /function reportImportError\(error: MaintenanceClientError\)/)
   assert.match(source, /actionError\.value\s*=\s*error/)
+})
+
+test('resource changes clear the prior page action error before resetting the dialog', () => {
+  const source = readFileSync(
+    new URL('../master-data/MasterDataListPage.vue', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(
+    source,
+    /closeDrawer\(\)\s*actionError\.value\s*=\s*null\s*importDialogOpen\.value\s*=\s*false/,
+  )
 })

@@ -309,6 +309,7 @@ watch(
   () => props.resource.key,
   async () => {
     closeDrawer()
+    actionError.value = null
     importDialogOpen.value = false
     importDialogToken.value = null
     importGeneration.value += 1

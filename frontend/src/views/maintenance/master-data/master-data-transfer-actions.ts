@@ -110,15 +110,29 @@ export function createMasterDataTransferActions(
   const normalizeError = options.normalizeError ?? normalizeMaintenanceError
   let busy = false
 
-  async function run(action: () => Promise<void>): Promise<void> {
+  function currentToken(): MasterDataTransferToken {
+    return {
+      resourceKey: options.getResource().key,
+      generation: options.getGeneration(),
+    }
+  }
+
+  async function run(
+    token: MasterDataTransferToken,
+    action: () => Promise<void>,
+  ): Promise<void> {
     if (busy) return
     busy = true
     options.onBusyChange(true)
     try {
       await action()
     } catch (value) {
-      options.onError(normalizeError(value))
+      if (sameToken(token, options)) {
+        options.onError(normalizeError(value))
+      }
     } finally {
+      // The current transfer remains the one that set this flag: a route
+      // change cannot start another transfer until this request settles.
       busy = false
       options.onBusyChange(false)
     }
@@ -126,22 +140,22 @@ export function createMasterDataTransferActions(
 
   return {
     downloadTemplate(): Promise<void> {
-      return run(async () => {
+      const token = currentToken()
+      return run(token, async () => {
         const blob = await options.api.downloadTemplate()
-        options.download(blob, 'master-data-import-template.xlsx')
+        if (sameToken(token, options)) {
+          options.download(blob, 'master-data-import-template.xlsx')
+        }
       })
     },
 
     exportCurrentResults(): Promise<void> {
+      const token = currentToken()
       const resource = options.getResource()
       const transfer = resource.transfer
-      const token: MasterDataTransferToken = {
-        resourceKey: resource.key,
-        generation: options.getGeneration(),
-      }
       if (!transfer) return Promise.resolve()
 
-      return run(async () => {
+      return run(token, async () => {
         const query = options.getQuery()
         const blob = await options.api.exportResource(transfer.exportKey, {
           keyword: query.keyword,
