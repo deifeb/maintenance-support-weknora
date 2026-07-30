@@ -60,6 +60,7 @@ export interface ImportDialogLifecycleOptions {
   api: Pick<MasterDataTransferApi, 'downloadTemplate' | 'downloadErrors'>
   objectUrls: ImportDialogObjectUrls
   triggerDownload: (url: string, filename: string) => void
+  defer?: (callback: () => void) => unknown
   onError: (error: MaintenanceClientError) => void
   onClose: () => void
   onCompleted: () => void
@@ -130,18 +131,23 @@ export function sanitizeImportDownloadTaskId(taskId: string): string {
 export function createImportDialogLifecycle(
   options: ImportDialogLifecycleOptions,
 ): ImportDialogLifecycle {
-  const urls = new Set<string>()
+  const urls: Array<{ url: string; revoked: boolean }> = []
   let disposed = false
   let lastWorkflowError: MaintenanceClientError | null = null
 
   function download(blob: Blob, filename: string): void {
     const url = options.objectUrls.createObjectURL(blob)
-    urls.add(url)
+    const pendingUrl = { url, revoked: false }
+    urls.push(pendingUrl)
     try {
       options.triggerDownload(url, filename)
     } finally {
-      options.objectUrls.revokeObjectURL(url)
-      urls.delete(url)
+      const defer = options.defer ?? ((callback: () => void) => globalThis.setTimeout(callback, 0))
+      defer(() => {
+        if (pendingUrl.revoked) return
+        pendingUrl.revoked = true
+        options.objectUrls.revokeObjectURL(url)
+      })
     }
   }
 
@@ -199,8 +205,12 @@ export function createImportDialogLifecycle(
       if (disposed) return
       disposed = true
       options.workflow.cancel()
-      urls.forEach((url) => options.objectUrls.revokeObjectURL(url))
-      urls.clear()
+      urls.forEach((pendingUrl) => {
+        if (pendingUrl.revoked) return
+        pendingUrl.revoked = true
+        options.objectUrls.revokeObjectURL(pendingUrl.url)
+      })
+      urls.length = 0
       options.workflow.dispose()
     },
   }
@@ -220,6 +230,8 @@ export function createImportWorkflow(
   let poller: ImportTaskPolling | null = null
   let disposed = false
   let requestBusy = false
+  let visible = true
+  let active = true
 
   function publish(): void {
     listeners.forEach((listener) => listener(state, requestBusy))
@@ -267,6 +279,8 @@ export function createImportWorkflow(
         dispatch({ type: 'TASK_UPDATED', generation, taskId, task })
       },
       onError: (error) => applyTaskFailure(generation, taskId, error),
+      initialVisible: visible,
+      initialActive: active,
     })
     poller = nextPoller
     void nextPoller.start()
@@ -425,8 +439,14 @@ export function createImportWorkflow(
     reset,
     cancel,
     runExclusive,
-    setVisible: (visible) => poller?.setVisible(visible),
-    setActive: (active) => poller?.setActive(active),
+    setVisible: (nextVisible) => {
+      visible = nextVisible
+      poller?.setVisible(nextVisible)
+    },
+    setActive: (nextActive) => {
+      active = nextActive
+      poller?.setActive(nextActive)
+    },
     subscribe,
     dispose,
   }

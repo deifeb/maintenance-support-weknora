@@ -29,3 +29,24 @@ func TestNonCGOJiebaFallbackCut(t *testing.T) {
 		t.Fatalf("Cut() = %v, want %v", got, want)
 	}
 }
+
+func TestNonCGOJiebaFallbackSearchTokenEdges(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"deduplicates repeated Han bigrams", "人人人", []string{"人人人", "人人"}},
+		{"splits punctuation separated Han", "甲乙，丙丁", []string{"甲乙", "甲乙", "丙丁", "丙丁"}},
+		{"keeps digits and accented Latin in their runs", "P-12 café", []string{"P", "12", "café"}},
+		{"keeps other Unicode letter runs", "Москва 東京", []string{"Москва", "東京", "東京"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Jieba.CutForSearch(tt.text, true); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("CutForSearch(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}

@@ -125,6 +125,27 @@ test('execute requires a valid preview and explicit confirmation', () => {
   assert.equal(canExecuteImport(importReducer(previewed, { type: 'CONFIRMED' })), false)
 })
 
+test('PREVIEW_INVALID remains previewed but cannot be confirmed or executed', () => {
+  const selected = importReducer(createImportState('parts'), {
+    type: 'FILE_SELECTED', fileName: 'parts.xlsx',
+  })
+  const uploaded = importReducer(selected, {
+    type: 'TASK_UPLOADED', generation: selected.generation,
+    task: {
+      task_id: 'task-1', status: 'UPLOADED', original_filename: 'parts.xlsx',
+      file_sha256: 'hash', template_version: 'v1', sheets: [], expires_at: 'tomorrow',
+    },
+  })
+  const invalid = importReducer(uploaded, {
+    type: 'TASK_UPDATED', generation: uploaded.generation, taskId: 'task-1',
+    task: task('PREVIEW_INVALID', { can_execute: false }),
+  })
+
+  assert.equal(invalid.phase, 'previewed')
+  assert.equal(canConfirmImport(invalid), false)
+  assert.equal(canExecuteImport(importReducer(invalid, { type: 'CONFIRMED' })), false)
+})
+
 test('a new file or resource invalidates prior tasks and stale results by identity', () => {
   const selected = importReducer(createImportState('parts'), {
     type: 'FILE_SELECTED',

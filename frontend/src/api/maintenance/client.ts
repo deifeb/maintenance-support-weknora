@@ -54,6 +54,25 @@ function retryableForStatus(status: number | undefined): boolean {
   )
 }
 
+function isJsonBlob(value: unknown): value is Blob {
+  return (
+    typeof Blob !== 'undefined'
+    && value instanceof Blob
+    && value.type.toLowerCase().includes('json')
+  )
+}
+
+async function decodeMaintenanceDownloadError(error: unknown): Promise<unknown> {
+  if (!isRecord(error) || !isJsonBlob(error.data)) return error
+  try {
+    const decoded: unknown = JSON.parse(await error.data.text())
+    if (!isRecord(decoded)) return error
+    return { ...decoded, ...error, status: error.status ?? decoded.status }
+  } catch {
+    return error
+  }
+}
+
 export function buildQuery(
   values: Record<string, QueryValue>,
 ): string {
@@ -194,7 +213,7 @@ export function createMaintenanceClient(
           responseType: 'blob',
         })
       } catch (error) {
-        throw normalizeMaintenanceError(error)
+        throw normalizeMaintenanceError(await decodeMaintenanceDownloadError(error))
       }
     },
     post<T>(path: string, body: unknown, config?: unknown) {

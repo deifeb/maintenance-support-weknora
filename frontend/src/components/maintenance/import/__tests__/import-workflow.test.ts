@@ -7,6 +7,7 @@ import type {
 } from '@/api/maintenance/imports.ts'
 import type { MaintenanceClientError, MaintenanceResult } from '@/api/maintenance/types.ts'
 import type { ImportTaskPolling, ImportTaskPollingOptions } from '../useImportTaskPolling.ts'
+import { createImportTaskPolling } from '../useImportTaskPolling.ts'
 import {
   createImportDialogLifecycle,
   createImportWorkflow,
@@ -184,6 +185,38 @@ test('invalid previews cannot be confirmed or executed', async () => {
   await assert.rejects(workflow.execute(), /confirmation/i)
 })
 
+test('execute poller inherits visibility and activity changes made while execution is pending', async () => {
+  for (const [setter, initialVisible, initialActive] of [
+    ['setVisible', false, true],
+    ['setActive', true, false],
+  ] as const) {
+    const pendingExecute = deferred<MaintenanceResult<ImportTaskView>>()
+    let loads = 0
+    const workflow = createImportWorkflow({
+      api: {
+        downloadTemplate: async () => new Blob(), downloadErrors: async () => new Blob(), exportResource: async () => new Blob(),
+        uploadTask: async () => result(upload()), previewTask: async () => result(task('PREVIEW_VALID')),
+        executeTask: async () => pendingExecute.promise,
+        getTask: async () => { loads += 1; return result(task('RUNNING')) },
+      },
+      createPoller: (options) => createImportTaskPolling(options),
+    })
+
+    workflow.selectFile({ name: 'parts.xlsx' } as File)
+    await workflow.upload(); await workflow.preview(); workflow.confirm()
+    const executing = workflow.execute()
+    workflow[setter](false)
+    pendingExecute.resolve(result(task('QUEUED')))
+    await executing
+    assert.equal(loads, 0, `${setter} must pause a poller created after execute resolves`)
+
+    workflow[setter](true)
+    await Promise.resolve()
+    assert.equal(loads, 1, `${setter} must resume the deferred poller immediately`)
+    workflow.dispose()
+  }
+})
+
 test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits completion before close', async () => {
   let pollOptions: ImportTaskPollingOptions | undefined
   const visibility: boolean[] = []
@@ -202,6 +235,7 @@ test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits com
   const events: string[] = []
   const downloads: Array<[string, string]> = []
   const revoked: string[] = []
+  const deferredRevokes: Array<() => void> = []
   const lifecycle = createImportDialogLifecycle({
     workflow,
     api: {
@@ -211,6 +245,7 @@ test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits com
     },
     objectUrls: { createObjectURL: () => 'blob:task', revokeObjectURL: (url) => revoked.push(url) },
     triggerDownload: (url, filename) => downloads.push([url, filename]),
+    defer: (callback) => deferredRevokes.push(callback),
     onError: () => assert.fail('unexpected lifecycle error'),
     onCompleted: () => events.push('completed'), onClose: () => events.push('close'),
   })
@@ -229,6 +264,9 @@ test('dialog lifecycle cancels stale polling, sanitizes downloads, and emits com
     ['blob:task', 'master-data-import-template.xlsx'],
     ['blob:task', 'import-errors-unsafe-task-id.xlsx'],
   ])
+  assert.deepEqual(revoked, [])
+  assert.equal(deferredRevokes.length, 2)
+  deferredRevokes.forEach((callback) => callback())
   assert.deepEqual(revoked, ['blob:task', 'blob:task'])
   lifecycle.completed()
   assert.deepEqual(events, ['close', 'completed', 'close'])

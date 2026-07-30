@@ -58,10 +58,16 @@ python -m ruff check app tests
 
 ### 浏览器边界与路由
 
-浏览器只调用 WeKnora 的相对路径 `/api/maintenance/*`。Go 应用在
-`/api/maintenance/*` 上完成登录态解析，并向 FastAPI 转发已签发的 actor JWT；
-FastAPI 负责租户边界、RBAC 和业务规则。浏览器不选择、发送或显示租户 ID，
-也不连接 Maintenance API 的 `8100` 端口，不持有内部签名密钥。
+浏览器只调用 WeKnora 的相对路径 `/api/maintenance/*`。传输 payload 和查询不会
+序列化 `tenant_id`；但共享 WeKnora adapter 可能附加当前选定工作区的 `X-Tenant-ID`。
+Go 在 `/api/maintenance/*` 上根据已认证 actor 上下文验证该值，剥离原始 header，
+再签发受信任的 actor JWT 并转发给 FastAPI。FastAPI 仅从该身份派生租户范围，负责
+RBAC 和业务规则。浏览器仍不直接连接 Maintenance API 的 `8100` 端口，也不持有内部签名密钥。
+
+For the protocol boundary: transfer payloads and queries never serialize `tenant_id`; the
+shared WeKnora adapter may attach the selected workspace as `X-Tenant-ID`. Go validates it
+against authenticated actor context, strips the raw header, and signs a trusted actor JWT.
+FastAPI derives tenant scope only from that identity.
 
 Maintenance 前端路由均要求初始化和认证：
 

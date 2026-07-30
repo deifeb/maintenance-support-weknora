@@ -98,6 +98,23 @@ test('marks transport and server errors as retryable', () => {
   )
 })
 
+test('normalization ignores malformed structured error field types', () => {
+  assert.deepEqual(
+    normalizeMaintenanceError({
+      status: '503',
+      code: { value: 'NOT_A_CODE' },
+      message: ['not a message'],
+      retryable: 'yes',
+      error: { code: 17, message: false },
+    }),
+    {
+      code: 'MAINTENANCE_CLIENT_ERROR',
+      message: 'Maintenance request failed',
+      retryable: true,
+    },
+  )
+})
+
 test('unwrap rejects a response without the required message', () => {
   assert.throws(
     () =>
@@ -275,6 +292,66 @@ test('maintenance client normalizes download failures', async () => {
         status: 503,
         code: 'EXPORT_UNAVAILABLE',
         message: 'Export service unavailable.',
+        retryable: true,
+      })
+      return true
+    },
+  )
+})
+
+test('maintenance client decodes JSON error blobs from the shared request interceptor shape', async () => {
+  const adapter: MaintenanceRequestAdapter = {
+    get: async <T>(): Promise<T> => {
+      throw {
+        status: 422,
+        data: new Blob([JSON.stringify({
+          error: { code: 'INVALID_EXPORT', message: 'The export cannot be generated.' },
+          meta: { request_id: 'blob-request-1' },
+        })], { type: 'application/json' }),
+      }
+    },
+    post: async <T>(): Promise<T> => undefined as T,
+    put: async <T>(): Promise<T> => undefined as T,
+    patch: async <T>(): Promise<T> => undefined as T,
+    del: async <T>(): Promise<T> => undefined as T,
+  }
+
+  await assert.rejects(
+    () => createMaintenanceClient(async () => adapter).download('/v1/master-data/exports/parts'),
+    (error: unknown) => {
+      assert.deepEqual(error, {
+        status: 422,
+        code: 'INVALID_EXPORT',
+        message: 'The export cannot be generated.',
+        request_id: 'blob-request-1',
+        retryable: false,
+      })
+      return true
+    },
+  )
+})
+
+test('maintenance client preserves the generic fallback for non-JSON error blobs', async () => {
+  const adapter: MaintenanceRequestAdapter = {
+    get: async <T>(): Promise<T> => {
+      throw {
+        status: 502,
+        data: new Blob(['gateway failure'], { type: 'text/plain' }),
+      }
+    },
+    post: async <T>(): Promise<T> => undefined as T,
+    put: async <T>(): Promise<T> => undefined as T,
+    patch: async <T>(): Promise<T> => undefined as T,
+    del: async <T>(): Promise<T> => undefined as T,
+  }
+
+  await assert.rejects(
+    () => createMaintenanceClient(async () => adapter).download('/v1/master-data/exports/parts'),
+    (error: unknown) => {
+      assert.deepEqual(error, {
+        status: 502,
+        code: 'MAINTENANCE_CLIENT_ERROR',
+        message: 'Maintenance request failed',
         retryable: true,
       })
       return true

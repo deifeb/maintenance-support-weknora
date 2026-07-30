@@ -179,6 +179,20 @@ test('README documents an executable Windows CurrentUser DPAPI secret workflow',
   assert.doesNotMatch(readme, /ProtectedData|DataProtectionScope/)
 })
 
+test('README documents the selected-workspace header trust boundary accurately', () => {
+  const readme = readFileSync(
+    new URL('../../../../../extensions/maintenance-api/README.md', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(readme, /transfer payloads and queries never serialize `tenant_id`/)
+  assert.match(readme, /shared WeKnora adapter may attach the selected workspace as `X-Tenant-ID`/)
+  assert.match(readme, /Go\s+validates it\s+against authenticated actor context/)
+  assert.match(readme, /strips the raw header/)
+  assert.match(readme, /signs a trusted actor JWT/)
+  assert.match(readme, /FastAPI derives tenant scope only from that identity/)
+})
+
 test('browser-facing transfer code contains no tenant selector, Maintenance base URL, or internal signing secret', () => {
   const transferSources = [
     new URL('../../../api/maintenance/imports.ts', import.meta.url),
