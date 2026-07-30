@@ -2,39 +2,199 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
-const source = readFileSync(
-  new URL('../master-data/MasterDataListPage.vue', import.meta.url),
-  'utf8',
-)
+import {
+  createMasterDataTransferActions,
+  createXlsxDownloadTrigger,
+  type MasterDataTransferApi,
+} from '../master-data/master-data-transfer-actions.ts'
 
-test('page renders registry-authorized template, export, and import actions', () => {
-  assert.match(source, /visibleMasterDataTransferActions\(/)
-  assert.match(source, /MasterDataImportDialog/)
-  assert.match(source, /transferActions\.includes\('template'\)/)
-  assert.match(source, /transferActions\.includes\('export'\)/)
-  assert.match(source, /transferActions\.includes\('import'\)/)
+const error = {
+  code: 'EXPORT_FAILED',
+  message: 'Export failed',
+  retryable: true,
+}
+
+function createHarness(overrides: {
+  resourceKey?: string
+  transferKey?: string
+  generation?: number
+  query?: Record<string, unknown>
+  api?: Partial<MasterDataTransferApi>
+} = {}) {
+  let resourceKey = overrides.resourceKey ?? 'parts'
+  let generation = overrides.generation ?? 4
+  const downloads: Array<{ blob: Blob; filename: string }> = []
+  const errors: unknown[] = []
+  const busy: boolean[] = []
+  let refreshes = 0
+  const api: MasterDataTransferApi = {
+    downloadTemplate: async () => new Blob(['template']),
+    exportResource: async () => new Blob(['export']),
+    ...overrides.api,
+  }
+  const actions = createMasterDataTransferActions({
+    api,
+    getResource: () => ({
+      key: resourceKey,
+      transfer: { exportKey: overrides.transferKey ?? 'parts', importable: true },
+    }),
+    getQuery: () => ({
+      keyword: 'applied keyword',
+      include_inactive: true,
+      sort_by: 'code',
+      sort_order: 'desc',
+      ...overrides.query,
+    }),
+    getGeneration: () => generation,
+    download: (blob, filename) => downloads.push({ blob, filename }),
+    onBusyChange: (value) => busy.push(value),
+    onError: (value) => errors.push(value),
+    normalizeError: () => error,
+    refresh: async () => { refreshes += 1 },
+  })
+  return {
+    actions,
+    api,
+    busy,
+    downloads,
+    errors,
+    get refreshes() { return refreshes },
+    setGeneration(value: number) { generation = value },
+    setResource(value: string) { resourceKey = value },
+  }
+}
+
+test('export forwards exactly the applied server-table query and never tenant data', async () => {
+  const calls: Array<{ key: string; query: unknown }> = []
+  const harness = createHarness({
+    query: { tenant_id: 'must-not-leave-browser' },
+    api: {
+      exportResource: async (key, query) => {
+        calls.push({ key, query })
+        return new Blob(['export'])
+      },
+    },
+  })
+
+  await harness.actions.exportCurrentResults()
+
+  assert.deepEqual(calls, [{
+    key: 'parts',
+    query: {
+      keyword: 'applied keyword',
+      include_inactive: true,
+      sort_by: 'code',
+      sort_order: 'desc',
+    },
+  }])
+  assert.deepEqual(harness.downloads.map(({ filename }) => filename), [
+    'parts-export.xlsx',
+  ])
 })
 
-test('export forwards only the current applied server-table filters', () => {
-  assert.match(
-    source,
-    /masterDataTransferApi\.exportResource\(\s*transfer\.exportKey,\s*\{\s*keyword:\s*keyword\.value,\s*include_inactive:\s*includeInactive\.value,\s*sort_by:\s*sortBy\.value,\s*sort_order:\s*sortOrder\.value,\s*\},\s*\)/,
+test('template and export are mutually exclusive while a transfer is in flight', async () => {
+  let resolveTemplate: ((blob: Blob) => void) | undefined
+  const template = new Promise<Blob>((resolve) => { resolveTemplate = resolve })
+  let exports = 0
+  const harness = createHarness({
+    api: {
+      downloadTemplate: async () => template,
+      exportResource: async () => {
+        exports += 1
+        return new Blob(['export'])
+      },
+    },
+  })
+
+  const downloading = harness.actions.downloadTemplate()
+  await Promise.resolve()
+  await harness.actions.exportCurrentResults()
+  resolveTemplate?.(new Blob(['template']))
+  await downloading
+
+  assert.equal(exports, 0)
+  assert.deepEqual(harness.busy, [true, false])
+})
+
+test('export download filenames are sanitized before the injected download trigger runs', async () => {
+  const harness = createHarness({ transferKey: 'parts / active' })
+
+  await harness.actions.exportCurrentResults()
+
+  assert.deepEqual(harness.downloads.map(({ filename }) => filename), [
+    'parts-active-export.xlsx',
+  ])
+})
+
+test('transfer errors are normalized and reported to the page error path', async () => {
+  const harness = createHarness({
+    api: {
+      exportResource: async () => { throw new Error('network down') },
+    },
+  })
+
+  await harness.actions.exportCurrentResults()
+
+  assert.deepEqual(harness.errors, [error])
+  assert.deepEqual(harness.busy, [true, false])
+})
+
+test('completion refreshes only the resource and generation that opened the dialog', async () => {
+  const harness = createHarness()
+
+  await harness.actions.handleCompleted({ resourceKey: 'parts', generation: 4 })
+  harness.setGeneration(5)
+  await harness.actions.handleCompleted({ resourceKey: 'parts', generation: 4 })
+  harness.setGeneration(4)
+  harness.setResource('suppliers')
+  await harness.actions.handleCompleted({ resourceKey: 'parts', generation: 4 })
+
+  assert.equal(harness.refreshes, 1)
+})
+
+test('browser download removes its temporary link and revokes the object URL one turn later', () => {
+  const callbacks: Array<() => void> = []
+  let removed = 0
+  const appended: unknown[] = []
+  const revoked: string[] = []
+  const link = {
+    href: '',
+    download: '',
+    style: { display: '' },
+    click() {},
+    remove() { removed += 1 },
+  }
+  const download = createXlsxDownloadTrigger({
+    document: {
+      body: { append: (value: unknown) => appended.push(value) },
+      createElement: () => link,
+    },
+    objectUrls: {
+      createObjectURL: () => 'blob:transfer',
+      revokeObjectURL: (url) => revoked.push(url),
+    },
+    defer: (callback) => { callbacks.push(callback) },
+  })
+
+  download(new Blob(['workbook']), 'parts-export.xlsx')
+
+  assert.equal(link.download, 'parts-export.xlsx')
+  assert.equal(removed, 1)
+  assert.deepEqual(appended, [link])
+  assert.deepEqual(revoked, [])
+  assert.equal(callbacks.length, 1)
+  callbacks[0]()
+  assert.deepEqual(revoked, ['blob:transfer'])
+})
+
+test('page wires dialog error events into actionError and uses the injected controller', () => {
+  const source = readFileSync(
+    new URL('../master-data/MasterDataListPage.vue', import.meta.url),
+    'utf8',
   )
-  assert.doesNotMatch(source, /tenant_id|tenantId/)
-})
 
-test('page closes and invalidates the old import dialog before route table reset', () => {
-  assert.match(
-    source,
-    /importDialogOpen\.value\s*=\s*false[\s\S]*importGeneration\.value\s*\+=\s*1[\s\S]*await nextTick\(\)[\s\S]*reset\(/,
-  )
-  assert.match(source, /@completed="handleImportCompleted"/)
-  assert.match(source, /generation\s*!==\s*importGeneration\.value/)
-})
-
-test('download uses a sanitized xlsx filename and revokes the object URL after click', () => {
-  assert.match(source, /replace\(\/\[\^a-zA-Z0-9._-\]\+\/g, '-'/)
-  assert.match(source, /URL\.createObjectURL\(/)
-  assert.match(source, /URL\.revokeObjectURL\(/)
-  assert.match(source, /\.xlsx/)
+  assert.match(source, /createMasterDataTransferActions\(/)
+  assert.match(source, /@error="reportImportError"/)
+  assert.match(source, /function reportImportError\(error: MaintenanceClientError\)/)
+  assert.match(source, /actionError\.value\s*=\s*error/)
 })

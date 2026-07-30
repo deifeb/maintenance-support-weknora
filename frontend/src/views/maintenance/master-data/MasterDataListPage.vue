@@ -175,6 +175,7 @@
       :can-import="transferActions.includes('import')"
       @close="closeImport"
       @completed="handleImportCompleted"
+      @error="reportImportError"
     />
   </section>
 </template>
@@ -201,6 +202,11 @@ import MasterDataEditorDrawer from '@/components/maintenance/master-data/MasterD
 import MasterDataImportDialog from '@/components/maintenance/import/MasterDataImportDialog.vue'
 import MasterDataTable from '@/components/maintenance/master-data/MasterDataTable.vue'
 import {
+  createMasterDataTransferActions,
+  createXlsxDownloadTrigger,
+  type MasterDataTransferToken,
+} from './master-data-transfer-actions'
+import {
   serializeMasterDataForm,
   visibleMasterDataTransferActions,
   type MasterDataRecord,
@@ -223,7 +229,7 @@ const drawerError = ref<MaintenanceClientError | null>(null)
 const actionError = ref<MaintenanceClientError | null>(null)
 const transferring = ref(false)
 const importDialogOpen = ref(false)
-const importDialogResourceKey = ref('')
+const importDialogToken = ref<MasterDataTransferToken | null>(null)
 const importGeneration = ref(0)
 
 const table = useServerTable<MasterDataRecord>({
@@ -272,11 +278,39 @@ const transferActions = computed(() => (
   )
 ))
 
+const transferDownload = createXlsxDownloadTrigger({
+  document: {
+    body: {
+      append: (link) => document.body.append(link as unknown as Node),
+    },
+    createElement: () => document.createElement('a'),
+  },
+  objectUrls: URL,
+  defer: (callback) => window.setTimeout(callback, 0),
+})
+
+const transferController = createMasterDataTransferActions({
+  api: masterDataTransferApi,
+  getResource: () => props.resource,
+  getQuery: () => ({
+    keyword: keyword.value,
+    include_inactive: includeInactive.value,
+    sort_by: sortBy.value,
+    sort_order: sortOrder.value,
+  }),
+  getGeneration: () => importGeneration.value,
+  download: transferDownload,
+  onBusyChange: (busy) => { transferring.value = busy },
+  onError: (error) => { actionError.value = error },
+  refresh,
+})
+
 watch(
   () => props.resource.key,
   async () => {
     closeDrawer()
     importDialogOpen.value = false
+    importDialogToken.value = null
     importGeneration.value += 1
     await nextTick()
     keywordDraft.value = ''
@@ -296,77 +330,25 @@ watch(
   { immediate: true },
 )
 
-function sanitizeDownloadBase(value: string): string {
-  const sanitized = value
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/^[._-]+|[._-]+$/g, '')
-  return sanitized || 'master-data'
-}
-
-function downloadXlsx(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.style.display = 'none'
-  document.body.append(link)
-
-  try {
-    link.click()
-  } finally {
-    link.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 0)
-  }
-}
-
 async function downloadTemplate(): Promise<void> {
   if (transferring.value || !transferActions.value.includes('template')) {
     return
   }
 
-  transferring.value = true
   actionError.value = null
-  try {
-    const blob = await masterDataTransferApi.downloadTemplate()
-    downloadXlsx(blob, 'master-data-import-template.xlsx')
-  } catch (value) {
-    actionError.value = normalizeMaintenanceError(value)
-  } finally {
-    transferring.value = false
-  }
+  await transferController.downloadTemplate()
 }
 
 async function exportCurrentResults(): Promise<void> {
-  const transfer = props.resource.transfer
   if (
     transferring.value
-    || !transfer
     || !transferActions.value.includes('export')
   ) {
     return
   }
 
-  transferring.value = true
   actionError.value = null
-  try {
-    const blob = await masterDataTransferApi.exportResource(
-      transfer.exportKey,
-      {
-        keyword: keyword.value,
-        include_inactive: includeInactive.value,
-        sort_by: sortBy.value,
-        sort_order: sortOrder.value,
-      },
-    )
-    downloadXlsx(
-      blob,
-      `${sanitizeDownloadBase(transfer.exportKey)}-export.xlsx`,
-    )
-  } catch (value) {
-    actionError.value = normalizeMaintenanceError(value)
-  } finally {
-    transferring.value = false
-  }
+  await transferController.exportCurrentResults()
 }
 
 function openImport(): void {
@@ -377,30 +359,27 @@ function openImport(): void {
     return
   }
   actionError.value = null
-  importDialogResourceKey.value = props.resource.key
+  importDialogToken.value = {
+    resourceKey: props.resource.key,
+    generation: importGeneration.value,
+  }
   importDialogOpen.value = true
 }
 
 function closeImport(): void {
   importDialogOpen.value = false
-}
-
-async function refreshAfterImport(generation: number): Promise<void> {
-  if (generation !== importGeneration.value) {
-    return
-  }
-  await refresh()
+  importDialogToken.value = null
 }
 
 function handleImportCompleted(): void {
-  if (
-    !importDialogOpen.value
-    || importDialogResourceKey.value !== props.resource.key
-  ) {
-    return
-  }
+  const token = importDialogToken.value
   importDialogOpen.value = false
-  void refreshAfterImport(importGeneration.value)
+  importDialogToken.value = null
+  if (token) void transferController.handleCompleted(token)
+}
+
+function reportImportError(error: MaintenanceClientError): void {
+  actionError.value = error
 }
 
 function actionsForRow(
