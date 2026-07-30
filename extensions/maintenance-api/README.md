@@ -43,8 +43,9 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8100
 - Swagger：`http://127.0.0.1:8100/docs`
 - 主数据前缀：`/api/v1/master-data`
 - Excel 模板：`GET /api/v1/master-data/import/template`
-- Excel 校验：`POST /api/v1/master-data/import/validate`
-- Excel 执行：`POST /api/v1/master-data/import/execute`
+- Excel 上传任务：`POST /api/v1/master-data/import/tasks`
+- Excel 预览：`POST /api/v1/master-data/import/tasks/{task_id}/preview`
+- Excel 显式执行：`POST /api/v1/master-data/import/tasks/{task_id}/execute`
 
 ## 验证
 
@@ -52,6 +53,129 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8100
 python -m pytest -v
 python -m ruff check app tests
 ```
+
+## Phase 05-2：浏览器主数据工作区
+
+### 浏览器边界与路由
+
+浏览器只调用 WeKnora 的相对路径 `/api/maintenance/*`。Go 应用在
+`/api/maintenance/*` 上完成登录态解析，并向 FastAPI 转发已签发的 actor JWT；
+FastAPI 负责租户边界、RBAC 和业务规则。浏览器不选择、发送或显示租户 ID，
+也不连接 Maintenance API 的 `8100` 端口，不持有内部签名密钥。
+
+Maintenance 前端路由均要求初始化和认证：
+
+| 页面 | 路由 |
+| --- | --- |
+| 仪表盘 | `/platform/maintenance/dashboard` |
+| 主数据 | `/platform/maintenance/master-data` |
+| 构型详情（菜单隐藏） | `/platform/maintenance/master-data/configurations/:configurationId` |
+| 备件详情（菜单隐藏） | `/platform/maintenance/master-data/spare-parts/:sparePartId` |
+| 场景、计算、库存缺口、审查、报告 | `/platform/maintenance/scenarios`、`/calculations`、`/inventory-gap`、`/reviews`、`/reports` |
+
+菜单只显示仪表盘、主数据、场景、计算、库存缺口、审查和报告；构型与备件详情
+只能由主数据页进入。仪表盘挂载时立即刷新，之后每 30 秒刷新一次；浏览器标签隐藏
+或路由不再处于 Maintenance 时暂停，恢复可见且活动时立即刷新。
+
+### 主数据角色和详情行为
+
+查看者可以查看行、下载 Excel 模板和当前筛选结果的导出；不能新建、编辑、停用或
+导入。贡献者可在已上线的普通主数据上查看、新建、编辑、停用、导入和导出。管理员
+包含贡献者能力；库存汇总的行级新建/编辑使用 `adjustInventory` 能力，因此仅管理员
+可写入库存，而库存的模板、导出和导入仍只由 `editMasterData` 决定。计划中资源只显示
+查看，不提供导入、导出或模板操作。
+
+构型详情页展示版本事实和构型树：草稿可编辑版本与树节点，非草稿通过“克隆为草稿”
+继续维护。备件详情按需加载概览、库存、可靠性和供应页签；适用性、批次/序列号、
+替代、套件、证据和审计页签会标为未开放，且不会发起猜测请求。
+
+### 扩展通用主数据注册表
+
+1. 先在 FastAPI 提供并测试该资源的、受 actor 租户/RBAC 保护的列表、写入和导出契约。
+2. 在 `frontend/src/components/maintenance/master-data/MasterDataRegistry.ts` 增加资源 key 与
+   `defineResource` 定义：`endpoint`、`rowKey`、`availability`、`operations`、列、表单和
+   行操作；使用 `writeCapability: 'adjustInventory'` 只适用于库存调整，其余默认
+   `editMasterData`。
+3. 对已上线且可传输的资源添加 `transfer: { exportKey, importable: true }`。`exportKey` 必须
+   与后端导出资源一致；计划资源使用 `plannedResource`，不添加 transfer 元数据。
+4. 为新增资源补充注册表、权限和传输契约测试。页面从注册表读取配置，因此无需另写
+   租户参数或专用传输分支。
+
+### Excel 导入和导出
+
+导出继承当前关键字、停用项和排序筛选。导入严格依次为：下载模板 → 上传任务 →
+字段映射 → 预览 → 明确确认 → 执行 → 轮询 → 结果或错误工作簿。预览显示每个工作表的
+行数、字段映射、错误和警告；只有有效预览且用户勾选确认后才能执行。任务状态使用
+`GET /api/v1/master-data/import/tasks/{task_id}` 轮询，任务过期或 404 时必须重新上传；失败
+或可重试网络错误可重试状态查询，校验问题则下载错误工作簿并修正后重新上传。不要把
+旧的 `/validate` 或直接 `/execute` 调用作为浏览器工作流。
+
+### 本地联调（PowerShell）
+
+以下三个终端使用同一个未提交的 `$secret`。可先生成一次并保存在安全的本地会话/密钥
+管理器，再将同一值设置到两个服务终端；不要把真实值写入 Git 或前端变量。
+
+```powershell
+# 仅生成一次；将输出保存在安全位置并在两个服务终端复用。
+$secretBytes = New-Object byte[] 48
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try { $rng.GetBytes($secretBytes) } finally { $rng.Dispose() }
+$secret = [Convert]::ToBase64String($secretBytes)
+```
+
+终端 1（FastAPI）：
+
+```powershell
+Set-Location E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api
+$env:INTERNAL_JWT_SECRET = $secret
+$env:INTERNAL_JWT_ISSUER = 'weknora'
+$env:INTERNAL_JWT_AUDIENCE = 'maintenance-api'
+& .\.venv\Scripts\python.exe -m alembic upgrade head
+& .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8100
+```
+
+终端 2（Go 代理；`$secret` 必须与终端 1 相同）：
+
+```powershell
+Set-Location E:\weknora_projects\maintenance-support-weknora
+$env:WEKNORA_MAINTENANCE_ENABLED = 'true'
+$env:WEKNORA_MAINTENANCE_BASE_URL = 'http://127.0.0.1:8100'
+$env:WEKNORA_MAINTENANCE_SIGNING_SECRET = $secret
+$env:WEKNORA_MAINTENANCE_ISSUER = 'weknora'
+$env:WEKNORA_MAINTENANCE_AUDIENCE = 'maintenance-api'
+go run ./cmd/server
+```
+
+终端 3（Vite；目标必须是 Go 的 `8080`，不是 FastAPI）：
+
+```powershell
+Set-Location E:\weknora_projects\maintenance-support-weknora\frontend
+$env:VITE_DEV_PROXY_TARGET = 'http://127.0.0.1:8080'
+npm run dev
+```
+
+### Phase 05-2 验证命令
+
+```powershell
+Set-Location E:\weknora_projects\maintenance-support-weknora\frontend
+npm ci
+npm run test
+npm run type-check
+npm run build
+
+Set-Location E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api
+& .\.venv\Scripts\python.exe -m pytest tests/api/test_dashboard_api.py tests/services/test_dashboard_service.py tests/api/test_master_data_api.py tests/api/test_master_data_import_tasks.py tests/imports tests/exporters -v
+& .\.venv\Scripts\python.exe -m ruff check app tests
+
+Set-Location E:\weknora_projects\maintenance-support-weknora
+$env:CGO_ENABLED = '0'
+go test ./internal/types -run TestNonCGOJiebaFallback -count=1
+go test ./internal/searchutil
+go test ./internal/utils
+go test ./internal/maintenanceproxy ./internal/router
+```
+
+本阶段不包含采购、财务核算或移动离线扫码。
 
 ## Demand calculation engine
 
