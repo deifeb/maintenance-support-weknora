@@ -112,7 +112,8 @@ Maintenance 前端路由均要求初始化和认证：
 
 ### 本地联调（PowerShell）
 
-以下流程使用 Windows DPAPI `CurrentUser` 把开发密钥临时保存在当前用户本地的
+以下流程使用 Windows 默认的 CurrentUser DPAPI：内置 `ConvertFrom-SecureString`
+把开发密钥临时保存在当前用户本地的
 `$env:LOCALAPPDATA\WeKnora\maintenance-dev.secret`。FastAPI 与 Go 终端分别解密同一个
 文件，因此会使用同一个值；Vite 不读取该密钥。文件不应写入 Git、前端变量或命令行。
 
@@ -126,17 +127,9 @@ $randomBytes = New-Object byte[] 48
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 try { $rng.GetBytes($randomBytes) } finally { $rng.Dispose() }
 $secret = [Convert]::ToBase64String($randomBytes)
-$plainBytes = [Text.Encoding]::UTF8.GetBytes($secret)
-$protectedBytes = [Security.Cryptography.ProtectedData]::Protect(
-  $plainBytes,
-  $null,
-  [Security.Cryptography.DataProtectionScope]::CurrentUser
-)
-[IO.File]::WriteAllText(
-  $secretFile,
-  [Convert]::ToBase64String($protectedBytes),
-  [Text.Encoding]::ASCII
-)
+$secureSecret = ConvertTo-SecureString -String $secret -AsPlainText -Force
+$protectedText = ConvertFrom-SecureString -SecureString $secureSecret
+Set-Content -LiteralPath $secretFile -Value $protectedText -NoNewline -Encoding utf8
 ```
 
 终端 1（FastAPI）：
@@ -144,10 +137,11 @@ $protectedBytes = [Security.Cryptography.ProtectedData]::Protect(
 ```powershell
 Set-Location E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api
 $secretFile = Join-Path $env:LOCALAPPDATA 'WeKnora\maintenance-dev.secret'
-$protectedBytes = [Convert]::FromBase64String([IO.File]::ReadAllText($secretFile).Trim())
-$secret = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
-  $protectedBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser
-))
+$protectedText = Get-Content -LiteralPath $secretFile -Raw
+$secureSecret = ConvertTo-SecureString -String $protectedText
+$secretBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSecret)
+try { $secret = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretBstr) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretBstr) }
 $env:INTERNAL_JWT_SECRET = $secret
 $env:INTERNAL_JWT_ISSUER = 'weknora'
 $env:INTERNAL_JWT_AUDIENCE = 'maintenance-api'
@@ -160,10 +154,11 @@ $env:INTERNAL_JWT_AUDIENCE = 'maintenance-api'
 ```powershell
 Set-Location E:\weknora_projects\maintenance-support-weknora
 $secretFile = Join-Path $env:LOCALAPPDATA 'WeKnora\maintenance-dev.secret'
-$protectedBytes = [Convert]::FromBase64String([IO.File]::ReadAllText($secretFile).Trim())
-$secret = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
-  $protectedBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser
-))
+$protectedText = Get-Content -LiteralPath $secretFile -Raw
+$secureSecret = ConvertTo-SecureString -String $protectedText
+$secretBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSecret)
+try { $secret = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretBstr) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretBstr) }
 $env:WEKNORA_MAINTENANCE_ENABLED = 'true'
 $env:WEKNORA_MAINTENANCE_BASE_URL = 'http://127.0.0.1:8100'
 $env:WEKNORA_MAINTENANCE_SIGNING_SECRET = $secret

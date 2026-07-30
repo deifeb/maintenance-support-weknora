@@ -144,6 +144,41 @@ test('direct Maintenance URL scanner covers every browser-facing source', () => 
   )
 })
 
+test('README documents an executable Windows CurrentUser DPAPI secret workflow', () => {
+  const readme = readFileSync(
+    new URL('../../../../../extensions/maintenance-api/README.md', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(
+    readme,
+    /ConvertTo-SecureString\s+-String\s+\$secret\s+-AsPlainText\s+-Force/,
+  )
+  assert.match(
+    readme,
+    /ConvertFrom-SecureString\s+-SecureString\s+\$secureSecret/,
+  )
+  assert.match(readme, /Windows 默认.*CurrentUser DPAPI/)
+  assert.equal(
+    readme.match(/Get-Content -LiteralPath \$secretFile -Raw/g)?.length,
+    2,
+  )
+  assert.equal(
+    readme.match(/SecureStringToBSTR/g)?.length,
+    2,
+  )
+  assert.equal(
+    readme.match(/PtrToStringBSTR/g)?.length,
+    2,
+  )
+  assert.equal(
+    readme.match(/finally \{ \[Runtime.InteropServices.Marshal\]::ZeroFreeBSTR\(\$secretBstr\) \}/g)?.length,
+    2,
+  )
+  assert.match(readme, /Remove-Item -LiteralPath \$secretFile -Force/)
+  assert.doesNotMatch(readme, /ProtectedData|DataProtectionScope/)
+})
+
 test('browser-facing transfer code contains no tenant selector, Maintenance base URL, or internal signing secret', () => {
   const transferSources = [
     new URL('../../../api/maintenance/imports.ts', import.meta.url),
