@@ -38,17 +38,33 @@ from app.repositories.demand_scenario_repository import (
     DemandScenarioVersionRepository,
     DemandStageFleetUsageRepository,
 )
-from app.repositories.equipment_repository import EquipmentRepository
-from app.repositories.inventory_repository import InventoryRepository
+from app.repositories.equipment_repository import (
+    EquipmentRepository,
+)
+from app.repositories.import_task_repository import (
+    ImportTaskRepository,
+    import_task_repository,
+)
+from app.repositories.inventory_repository import (
+    InventoryRepository,
+)
 from app.repositories.part_repository import PartRepository
-from app.repositories.reliability_repository import ReliabilityRepository
+from app.repositories.reliability_repository import (
+    ReliabilityRepository,
+)
 from app.repositories.repair_repository import RepairRepository
-from app.repositories.spare_part_repository import SparePartRepository
+from app.repositories.spare_part_repository import (
+    SparePartRepository,
+)
 from app.repositories.supplier_offer_repository import (
     SupplierOfferRepository,
 )
-from app.repositories.supplier_repository import SupplierRepository
-from app.repositories.warehouse_repository import WarehouseRepository
+from app.repositories.supplier_repository import (
+    SupplierRepository,
+)
+from app.repositories.warehouse_repository import (
+    WarehouseRepository,
+)
 
 __all__ = [
     "AIExecutionRepository",
@@ -71,6 +87,7 @@ __all__ = [
     "DemandScenarioVersionRepository",
     "DemandStageFleetUsageRepository",
     "EquipmentRepository",
+    "ImportTaskRepository",
     "InventoryRepository",
     "PartRepository",
     "ReliabilityRepository",
@@ -84,4 +101,5 @@ __all__ = [
     "ai_report_repository",
     "ai_review_repository",
     "ai_session_repository",
+    "import_task_repository",
 ]

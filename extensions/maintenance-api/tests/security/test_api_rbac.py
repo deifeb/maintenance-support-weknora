@@ -28,7 +28,7 @@ EXCLUDED = {
     "router.py",
 }
 EXPECTED_COUNTS = {
-    "master_data": 61,
+    "master_data": 67,
     "demand": 40,
     "ai": 26,
 }
@@ -38,6 +38,10 @@ MASTER_ROLE_BY_METHOD = {
     "put": "require_contributor",
     "patch": "require_contributor",
     "delete": "require_admin",
+}
+MASTER_ROLE_BY_FUNCTION = {
+    "read_import_task": "require_contributor",
+    "download_import_errors": "require_contributor",
 }
 DEMAND_ROLE_BY_FUNCTION = {
     "list_scenarios": "require_viewer",
@@ -191,7 +195,10 @@ def _expected_role(
     method: str,
 ) -> str | None:
     if domain == "master_data":
-        return MASTER_ROLE_BY_METHOD[method]
+        return MASTER_ROLE_BY_FUNCTION.get(
+            function_name,
+            MASTER_ROLE_BY_METHOD[method],
+        )
     if domain == "demand":
         return DEMAND_ROLE_BY_FUNCTION.get(function_name)
     return None
@@ -250,7 +257,7 @@ def test_business_route_inventory_is_exact() -> None:
         counts[domain] = count
 
     assert counts == EXPECTED_COUNTS
-    assert sum(counts.values()) == 127
+    assert sum(counts.values()) == 133
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
     )

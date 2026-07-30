@@ -10,7 +10,7 @@ DIRECT_SERVICE_TEST = Path("tests/services/test_services.py")
 NO_ACTOR_SERVICE_CALLS = {
     ("master_data_import_service", "template_bytes"),
     ("master_data_import_service", "validate"),
-    ("master_data_import_service", "execute"),
+    ("master_data_import_service", "apply"),
 }
 
 
@@ -175,6 +175,16 @@ HTTP_ROLE_DEPENDENCIES = {
     "patch": "require_contributor",
     "delete": "require_admin",
 }
+MASTER_ROUTE_ROLE_OVERRIDES = {
+    (
+        "imports.py",
+        "read_import_task",
+    ): "require_contributor",
+    (
+        "imports.py",
+        "download_import_errors",
+    ): "require_contributor",
+}
 
 
 def _route_http_method(
@@ -255,7 +265,13 @@ def test_master_data_routes_use_http_role_dependencies() -> None:
                 continue
 
             route_count += 1
-            expected = HTTP_ROLE_DEPENDENCIES[http_method]
+            expected = MASTER_ROUTE_ROLE_OVERRIDES.get(
+                (
+                    path.name,
+                    function.name,
+                ),
+                HTTP_ROLE_DEPENDENCIES[http_method],
+            )
             actual = _route_actor_dependency(function)
             if actual != expected:
                 failures.append(
@@ -264,7 +280,7 @@ def test_master_data_routes_use_http_role_dependencies() -> None:
                     f"expected {expected}, found {actual}"
                 )
 
-    assert route_count == 61
+    assert route_count == 67
     assert failures == [], (
         f"{len(failures)} master-data routes omit the "
         "required HTTP-role ActorContext dependency:\n"
@@ -307,4 +323,86 @@ def test_master_data_success_responses_include_actor_metadata(
                         f"{path}:{function.name}:{call.lineno}"
                     )
 
+    assert failures == [], "\n".join(failures)
+
+IMPORT_ROUTE = MASTER_DATA_ROOT / "imports.py"
+TENANT_SCOPED_IMPORT_METHODS = {"validate", "apply"}
+
+
+def _keyword_expression(
+    call: ast.Call,
+    keyword_name: str,
+) -> str | None:
+    for keyword in call.keywords:
+        if keyword.arg == keyword_name:
+            return ast.unparse(keyword.value)
+    return None
+
+
+def test_import_routes_supply_actor_tenant_without_request_tenant_field(
+) -> None:
+    tree = ast.parse(
+        IMPORT_ROUTE.read_text(encoding="utf-8"),
+        filename=str(IMPORT_ROUTE),
+    )
+    observed: set[str] = set()
+    failures: list[str] = []
+
+    for function in tree.body:
+        if not isinstance(
+            function,
+            (ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+
+        service_calls = [
+            call
+            for call in ast.walk(function)
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id
+                == "master_data_import_service"
+                and call.func.attr
+                in TENANT_SCOPED_IMPORT_METHODS
+            )
+        ]
+        if not service_calls:
+            continue
+
+        argument_names = {
+            argument.arg
+            for argument in [
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            ]
+        }
+        if "tenant_id" in argument_names:
+            failures.append(
+                f"{function.name} exposes tenant_id as a request field"
+            )
+
+        actor_names = _function_actor_names(function)
+        expected_expressions = {
+            f"{actor_name}.tenant_id"
+            for actor_name in actor_names
+        }
+
+        for call in service_calls:
+            observed.add(call.func.attr)
+            actual = _keyword_expression(
+                call,
+                "tenant_id",
+            )
+            if actual not in expected_expressions:
+                failures.append(
+                    f"{function.name}:{call.lineno}: "
+                    f"{call.func.attr} tenant_id={actual!r}, "
+                    f"expected one of "
+                    f"{sorted(expected_expressions)!r}"
+                )
+
+    assert observed == TENANT_SCOPED_IMPORT_METHODS
     assert failures == [], "\n".join(failures)

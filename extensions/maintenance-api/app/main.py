@@ -15,6 +15,10 @@ from app.workers import (
     recover_interrupted_ai_tasks,
     recover_interrupted_calculations,
 )
+from app.workers.import_executor import (
+    import_task_executor,
+    recover_stale_import_tasks,
+)
 
 
 @asynccontextmanager
@@ -24,9 +28,14 @@ async def lifespan(application: FastAPI):
     try:
         recover_interrupted_calculations(session)
         recover_interrupted_ai_tasks(session)
+        recover_stale_import_tasks(
+            session,
+            file_store=import_task_executor.file_store,
+        )
     finally:
         session.close()
     yield
+    import_task_executor.shutdown(wait=False)
     ai_task_executor.shutdown(wait=False)
     demand_task_executor.shutdown(wait=False)
 

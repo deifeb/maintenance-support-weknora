@@ -84,3 +84,6 @@ extensions/maintenance-ai/.pytest_cache/
 extensions/maintenance-ai/.ruff_cache/
 extensions/maintenance-ai/src/*.egg-info/
 *.egg-info/
+# Keep Maintenance API tests under tests/imports tracked.
+!extensions/maintenance-api/tests/imports/
+!extensions/maintenance-api/tests/imports/*.py

@@ -1,5 +1,13 @@
-from app.models.ai_evidence import AIEvidenceItem, AIEvidencePackage
-from app.models.ai_execution import AIConfirmationRequest, AIExecutionPlan, AIPlanStep, AIToolCall
+from app.models.ai_evidence import (
+    AIEvidenceItem,
+    AIEvidencePackage,
+)
+from app.models.ai_execution import (
+    AIConfirmationRequest,
+    AIExecutionPlan,
+    AIPlanStep,
+    AIToolCall,
+)
 from app.models.ai_report import (
     AIReportCitation,
     AIReportExport,
@@ -9,7 +17,13 @@ from app.models.ai_report import (
     AIReportVersion,
 )
 from app.models.ai_review import AIReviewFinding, AIReviewRun
-from app.models.ai_session import AIEvent, AIMessage, AIModelCall, AISession, AISessionSnapshot
+from app.models.ai_session import (
+    AIEvent,
+    AIMessage,
+    AIModelCall,
+    AISession,
+    AISessionSnapshot,
+)
 from app.models.catalog import Part, SparePart
 from app.models.demand_calculation import (
     DemandCalculation,
@@ -27,7 +41,16 @@ from app.models.demand_scenario import (
     DemandScenarioVersion,
     DemandStageFleetUsage,
 )
-from app.models.equipment import ConfigurationItem, ConfigurationVersion, EquipmentModel
+from app.models.equipment import (
+    ConfigurationItem,
+    ConfigurationVersion,
+    EquipmentModel,
+)
+from app.models.import_task import (
+    ImportTask,
+    ImportTaskStatus,
+    MasterDataImportTask,
+)
 from app.models.inventory import Warehouse, WarehouseInventory
 from app.models.mixins import TenantScopedMixin, VersionedMixin
 from app.models.reliability import ReliabilityProfile
@@ -79,4 +102,7 @@ __all__ = [
     "AIReportSection",
     "AIReportValidationFinding",
     "AIReportVersion",
+    "ImportTask",
+    "ImportTaskStatus",
+    "MasterDataImportTask",
 ]
