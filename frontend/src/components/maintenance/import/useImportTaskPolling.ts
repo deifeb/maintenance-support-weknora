@@ -67,6 +67,7 @@ export function createImportTaskPolling(
 
   const timers = timerAdapter(options)
   let started = false
+  let halted = false
   let loading = false
   let visible = options.initialVisible ?? true
   let active = options.initialActive ?? true
@@ -74,7 +75,7 @@ export function createImportTaskPolling(
   let timerHandle: unknown
 
   function canLoad(): boolean {
-    return started && visible && active
+    return started && !halted && visible && active
   }
 
   function clearScheduledLoad(): void {
@@ -112,9 +113,15 @@ export function createImportTaskPolling(
     try {
       const task = await options.load()
       terminal = isTerminalImportStatus(task.status)
+      if (terminal) {
+        halted = true
+        refreshAfterLoad = false
+      }
       options.onTask(task)
     } catch (error) {
       failed = true
+      halted = true
+      refreshAfterLoad = false
       options.onError(error as MaintenanceClientError)
     } finally {
       loading = false
@@ -133,7 +140,7 @@ export function createImportTaskPolling(
   }
 
   async function start(): Promise<void> {
-    if (started) {
+    if (started || halted) {
       return
     }
     started = true

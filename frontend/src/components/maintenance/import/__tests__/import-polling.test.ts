@@ -63,6 +63,55 @@ test('poller loads immediately, continues only nonterminal tasks, and clears ter
   assert.equal(timers.pendingCount, 0)
 })
 
+test('terminal completion permanently halts visibility and activity resume loads', async () => {
+  const timers = new FakeTimers()
+  let loads = 0
+  const poller = createImportTaskPolling({
+    intervalMs: 1,
+    load: async () => { loads += 1; return task('COMPLETED') },
+    onTask: () => undefined,
+    onError: () => assert.fail('unexpected poll error'),
+    timers,
+  })
+
+  await poller.start()
+  poller.setVisible(false)
+  poller.setVisible(true)
+  poller.setActive(false)
+  poller.setActive(true)
+  await Promise.resolve()
+
+  assert.equal(loads, 1)
+  assert.equal(timers.pendingCount, 0)
+})
+
+test('poll errors permanently halt visibility and activity resume loads', async () => {
+  const timers = new FakeTimers()
+  let loads = 0
+  let errors = 0
+  const poller = createImportTaskPolling({
+    intervalMs: 1,
+    load: async () => {
+      loads += 1
+      throw { code: 'NETWORK', message: 'offline', retryable: true }
+    },
+    onTask: () => assert.fail('unexpected task'),
+    onError: () => { errors += 1 },
+    timers,
+  })
+
+  await poller.start()
+  poller.setActive(false)
+  poller.setActive(true)
+  poller.setVisible(false)
+  poller.setVisible(true)
+  await poller.start()
+
+  assert.equal(loads, 1)
+  assert.equal(errors, 1)
+  assert.equal(timers.pendingCount, 0)
+})
+
 test('hidden or inactive polling pauses and reactivation refreshes immediately', async () => {
   const timers = new FakeTimers()
   let loads = 0

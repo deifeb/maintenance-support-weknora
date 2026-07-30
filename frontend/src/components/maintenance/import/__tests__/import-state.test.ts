@@ -5,6 +5,7 @@ import {
   canConfirmImport,
   canExecuteImport,
   createImportState,
+  type ImportEvent,
   importReducer,
 } from '../import-state.ts'
 import type { ImportTaskView } from '@/api/maintenance/imports.ts'
@@ -166,12 +167,65 @@ test('a new file or resource invalidates prior tasks and stale results by identi
   assert.equal(changedResource.phase, 'idle')
 })
 
+test('task updates require matching explicit task identifiers and failures retain upload errors only without a task', () => {
+  const selected = importReducer(createImportState('parts'), {
+    type: 'FILE_SELECTED', fileName: 'parts.xlsx',
+  })
+  const uploaded = importReducer(selected, {
+    type: 'TASK_UPLOADED',
+    generation: selected.generation,
+    task: {
+      task_id: 'task-1', status: 'UPLOADED', original_filename: 'parts.xlsx',
+      file_sha256: 'hash', template_version: 'v1', sheets: [], expires_at: 'tomorrow',
+    },
+  })
+  const omittedTaskId = importReducer(uploaded, {
+    type: 'TASK_UPDATED', generation: uploaded.generation, task: task('COMPLETED'),
+  } as ImportEvent)
+  assert.strictEqual(omittedTaskId, uploaded)
+
+  const mismatchedPayload = importReducer(uploaded, {
+    type: 'TASK_UPDATED', generation: uploaded.generation, taskId: 'task-1',
+    task: task('COMPLETED', { task_id: 'task-2' }),
+  })
+  assert.strictEqual(mismatchedPayload, uploaded)
+
+  const error: MaintenanceClientError = {
+    code: 'REQUEST_FAILED', message: 'late response', retryable: true,
+  }
+  const missingFailureTaskId = importReducer(uploaded, {
+    type: 'REQUEST_FAILED', generation: uploaded.generation, error,
+  })
+  assert.strictEqual(missingFailureTaskId, uploaded)
+  const staleFailure = importReducer(uploaded, {
+    type: 'REQUEST_FAILED', generation: uploaded.generation, taskId: 'task-2', error,
+  })
+  assert.strictEqual(staleFailure, uploaded)
+  assert.equal(importReducer(uploaded, {
+    type: 'REQUEST_FAILED', generation: uploaded.generation, taskId: 'task-1', error,
+  }).error, error)
+
+  assert.equal(importReducer(selected, {
+    type: 'REQUEST_FAILED', generation: selected.generation, error,
+  }).error, error)
+})
+
 test('failed and expired backend tasks are terminal phases', () => {
   for (const [status, phase] of [['FAILED', 'failed'], ['EXPIRED', 'expired']] as const) {
+    const selected = importReducer(createImportState('parts'), {
+      type: 'FILE_SELECTED', fileName: 'parts.xlsx',
+    })
+    const uploaded = importReducer(selected, {
+      type: 'TASK_UPLOADED', generation: selected.generation,
+      task: {
+        task_id: 'task-1', status: 'UPLOADED', original_filename: 'parts.xlsx',
+        file_sha256: 'hash', template_version: 'v1', sheets: [], expires_at: 'tomorrow',
+      },
+    })
     const state = importReducer(
-      importReducer(createImportState('parts'), { type: 'FILE_SELECTED', fileName: 'parts.xlsx' }),
+      uploaded,
       {
-        type: 'TASK_UPDATED', generation: 1, taskId: undefined, task: task(status),
+        type: 'TASK_UPDATED', generation: uploaded.generation, taskId: 'task-1', task: task(status),
       },
     )
     assert.equal(state.phase, phase)

@@ -40,7 +40,7 @@ export type ImportEvent =
   | {
     type: 'TASK_UPDATED'
     generation: number
-    taskId?: string
+    taskId: string
     task: ImportTaskView
   }
   | { type: 'CONFIRMED' }
@@ -86,11 +86,24 @@ function phaseForStatus(status: string): ImportPhase {
   return STATUS_PHASES[status.toUpperCase()] ?? 'uploaded'
 }
 
-function hasCurrentTask(
+function matchesTaskUpdate(
+  state: ImportWorkflowState,
+  event: Extract<ImportEvent, { type: 'TASK_UPDATED' }>,
+): boolean {
+  return (
+    state.task !== null
+    && state.task.task_id === event.taskId
+    && state.task.task_id === event.task.task_id
+  )
+}
+
+function matchesFailureTarget(
   state: ImportWorkflowState,
   taskId: string | undefined,
 ): boolean {
-  return taskId === undefined || state.task?.task_id === taskId
+  return state.task === null
+    ? taskId === undefined
+    : taskId !== undefined && state.task.task_id === taskId
 }
 
 function resetForNewFile(
@@ -144,7 +157,7 @@ export function importReducer(
     case 'TASK_UPDATED':
       if (
         event.generation !== state.generation
-        || !hasCurrentTask(state, event.taskId)
+        || !matchesTaskUpdate(state, event)
       ) {
         return state
       }
@@ -164,7 +177,7 @@ export function importReducer(
     case 'REQUEST_FAILED':
       if (
         event.generation !== state.generation
-        || !hasCurrentTask(state, event.taskId)
+        || !matchesFailureTarget(state, event.taskId)
       ) {
         return state
       }
