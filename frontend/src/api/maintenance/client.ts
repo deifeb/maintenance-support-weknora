@@ -24,6 +24,7 @@ export type MaintenanceRequestLoader =
 
 export interface MaintenanceClient {
   get<T>(path: string): Promise<MaintenanceResult<T>>
+  download(path: string): Promise<Blob>
   post<T>(path: string, body: unknown, config?: unknown): Promise<MaintenanceResult<T>>
   put<T>(path: string, body: unknown): Promise<MaintenanceResult<T>>
   patch<T>(path: string, body: unknown): Promise<MaintenanceResult<T>>
@@ -185,6 +186,16 @@ export function createMaintenanceClient(
       return execute((adapter) =>
         adapter.get<MaintenanceResponse<T>>(`${PREFIX}${path}`),
       )
+    },
+    async download(path: string): Promise<Blob> {
+      try {
+        const adapter = await loadRequestAdapter()
+        return await adapter.get<Blob>(`${PREFIX}${path}`, {
+          responseType: 'blob',
+        })
+      } catch (error) {
+        throw normalizeMaintenanceError(error)
+      }
     },
     post<T>(path: string, body: unknown, config?: unknown) {
       return execute((adapter) =>

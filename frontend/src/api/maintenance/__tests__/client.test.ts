@@ -223,3 +223,61 @@ test('maintenance client normalizes failures from every HTTP method', async () =
     })
   }
 })
+
+test('maintenance client downloads blobs through the maintenance prefix', async () => {
+  const download = new Blob(['template'])
+  const calls: Array<{ url: string, config: unknown }> = []
+  const adapter: MaintenanceRequestAdapter = {
+    get: async <T>(url: string, config?: unknown): Promise<T> => {
+      calls.push({ url, config })
+      return download as T
+    },
+    post: async <T>(): Promise<T> => undefined as T,
+    put: async <T>(): Promise<T> => undefined as T,
+    patch: async <T>(): Promise<T> => undefined as T,
+    del: async <T>(): Promise<T> => undefined as T,
+  }
+
+  const client = createMaintenanceClient(async () => adapter)
+
+  const result = await client.download('/v1/master-data/import/template')
+
+  assert.strictEqual(result, download)
+  assert.deepEqual(calls, [{
+    url: '/api/maintenance/v1/master-data/import/template',
+    config: { responseType: 'blob' },
+  }])
+})
+
+test('maintenance client normalizes download failures', async () => {
+  const adapter: MaintenanceRequestAdapter = {
+    get: async <T>(): Promise<T> => {
+      throw {
+        status: 503,
+        error: {
+          code: 'EXPORT_UNAVAILABLE',
+          message: 'Export service unavailable.',
+        },
+      }
+    },
+    post: async <T>(): Promise<T> => undefined as T,
+    put: async <T>(): Promise<T> => undefined as T,
+    patch: async <T>(): Promise<T> => undefined as T,
+    del: async <T>(): Promise<T> => undefined as T,
+  }
+
+  const client = createMaintenanceClient(async () => adapter)
+
+  await assert.rejects(
+    () => client.download('/v1/master-data/exports/parts'),
+    (error: unknown) => {
+      assert.deepEqual(error, {
+        status: 503,
+        code: 'EXPORT_UNAVAILABLE',
+        message: 'Export service unavailable.',
+        retryable: true,
+      })
+      return true
+    },
+  )
+})
