@@ -121,7 +121,7 @@ test('execute requires a valid preview and explicit confirmation', () => {
     ),
     { type: 'TASK_UPDATED', generation: 1, taskId: 'task-1', task: task('PREVIEW_VALID', { can_execute: false }) },
   )
-  assert.equal(canConfirmImport(previewed), true)
+  assert.equal(canConfirmImport(previewed), false)
   assert.equal(canExecuteImport(importReducer(previewed, { type: 'CONFIRMED' })), false)
 })
 

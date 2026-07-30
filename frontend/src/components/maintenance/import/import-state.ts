@@ -195,7 +195,12 @@ function isImportTaskView(
 }
 
 export function canConfirmImport(state: ImportWorkflowState): boolean {
-  return state.phase === 'previewed' && state.error === null
+  return (
+    state.phase === 'previewed'
+    && state.error === null
+    && isImportTaskView(state.task)
+    && state.task.can_execute
+  )
 }
 
 export function canExecuteImport(state: ImportWorkflowState): boolean {
