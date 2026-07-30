@@ -77,6 +77,13 @@ export interface MasterDataOperations {
   deactivate: boolean
 }
 
+export interface MasterDataTransferDefinition {
+  exportKey: string
+  importable: boolean
+}
+
+export type MasterDataTransferAction = 'template' | 'export' | 'import'
+
 export interface MasterDataDetailRoute {
   name:
     | 'maintenanceConfigurationDetail'
@@ -97,6 +104,7 @@ export interface MasterDataResourceDefinition<
   detailRoute?: MasterDataDetailRoute
   availability: MasterDataAvailability
   operations: MasterDataOperations
+  transfer?: MasterDataTransferDefinition
   writeCapability: MasterDataWriteCapability
   columns: Array<MasterDataColumn<T>>
   form: Array<MasterDataFormField<T>>
@@ -199,13 +207,28 @@ const activeOperations = (
 const plannedResource = (
   definition: Omit<
     MasterDataResourceDefinition,
-    'availability' | 'operations' | 'actions' | 'writeCapability'
+    'availability' | 'operations' | 'transfer' | 'actions' | 'writeCapability'
   >,
 ): MasterDataResourceDefinition => defineResource({
   ...definition,
   availability: 'planned',
   operations: { ...PLANNED_OPERATIONS },
 })
+
+export function visibleMasterDataTransferActions(
+  resource: MasterDataResourceDefinition,
+  permissions: MaintenancePermissions,
+): MasterDataTransferAction[] {
+  if (resource.availability !== 'available' || !resource.transfer) {
+    return []
+  }
+
+  const actions: MasterDataTransferAction[] = ['template', 'export']
+  if (resource.transfer.importable && permissions.editMasterData) {
+    actions.push('import')
+  }
+  return actions
+}
 
 const criticalityOptions: MasterDataOption[] = [
   { label: '普通', value: false },
@@ -225,6 +248,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'equipment-models', importable: true },
     columns: [
       { key: 'code', title: '编码', titleKey: 'code', sortable: true },
       { key: 'name', title: '名称', titleKey: 'name', sortable: true },
@@ -259,6 +283,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     },
     availability: 'available',
     operations: activeOperations({ deactivate: false }),
+    transfer: { exportKey: 'configuration-versions', importable: true },
     rowActionFilter: (action, record) => (
       action.kind !== 'edit'
       || record.status === 'DRAFT'
@@ -293,6 +318,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'parts', importable: true },
     columns: [
       { key: 'code', title: '编码', titleKey: 'code', sortable: true },
       { key: 'name', title: '名称', titleKey: 'name', sortable: true },
@@ -329,6 +355,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     },
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'spare-parts', importable: true },
     columns: [
       { key: 'code', title: '编码', titleKey: 'code', sortable: true },
       { key: 'name', title: '名称', titleKey: 'name', sortable: true },
@@ -366,6 +393,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'reliability-profiles', importable: true },
     columns: [
       { key: 'profile_code', title: '档案编码', titleKey: 'profileCode', sortable: true },
       { key: 'spare_part_id', title: '备件 ID', titleKey: 'sparePartId', formatter: 'number' },
@@ -422,6 +450,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'warehouses', importable: true },
     columns: [
       { key: 'code', title: '编码', titleKey: 'code', sortable: true },
       { key: 'name', title: '名称', titleKey: 'name', sortable: true },
@@ -458,6 +487,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations({ deactivate: false }),
+    transfer: { exportKey: 'inventories', importable: true },
     writeCapability: 'adjustInventory',
     columns: [
       { key: 'warehouse_id', title: '仓库 ID', titleKey: 'warehouseId', sortable: true, formatter: 'number' },
@@ -492,6 +522,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'suppliers', importable: true },
     columns: [
       { key: 'code', title: '编码', titleKey: 'code', sortable: true },
       { key: 'name', title: '名称', titleKey: 'name', sortable: true },
@@ -526,6 +557,7 @@ export const MASTER_DATA_RESOURCES: Readonly<
     rowKey: 'id',
     availability: 'available',
     operations: activeOperations(),
+    transfer: { exportKey: 'supplier-offers', importable: true },
     columns: [
       { key: 'offer_code', title: '报价编码', titleKey: 'offerCode', sortable: true },
       { key: 'supplier_id', title: '供应商 ID', titleKey: 'supplierId', formatter: 'number' },

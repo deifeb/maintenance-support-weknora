@@ -9,6 +9,7 @@ import {
   MASTER_DATA_RESOURCES,
   isMasterDataResourceKey,
   serializeMasterDataForm,
+  visibleMasterDataTransferActions,
 } from '../MasterDataRegistry.ts'
 import { createMasterDataApi } from '../../../../api/maintenance/master-data.ts'
 
@@ -64,6 +65,61 @@ test('available registry entries match current backend master data routes', () =
       (resource) => resource.endpoint.startsWith('/v1/master-data/'),
     ),
   )
+})
+
+test('available registry entries declare the exact backend transfer export keys', () => {
+  assert.deepEqual(
+    Object.fromEntries(
+      AVAILABLE_MASTER_DATA_RESOURCES.map((resource) => [
+        resource.key,
+        resource.transfer?.exportKey,
+      ]),
+    ),
+    {
+      equipmentModels: 'equipment-models',
+      configurations: 'configuration-versions',
+      parts: 'parts',
+      spareParts: 'spare-parts',
+      reliabilityProfiles: 'reliability-profiles',
+      warehouses: 'warehouses',
+      inventorySummaries: 'inventories',
+      suppliers: 'suppliers',
+      supplierOffers: 'supplier-offers',
+    },
+  )
+  assert.ok(
+    AVAILABLE_MASTER_DATA_RESOURCES.every(
+      (resource) => resource.transfer?.importable === true,
+    ),
+  )
+})
+
+test('transfer visibility uses the edit master data capability without role inference', () => {
+  const resource = MASTER_DATA_RESOURCES.parts
+
+  assert.deepEqual(
+    visibleMasterDataTransferActions(resource, permissionsForRole('viewer')),
+    ['template', 'export'],
+  )
+  assert.deepEqual(
+    visibleMasterDataTransferActions(resource, permissionsForRole('contributor')),
+    ['template', 'export', 'import'],
+  )
+  assert.deepEqual(
+    visibleMasterDataTransferActions(resource, permissionsForRole('admin')),
+    ['template', 'export', 'import'],
+  )
+})
+
+test('planned resources expose no transfer actions', () => {
+  const viewer = permissionsForRole('viewer')
+  for (const key of MASTER_DATA_RESOURCE_KEYS) {
+    const resource = MASTER_DATA_RESOURCES[key]
+    if (resource.availability === 'planned') {
+      assert.equal(resource.transfer, undefined)
+      assert.deepEqual(visibleMasterDataTransferActions(resource, viewer), [])
+    }
+  }
 })
 
 test('planned resources never expose write operations', () => {

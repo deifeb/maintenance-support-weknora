@@ -4,7 +4,36 @@
       :title="resource.title"
       :description="resource.description"
     >
+      <template #secondaryActions>
+        <button
+          v-if="transferActions.includes('template')"
+          type="button"
+          class="master-data-list-page__secondary-button"
+          :disabled="transferring"
+          @click="downloadTemplate"
+        >
+          下载模板
+        </button>
+        <button
+          v-if="transferActions.includes('export')"
+          type="button"
+          class="master-data-list-page__secondary-button"
+          :disabled="transferring"
+          @click="exportCurrentResults"
+        >
+          导出当前结果
+        </button>
+      </template>
       <template #primaryActions>
+        <button
+          v-if="transferActions.includes('import')"
+          type="button"
+          class="master-data-list-page__primary-button"
+          :disabled="transferring"
+          @click="openImport"
+        >
+          导入 Excel
+        </button>
         <button
           v-if="canCreate"
           type="button"
@@ -137,12 +166,23 @@
       @close="closeDrawer"
       @save="saveRecord"
     />
+
+    <MasterDataImportDialog
+      v-if="resource.availability === 'available'"
+      :key="resource.key"
+      :open="importDialogOpen"
+      :resource-key="resource.key"
+      :can-import="transferActions.includes('import')"
+      @close="closeImport"
+      @completed="handleImportCompleted"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
 import {
   computed,
+  nextTick,
   ref,
   watch,
 } from 'vue'
@@ -152,14 +192,17 @@ import MaintenanceEmptyState from '@/components/maintenance/common/MaintenanceEm
 import MaintenanceErrorState from '@/components/maintenance/common/MaintenanceErrorState.vue'
 import MaintenancePageHeader from '@/components/maintenance/common/MaintenancePageHeader.vue'
 import { normalizeMaintenanceError } from '@/api/maintenance/client'
+import { masterDataTransferApi } from '@/api/maintenance/imports'
 import { masterDataApi } from '@/api/maintenance/master-data'
 import type { MaintenanceClientError } from '@/api/maintenance/types'
 import { useServerTable } from '@/composables/maintenance/useServerTable'
 import { useMaintenancePermissionsStore } from '@/stores/maintenance/permissions'
 import MasterDataEditorDrawer from '@/components/maintenance/master-data/MasterDataEditorDrawer.vue'
+import MasterDataImportDialog from '@/components/maintenance/import/MasterDataImportDialog.vue'
 import MasterDataTable from '@/components/maintenance/master-data/MasterDataTable.vue'
 import {
   serializeMasterDataForm,
+  visibleMasterDataTransferActions,
   type MasterDataRecord,
   type MasterDataResourceDefinition,
   type MasterDataRowAction,
@@ -178,6 +221,10 @@ const selectedRecord = ref<MasterDataRecord | null>(null)
 const saving = ref(false)
 const drawerError = ref<MaintenanceClientError | null>(null)
 const actionError = ref<MaintenanceClientError | null>(null)
+const transferring = ref(false)
+const importDialogOpen = ref(false)
+const importDialogResourceKey = ref('')
+const importGeneration = ref(0)
 
 const table = useServerTable<MasterDataRecord>({
   initialPageSize: 20,
@@ -193,6 +240,7 @@ const {
   pageSize,
   total,
   pages,
+  keyword,
   includeInactive,
   sortBy,
   sortOrder,
@@ -217,10 +265,20 @@ const canCreate = computed(() => (
   && currentActions.value.some((action) => action.kind === 'edit')
 ))
 
+const transferActions = computed(() => (
+  visibleMasterDataTransferActions(
+    props.resource,
+    permissionsStore.permissions,
+  )
+))
+
 watch(
   () => props.resource.key,
   async () => {
     closeDrawer()
+    importDialogOpen.value = false
+    importGeneration.value += 1
+    await nextTick()
     keywordDraft.value = ''
     reset({
       page: 1,
@@ -237,6 +295,113 @@ watch(
   },
   { immediate: true },
 )
+
+function sanitizeDownloadBase(value: string): string {
+  const sanitized = value
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^[._-]+|[._-]+$/g, '')
+  return sanitized || 'master-data'
+}
+
+function downloadXlsx(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.style.display = 'none'
+  document.body.append(link)
+
+  try {
+    link.click()
+  } finally {
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+}
+
+async function downloadTemplate(): Promise<void> {
+  if (transferring.value || !transferActions.value.includes('template')) {
+    return
+  }
+
+  transferring.value = true
+  actionError.value = null
+  try {
+    const blob = await masterDataTransferApi.downloadTemplate()
+    downloadXlsx(blob, 'master-data-import-template.xlsx')
+  } catch (value) {
+    actionError.value = normalizeMaintenanceError(value)
+  } finally {
+    transferring.value = false
+  }
+}
+
+async function exportCurrentResults(): Promise<void> {
+  const transfer = props.resource.transfer
+  if (
+    transferring.value
+    || !transfer
+    || !transferActions.value.includes('export')
+  ) {
+    return
+  }
+
+  transferring.value = true
+  actionError.value = null
+  try {
+    const blob = await masterDataTransferApi.exportResource(
+      transfer.exportKey,
+      {
+        keyword: keyword.value,
+        include_inactive: includeInactive.value,
+        sort_by: sortBy.value,
+        sort_order: sortOrder.value,
+      },
+    )
+    downloadXlsx(
+      blob,
+      `${sanitizeDownloadBase(transfer.exportKey)}-export.xlsx`,
+    )
+  } catch (value) {
+    actionError.value = normalizeMaintenanceError(value)
+  } finally {
+    transferring.value = false
+  }
+}
+
+function openImport(): void {
+  if (
+    transferring.value
+    || !transferActions.value.includes('import')
+  ) {
+    return
+  }
+  actionError.value = null
+  importDialogResourceKey.value = props.resource.key
+  importDialogOpen.value = true
+}
+
+function closeImport(): void {
+  importDialogOpen.value = false
+}
+
+async function refreshAfterImport(generation: number): Promise<void> {
+  if (generation !== importGeneration.value) {
+    return
+  }
+  await refresh()
+}
+
+function handleImportCompleted(): void {
+  if (
+    !importDialogOpen.value
+    || importDialogResourceKey.value !== props.resource.key
+  ) {
+    return
+  }
+  importDialogOpen.value = false
+  void refreshAfterImport(importGeneration.value)
+}
 
 function actionsForRow(
   row: MasterDataRecord,
