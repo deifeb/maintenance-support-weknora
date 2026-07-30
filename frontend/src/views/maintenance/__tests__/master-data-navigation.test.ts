@@ -14,6 +14,16 @@ import { permissionsForRole } from '../../../stores/maintenance/permission-matri
 const viewer = permissionsForRole('viewer')
 const contributor = permissionsForRole('contributor')
 const admin = permissionsForRole('admin')
+const DIRECT_MAINTENANCE_URL = /https?:\/\/[^'"\s]+:8100/i
+
+function hasForbiddenDirectMaintenanceUrl(
+  transferSources: string,
+  clientSource: string,
+): boolean {
+  return DIRECT_MAINTENANCE_URL.test(
+    `${transferSources}\n${clientSource}`,
+  )
+}
 
 function actionKeys(
   resource: typeof AVAILABLE_MASTER_DATA_RESOURCES[number],
@@ -124,6 +134,16 @@ test('planned resources expose neither row writes nor transfer actions', () => {
   }
 })
 
+test('direct Maintenance URL scanner covers every browser-facing source', () => {
+  assert.equal(
+    hasForbiddenDirectMaintenanceUrl(
+      'const directMaintenanceUrl = "http://127.0.0.1:8100"',
+      '',
+    ),
+    true,
+  )
+})
+
 test('browser-facing transfer code contains no tenant selector, Maintenance base URL, or internal signing secret', () => {
   const transferSources = [
     new URL('../../../api/maintenance/imports.ts', import.meta.url),
@@ -136,7 +156,10 @@ test('browser-facing transfer code contains no tenant selector, Maintenance base
   )
 
   assert.doesNotMatch(transferSources, /tenant[_-]?id/i)
-  assert.doesNotMatch(clientSource, /https?:\/\/[^'"\s]+:8100/i)
+  assert.equal(
+    hasForbiddenDirectMaintenanceUrl(transferSources, clientSource),
+    false,
+  )
   assert.doesNotMatch(
     `${transferSources}\n${clientSource}`,
     /INTERNAL_JWT_SECRET|WEKNORA_MAINTENANCE_SIGNING_SECRET/,

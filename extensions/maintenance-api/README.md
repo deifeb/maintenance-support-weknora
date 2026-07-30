@@ -71,7 +71,7 @@ Maintenance 前端路由均要求初始化和认证：
 | 主数据 | `/platform/maintenance/master-data` |
 | 构型详情（菜单隐藏） | `/platform/maintenance/master-data/configurations/:configurationId` |
 | 备件详情（菜单隐藏） | `/platform/maintenance/master-data/spare-parts/:sparePartId` |
-| 场景、计算、库存缺口、审查、报告 | `/platform/maintenance/scenarios`、`/calculations`、`/inventory-gap`、`/reviews`、`/reports` |
+| 场景、计算、库存缺口、审查、报告 | `/platform/maintenance/scenarios`、`/platform/maintenance/calculations`、`/platform/maintenance/inventory-gap`、`/platform/maintenance/reviews`、`/platform/maintenance/reports` |
 
 菜单只显示仪表盘、主数据、场景、计算、库存缺口、审查和报告；构型与备件详情
 只能由主数据页进入。仪表盘挂载时立即刷新，之后每 30 秒刷新一次；浏览器标签隐藏
@@ -112,21 +112,42 @@ Maintenance 前端路由均要求初始化和认证：
 
 ### 本地联调（PowerShell）
 
-以下三个终端使用同一个未提交的 `$secret`。可先生成一次并保存在安全的本地会话/密钥
-管理器，再将同一值设置到两个服务终端；不要把真实值写入 Git 或前端变量。
+以下流程使用 Windows DPAPI `CurrentUser` 把开发密钥临时保存在当前用户本地的
+`$env:LOCALAPPDATA\WeKnora\maintenance-dev.secret`。FastAPI 与 Go 终端分别解密同一个
+文件，因此会使用同一个值；Vite 不读取该密钥。文件不应写入 Git、前端变量或命令行。
+
+在启动服务前，在当前用户的任意 PowerShell 终端执行一次：
 
 ```powershell
-# 仅生成一次；将输出保存在安全位置并在两个服务终端复用。
-$secretBytes = New-Object byte[] 48
+# 仅当前 Windows 用户可解密；此文件仅用于本地联调。
+$secretFile = Join-Path $env:LOCALAPPDATA 'WeKnora\maintenance-dev.secret'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $secretFile) | Out-Null
+$randomBytes = New-Object byte[] 48
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-try { $rng.GetBytes($secretBytes) } finally { $rng.Dispose() }
-$secret = [Convert]::ToBase64String($secretBytes)
+try { $rng.GetBytes($randomBytes) } finally { $rng.Dispose() }
+$secret = [Convert]::ToBase64String($randomBytes)
+$plainBytes = [Text.Encoding]::UTF8.GetBytes($secret)
+$protectedBytes = [Security.Cryptography.ProtectedData]::Protect(
+  $plainBytes,
+  $null,
+  [Security.Cryptography.DataProtectionScope]::CurrentUser
+)
+[IO.File]::WriteAllText(
+  $secretFile,
+  [Convert]::ToBase64String($protectedBytes),
+  [Text.Encoding]::ASCII
+)
 ```
 
 终端 1（FastAPI）：
 
 ```powershell
 Set-Location E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api
+$secretFile = Join-Path $env:LOCALAPPDATA 'WeKnora\maintenance-dev.secret'
+$protectedBytes = [Convert]::FromBase64String([IO.File]::ReadAllText($secretFile).Trim())
+$secret = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
+  $protectedBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser
+))
 $env:INTERNAL_JWT_SECRET = $secret
 $env:INTERNAL_JWT_ISSUER = 'weknora'
 $env:INTERNAL_JWT_AUDIENCE = 'maintenance-api'
@@ -134,10 +155,15 @@ $env:INTERNAL_JWT_AUDIENCE = 'maintenance-api'
 & .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8100
 ```
 
-终端 2（Go 代理；`$secret` 必须与终端 1 相同）：
+终端 2（Go 代理；使用与终端 1 相同的 DPAPI 文件）：
 
 ```powershell
 Set-Location E:\weknora_projects\maintenance-support-weknora
+$secretFile = Join-Path $env:LOCALAPPDATA 'WeKnora\maintenance-dev.secret'
+$protectedBytes = [Convert]::FromBase64String([IO.File]::ReadAllText($secretFile).Trim())
+$secret = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect(
+  $protectedBytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser
+))
 $env:WEKNORA_MAINTENANCE_ENABLED = 'true'
 $env:WEKNORA_MAINTENANCE_BASE_URL = 'http://127.0.0.1:8100'
 $env:WEKNORA_MAINTENANCE_SIGNING_SECRET = $secret
@@ -152,6 +178,13 @@ go run ./cmd/server
 Set-Location E:\weknora_projects\maintenance-support-weknora\frontend
 $env:VITE_DEV_PROXY_TARGET = 'http://127.0.0.1:8080'
 npm run dev
+```
+
+停止 FastAPI 和 Go 后删除本地 DPAPI 文件：
+
+```powershell
+$secretFile = Join-Path $env:LOCALAPPDATA 'WeKnora\maintenance-dev.secret'
+Remove-Item -LiteralPath $secretFile -Force
 ```
 
 ### Phase 05-2 验证命令
