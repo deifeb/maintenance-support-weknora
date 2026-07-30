@@ -51,15 +51,31 @@ const publicDocumentationRoots = [
   'mcp-server',
 ]
 const documentationExtensions = new Set(['.go', '.json', '.md', '.yaml', '.yml'])
+const excludedDocumentationDirectories = new Set(['docs/superpowers'])
 
 function collectDocumentationFiles(path: string): string[] {
   const entries = readdirSync(path, { withFileTypes: true })
   return entries.flatMap((entry) => {
     const child = resolve(path, entry.name)
-    if (entry.isDirectory()) return collectDocumentationFiles(child)
+    const repositoryRelativePath = child.slice(repositoryRoot.length + 1).replace(/\\/g, '/')
+    if (entry.isDirectory()) {
+      return excludedDocumentationDirectories.has(repositoryRelativePath)
+        ? []
+        : collectDocumentationFiles(child)
+    }
     return documentationExtensions.has(extname(entry.name)) ? [child] : []
   })
 }
+
+test('documentation scanner excludes superpowers artifacts but keeps public API docs', () => {
+  const documentationRoot = resolve(repositoryRoot, 'docs')
+  const superpowersRoot = resolve(documentationRoot, 'superpowers')
+  const apiRoot = resolve(documentationRoot, 'api')
+  const documentationFiles = collectDocumentationFiles(documentationRoot)
+
+  assert.equal(documentationFiles.some((file) => file.startsWith(superpowersRoot)), false)
+  assert.equal(documentationFiles.some((file) => file.startsWith(apiRoot)), true)
+})
 
 test('user-facing locale values use workspace terminology', () => {
   for (const check of localeChecks) {
