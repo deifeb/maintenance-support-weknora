@@ -28,7 +28,8 @@ Plan 05-1 已建立 WeKnora 到 Maintenance API 的认证代理、internal JWT�
 ```text
 AI 会话或人工创建
 → 场景草稿与六步向导
-→ 正式 DemandScenarioVersion
+→ contributor 生成已校验的 DRAFT DemandScenarioVersion
+→ admin 发布场景版本
 → 确定性候选推荐
 → CalculationGroup
 → 多个独立 DemandCalculation
@@ -120,7 +121,8 @@ EXPONENTIAL + ANALYTICAL
 - 六步向导；
 - 防抖自动保存、冲突处理和页面离开保护；
 - 字段来源、置信度、风险、证据和人工确认；
-- 草稿校验及正式场景转换。
+- 草稿校验及 DRAFT 正式场景转换；
+- 管理员发布场景版本。
 
 ### 6.2 05-3B：模型推荐、并行计算与结果决策
 
@@ -222,6 +224,7 @@ GET  /api/v1/demand/scenario-drafts/{session_id}
 PUT  /api/v1/demand/scenario-drafts/{session_id}
 POST /api/v1/demand/scenario-drafts/{session_id}/validate
 POST /api/v1/demand/scenario-drafts/{session_id}/materialize
+POST /api/v1/demand/scenario-versions/{version_id}/publish
 ```
 
 浏览器统一经过：
@@ -238,10 +241,12 @@ POST /api/v1/demand/scenario-drafts/{session_id}/materialize
 - 无阻断字段；
 - 重新校验所有主数据引用的租户和有效性；
 - 接受 `Idempotency-Key`；
-- 调用现有 `ScenarioService` 创建模板、版本及全部子记录，执行正式校验并发布该版本；
+- 调用现有 `ScenarioService` 创建模板、DRAFT 版本及全部子记录，并执行正式校验；
 - 在同一事务中写入审计及草稿正式化结果。
 
-任一子记录或发布校验失败时回滚整个事务，不留下部分正式场景。成功响应返回状态为 `PUBLISHED` 的 `scenario_version_id`。幂等重放返回同一个正式场景及版本，不重复创建业务记录。
+任一子记录或校验失败时回滚整个事务，不留下部分正式场景。成功响应返回状态为 `DRAFT` 的 `scenario_version_id`。幂等重放返回同一个正式场景及版本，不重复创建业务记录。
+
+场景发布继续复用现有管理员接口和 `ScenarioService.publish_version`。admin 发布前再次执行正式场景校验；发布成功后状态变为 `PUBLISHED`。只有 `PUBLISHED` 场景版本可以进入模型推荐和计算组创建。
 
 ### 7.5 AI 草稿桥接
 
@@ -592,7 +597,7 @@ POST /api/v1/demand/demand-lists/{list_id}/void
 ### contributor
 
 - 创建和编辑场景草稿；
-- 正式化无阻断场景；
+- 把无阻断草稿正式化为已校验的 DRAFT 场景版本；
 - 发起计算组；
 - 重试失败任务和取消运行任务；
 - 记录逐项决策；
@@ -601,6 +606,7 @@ POST /api/v1/demand/demand-lists/{list_id}/void
 ### admin
 
 - 具备 contributor 能力；
+- 发布和退役场景版本；
 - 确认高风险决策；
 - 确认、发布、派生和作废需求清单。
 
@@ -780,6 +786,7 @@ tests/integration/test_ai_scenario_wizard_handoff.py
 - 阻断字段；
 - 引用重检；
 - 幂等正式化；
+- contributor 不能发布场景且 admin 可以发布；
 - AI 不可用时的手工降级。
 
 前端测试文件：
@@ -853,7 +860,8 @@ tests/integration/test_plan05_scenario_calculation.py
 
 ```text
 contributor 创建或恢复场景草稿
-→ 六步确认并正式化
+→ 六步确认并正式化为 DRAFT 场景版本
+→ admin 发布场景版本
 → 推荐候选
 → 启动三个独立子任务
 → 一个失败、两个成功
@@ -1008,4 +1016,5 @@ git diff --check
 - 需求清单使用严格五状态生命周期；
 - 发布版本不可原地修改，修改必须派生；
 - contributor 准备和提交，admin 确认高风险并发布；
+- contributor 生成 DRAFT 场景版本，admin 发布正式场景；
 - 库存、审查、分配和报告继续留在 Plan 05-4、05-5。
