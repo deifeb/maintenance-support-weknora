@@ -93,6 +93,24 @@ class CalculationDecisionType(StrEnum):
     MANUAL_QUANTITY = "MANUAL_QUANTITY"
 
 
+class DemandListStatus(StrEnum):
+    DRAFT = "DRAFT"
+    PENDING_CONFIRMATION = "PENDING_CONFIRMATION"
+    CONFIRMED = "CONFIRMED"
+    PUBLISHED = "PUBLISHED"
+    VOIDED = "VOIDED"
+
+
+class DemandListEventType(StrEnum):
+    CREATED = "CREATED"
+    ITEM_UPDATED = "ITEM_UPDATED"
+    SUBMITTED = "SUBMITTED"
+    CONFIRMED = "CONFIRMED"
+    PUBLISHED = "PUBLISHED"
+    DERIVED = "DERIVED"
+    VOIDED = "VOIDED"
+
+
 class RerunMode(StrEnum):
     NEW = "NEW"
     REPLAY_SNAPSHOT = "REPLAY_SNAPSHOT"
