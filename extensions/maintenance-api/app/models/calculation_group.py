@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -31,6 +31,9 @@ from app.models.mixins import (
     VersionedMixin,
     utc_now,
 )
+
+if TYPE_CHECKING:
+    from app.models.demand_calculation import DemandCalculation
 
 
 class CalculationGroup(
@@ -121,6 +124,31 @@ class CalculationGroup(
         ),
     )
 
+    @property
+    def current_children(self) -> list["CalculationGroupChild"]:
+        return sorted(
+            (
+                child
+                for child in self.children
+                if child.is_current_attempt
+            ),
+            key=lambda child: (
+                not child.is_primary,
+                child.candidate_key,
+            ),
+        )
+
+    def child(
+        self,
+        candidate_key: str,
+    ) -> "CalculationGroupChild":
+        for child in self.current_children:
+            if child.candidate_key == candidate_key:
+                return child
+        raise LookupError(
+            f"candidate {candidate_key} not found"
+        )
+
 
 class CalculationGroupChild(
     Base,
@@ -196,6 +224,7 @@ class CalculationGroupChild(
     group: Mapped[CalculationGroup] = relationship(
         back_populates="children",
     )
+    calculation: Mapped["DemandCalculation"] = relationship()
 
     __table_args__ = (
         UniqueConstraint(

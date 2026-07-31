@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import (
     CalculationDecisionType,
@@ -74,3 +74,18 @@ class CalculationGroupRead(BaseModel):
     created_by_request_id: str
     created_at: datetime
     updated_at: datetime
+
+
+class CalculationGroupCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_version_id: int = Field(gt=0)
+    primary_candidate_key: str = Field(
+        min_length=3,
+        max_length=80,
+    )
+    selected_candidate_keys: list[str] = Field(
+        min_length=1,
+        max_length=10,
+    )
+    random_seed: int = 20260723

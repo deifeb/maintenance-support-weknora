@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -41,6 +42,7 @@ from app.models.enums import (
     FailureProcessMode,
     ItemCalculationStatus,
     MissingParameterPolicy,
+    ReliabilityModelType,
     RerunMode,
     ScenarioVersionStatus,
     ShortageRiskLevel,
@@ -74,6 +76,14 @@ _SOURCE_PRIORITY = {
     "EXPERT_JUDGMENT": 4,
     "LITERATURE": 5,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateExecutionSpec:
+    candidate_key: str
+    reliability_model: ReliabilityModelType
+    execution_mode: DemandExecutionMode
+    random_seed: int
 
 
 class DemandCalculationService:
@@ -593,6 +603,167 @@ class DemandCalculationService:
         if extension.get("reference_duration_hours") is not None:
             result["reference_duration_hours"] = str(extension["reference_duration_hours"])
         return result
+
+    @staticmethod
+    def _validate_candidate_parameters(
+        snapshot: dict[str, Any],
+        spec: CandidateExecutionSpec,
+    ) -> None:
+        items = list(snapshot.get("items") or [])
+        missing_by_item: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            reliability = item.get("reliability")
+            reliability = (
+                reliability
+                if isinstance(reliability, dict)
+                else {}
+            )
+            missing = []
+            if (
+                spec.reliability_model
+                is ReliabilityModelType.EXPONENTIAL
+            ):
+                if (
+                    reliability.get("failure_rate") is None
+                    and reliability.get("mtbf_hours") is None
+                ):
+                    missing.append("failure_rate_or_mtbf")
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.WEIBULL
+            ):
+                for name in (
+                    "weibull_shape",
+                    "weibull_scale",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.BINOMIAL
+            ):
+                for name in (
+                    "binomial_trials",
+                    "binomial_probability",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.NEGATIVE_BINOMIAL
+            ):
+                for name in (
+                    "negative_binomial_r",
+                    "negative_binomial_p",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.EMPIRICAL
+            ):
+                for name in (
+                    "empirical_mean",
+                    "empirical_variance",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            if missing:
+                missing_by_item.append(
+                    {
+                        "item_index": index,
+                        "missing_requirements": missing,
+                    }
+                )
+        if not items:
+            missing_by_item.append(
+                {
+                    "item_index": None,
+                    "missing_requirements": [
+                        "demand_items",
+                    ],
+                }
+            )
+        if missing_by_item:
+            raise BusinessValidationError(
+                "candidate reliability parameters are missing",
+                code="CANDIDATE_PARAMETERS_MISSING",
+                details={
+                    "candidate_key": spec.candidate_key,
+                    "items": missing_by_item,
+                },
+            )
+
+    def submit_candidate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        scenario_version_id: int,
+        spec: CandidateExecutionSpec,
+        idempotency_key: str,
+    ) -> DemandCalculation:
+        existing = (
+            self.calculation_repository
+            .get_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                idempotency_key,
+            )
+        )
+        if existing is not None:
+            return existing
+
+        trusted_snapshot, warnings = self.build_snapshot(
+            session,
+            actor,
+            CalculationPreviewRequest(
+                scenario_version_id=scenario_version_id,
+            ),
+        )
+        snapshot = deepcopy(trusted_snapshot)
+        self._validate_candidate_parameters(snapshot, spec)
+        for item in snapshot["items"]:
+            item["reliability"]["model_type"] = (
+                spec.reliability_model.value
+            )
+        snapshot["candidate_key"] = spec.candidate_key
+        snapshot["requested_mode"] = (
+            spec.execution_mode.value
+        )
+        snapshot["random_seed"] = spec.random_seed
+        now = datetime.now(timezone.utc)
+        calculation = self.calculation_repository.create(
+            session,
+            actor.tenant_id,
+            {
+                "calculation_code": (
+                    "DC-"
+                    f"{now:%Y%m%d%H%M%S}"
+                    f"-{uuid.uuid4().hex[:8].upper()}"
+                ),
+                "calculation_name": (
+                    "Candidate "
+                    f"{spec.candidate_key}"
+                ),
+                "scenario_version_id": scenario_version_id,
+                "rerun_mode": RerunMode.NEW,
+                "execution_type": (
+                    CalculationExecutionType.ASYNCHRONOUS
+                ),
+                "requested_mode": spec.execution_mode,
+                "status": CalculationStatus.PENDING,
+                "input_snapshot_json": snapshot,
+                "input_snapshot_hash": (
+                    snapshot_service.canonical_hash(snapshot)
+                ),
+                "inventory_snapshot_at": now,
+                "warnings_json": warnings,
+                "submitted_at": now,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        return calculation
 
     def submit(
         self,

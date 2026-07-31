@@ -2,19 +2,28 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from app.models import DemandScenarioTemplate, DemandScenarioVersion
 from app.models.enums import (
     DemandExecutionMode,
     ReliabilityModelType,
+    ScenarioVersionStatus,
 )
 from app.schemas.model_recommendation import (
     CandidateRecommendation,
     ModelRecommendationSet,
 )
 from app.security.actor import MaintenanceRole
+from app.services.calculation_group_service import (
+    calculation_group_service,
+)
 from app.services.model_recommendation_service import (
     model_recommendation_service,
 )
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+from tests.services.test_calculation_group_service import (
+    compatible_snapshot,
+)
 
 
 def recommendation_result() -> ModelRecommendationSet:
@@ -93,6 +102,100 @@ def test_model_recommendation_request_rejects_tenant_fields(
         json={
             "scenario_version_id": 7,
             "tenant_id": "tenant-b",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_list_and_get_calculation_group(
+    client: TestClient,
+    session: Session,
+    internal_auth_headers: Callable[..., dict[str, str]],
+    monkeypatch,
+) -> None:
+    template = DemandScenarioTemplate(
+        tenant_id="tenant-a",
+        code="GROUP-API",
+        name="Group API",
+    )
+    session.add(template)
+    session.flush()
+    version = DemandScenarioVersion(
+        tenant_id="tenant-a",
+        scenario_template_id=template.id,
+        version_code="V1",
+        version_name="Version 1",
+        status=ScenarioVersionStatus.PUBLISHED,
+    )
+    session.add(version)
+    session.commit()
+    monkeypatch.setattr(
+        calculation_group_service.calculation_service,
+        "build_snapshot",
+        lambda *args, **kwargs: (compatible_snapshot(), []),
+    )
+    headers = {
+        **internal_auth_headers(),
+        "Idempotency-Key": "api-group-create",
+    }
+
+    created = client.post(
+        "/api/v1/demand/calculation-groups",
+        headers=headers,
+        json={
+            "scenario_version_id": version.id,
+            "primary_candidate_key": "WEIBULL:ANALYTICAL",
+            "selected_candidate_keys": [
+                "WEIBULL:ANALYTICAL",
+                "WEIBULL:MONTE_CARLO",
+            ],
+        },
+    )
+
+    assert created.status_code == 201
+    created_data = created.json()["data"]
+    assert len(created_data["current_children"]) == 2
+    assert {
+        item["calculation_status"]
+        for item in created_data["current_children"]
+    } == {"PENDING"}
+
+    listed = client.get(
+        "/api/v1/demand/calculation-groups",
+        headers=internal_auth_headers(
+            role=MaintenanceRole.VIEWER,
+        ),
+    )
+    assert listed.status_code == 200
+    assert listed.json()["data"]["total"] == 1
+
+    detail = client.get(
+        (
+            "/api/v1/demand/calculation-groups/"
+            f"{created_data['id']}"
+        ),
+        headers=internal_auth_headers(
+            role=MaintenanceRole.VIEWER,
+        ),
+    )
+    assert detail.status_code == 200
+    assert detail.json()["data"]["id"] == created_data["id"]
+
+
+def test_group_create_requires_idempotency_key(
+    client: TestClient,
+    internal_auth_headers: Callable[..., dict[str, str]],
+) -> None:
+    response = client.post(
+        "/api/v1/demand/calculation-groups",
+        headers=internal_auth_headers(),
+        json={
+            "scenario_version_id": 1,
+            "primary_candidate_key": "WEIBULL:ANALYTICAL",
+            "selected_candidate_keys": [
+                "WEIBULL:ANALYTICAL",
+            ],
         },
     )
 

@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.calculation_group import (
     CalculationGroup,
@@ -28,10 +28,38 @@ class CalculationGroupRepository(
         tenant_id: str,
         group_id: int,
     ) -> CalculationGroup | None:
-        return self.get_by_id(
-            session,
-            tenant_id,
-            group_id,
+        return session.scalar(
+            select(CalculationGroup)
+            .options(
+                tenant_loader_criteria(tenant_id),
+                selectinload(
+                    CalculationGroup.children
+                ).selectinload(
+                    CalculationGroupChild.calculation
+                ),
+            )
+            .execution_options(populate_existing=True)
+            .where(
+                CalculationGroup.tenant_id == tenant_id,
+                CalculationGroup.id == group_id,
+            )
+        )
+
+    def get_by_idempotency_key(
+        self,
+        session: Session,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> CalculationGroup | None:
+        return session.scalar(
+            select(CalculationGroup)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                CalculationGroup.tenant_id == tenant_id,
+                CalculationGroup.idempotency_key
+                == idempotency_key,
+            )
         )
 
     def get_for_update(

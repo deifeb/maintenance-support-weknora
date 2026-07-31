@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.demand import (
+    calculation_groups,
     calculations,
     comparisons,
     model_recommendations,
@@ -10,6 +11,7 @@ from app.api.v1.demand import (
 )
 
 router = APIRouter(prefix="/demand")
+router.include_router(calculation_groups.router)
 router.include_router(model_recommendations.router)
 router.include_router(repair_profiles.router)
 router.include_router(scenario_drafts.router)
