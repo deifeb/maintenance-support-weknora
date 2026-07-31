@@ -345,4 +345,6 @@ def test_terminal_event_stream_replays_and_closes(
         "text/event-stream"
     )
     assert "id: 2" in response.text
+    assert '"child_id":' in response.text
     assert "event: group.status_changed" in response.text
+    assert ": heartbeat" not in response.text

@@ -310,6 +310,9 @@ def stream_events(
                     cursor = event.sequence
                     payload = json.dumps(
                         {
+                            "group_id": event.group_id,
+                            "child_id": event.child_id,
+                            "sequence": event.sequence,
                             "type": event.event_type,
                             "payload": event.payload_json,
                             "occurred_at": (
@@ -327,7 +330,6 @@ def stream_events(
                     group is None
                     or (
                         group.status in terminal
-                        and not events
                     )
                 ):
                     return
