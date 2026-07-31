@@ -33,6 +33,10 @@ from app.repositories.demand_calculation_repository import (
     DemandRunContributionRepository,
     DemandRunItemResultRepository,
 )
+from app.repositories.demand_list_repository import (
+    DemandListItemRepository,
+    DemandListRepository,
+)
 from app.repositories.demand_scenario_repository import (
     DemandAgeGroupRepository,
     DemandCommonShockRepository,
@@ -87,6 +91,8 @@ __all__ = [
     "DemandCalculationRunRepository",
     "DemandCommonShockRepository",
     "DemandFleetGroupRepository",
+    "DemandListItemRepository",
+    "DemandListRepository",
     "DemandParameterOverrideRepository",
     "DemandRunContributionRepository",
     "DemandRunItemResultRepository",
