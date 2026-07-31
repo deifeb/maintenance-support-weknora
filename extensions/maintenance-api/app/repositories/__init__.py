@@ -18,6 +18,11 @@ from app.repositories.ai_session_repository import (
     AISessionRepository,
     ai_session_repository,
 )
+from app.repositories.calculation_group_repository import (
+    CalculationGroupChildRepository,
+    CalculationGroupRepository,
+    CalculationItemDecisionRepository,
+)
 from app.repositories.configuration_repository import (
     ConfigurationItemRepository,
     ConfigurationRepository,
@@ -74,6 +79,9 @@ __all__ = [
     "AISessionRepository",
     "ConfigurationItemRepository",
     "ConfigurationRepository",
+    "CalculationGroupChildRepository",
+    "CalculationGroupRepository",
+    "CalculationItemDecisionRepository",
     "DemandAgeGroupRepository",
     "DemandCalculationRepository",
     "DemandCalculationRunRepository",

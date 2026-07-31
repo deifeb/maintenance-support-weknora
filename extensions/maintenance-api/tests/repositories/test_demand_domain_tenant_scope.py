@@ -701,3 +701,324 @@ def test_calculation_child_lists_are_tenant_scoped(
             run_a.id,
         )
     ] == [contribution_a.id]
+
+
+def test_calculation_group_repository_never_returns_foreign_tenant(
+    session: Session,
+) -> None:
+    try:
+        from app.models.enums import CalculationGroupStatus
+        from app.repositories.calculation_group_repository import (
+            CalculationGroupRepository,
+        )
+    except (ImportError, ModuleNotFoundError) as error:
+        pytest.fail(
+            f"calculation group persistence is missing: {error}"
+        )
+
+    template_a = add_template(
+        session,
+        "tenant-a",
+        "GROUP-A",
+    )
+    version_a = add_version(
+        session,
+        "tenant-a",
+        template_a.id,
+        "V-A",
+    )
+    template_b = add_template(
+        session,
+        "tenant-b",
+        "GROUP-B",
+    )
+    version_b = add_version(
+        session,
+        "tenant-b",
+        template_b.id,
+        "V-B",
+    )
+    repository = CalculationGroupRepository()
+    group_a = repository.create(
+        session,
+        "tenant-a",
+        {
+            "scenario_version_id": version_a.id,
+            "status": CalculationGroupStatus.PENDING,
+            "primary_candidate_key": "WEIBULL:ANALYTICAL",
+            "recommendation_snapshot_json": {},
+            "parameter_snapshot_json": {},
+            "created_by_user_id": "user-a",
+            "created_by_request_id": "request-a",
+        },
+    )
+    group_b = repository.create(
+        session,
+        "tenant-b",
+        {
+            "scenario_version_id": version_b.id,
+            "status": CalculationGroupStatus.PENDING,
+            "primary_candidate_key": "EXPONENTIAL:ANALYTICAL",
+            "recommendation_snapshot_json": {},
+            "parameter_snapshot_json": {},
+            "created_by_user_id": "user-b",
+            "created_by_request_id": "request-b",
+        },
+    )
+
+    assert repository.get(
+        session,
+        "tenant-a",
+        group_a.id,
+    ).id == group_a.id
+    assert repository.get(
+        session,
+        "tenant-a",
+        group_b.id,
+    ) is None
+    assert repository.get_for_update(
+        session,
+        "tenant-a",
+        group_b.id,
+    ) is None
+    rows, total = repository.list_page(
+        session,
+        "tenant-a",
+    )
+    assert total == 1
+    assert [row.id for row in rows] == [group_a.id]
+
+
+def test_calculation_group_events_receive_monotonic_sequence(
+    session: Session,
+) -> None:
+    try:
+        from app.models.enums import CalculationGroupStatus
+        from app.repositories.calculation_group_repository import (
+            CalculationGroupRepository,
+        )
+    except (ImportError, ModuleNotFoundError) as error:
+        pytest.fail(
+            f"calculation group persistence is missing: {error}"
+        )
+
+    template = add_template(
+        session,
+        "tenant-a",
+        "GROUP-EVENTS",
+    )
+    version = add_version(
+        session,
+        "tenant-a",
+        template.id,
+        "V1",
+    )
+    repository = CalculationGroupRepository()
+    group = repository.create(
+        session,
+        "tenant-a",
+        {
+            "scenario_version_id": version.id,
+            "status": CalculationGroupStatus.PENDING,
+            "primary_candidate_key": "WEIBULL:ANALYTICAL",
+            "recommendation_snapshot_json": {},
+            "parameter_snapshot_json": {},
+            "created_by_user_id": "user-a",
+            "created_by_request_id": "request-a",
+        },
+    )
+
+    first = repository.append_event(
+        session,
+        "tenant-a",
+        group.id,
+        event_type="group.created",
+        payload={"status": "PENDING"},
+    )
+    second = repository.append_event(
+        session,
+        "tenant-a",
+        group.id,
+        event_type="child.queued",
+        payload={"candidate_key": "WEIBULL:ANALYTICAL"},
+    )
+
+    assert [first.sequence, second.sequence] == [1, 2]
+    assert group.last_event_sequence == 2
+
+
+def test_calculation_group_child_attempts_replace_current_attempt(
+    session: Session,
+) -> None:
+    from app.models.enums import (
+        CalculationGroupStatus,
+        DemandExecutionMode,
+        ReliabilityModelType,
+    )
+    from app.repositories.calculation_group_repository import (
+        CalculationGroupChildRepository,
+        CalculationGroupRepository,
+    )
+
+    template = add_template(session, "tenant-a", "GROUP-ATTEMPTS")
+    version = add_version(
+        session,
+        "tenant-a",
+        template.id,
+        "V1",
+    )
+    calculation = add_calculation(session, "tenant-a", "ATTEMPT")
+    group = CalculationGroupRepository().create(
+        session,
+        "tenant-a",
+        {
+            "scenario_version_id": version.id,
+            "status": CalculationGroupStatus.PENDING,
+            "primary_candidate_key": "WEIBULL:ANALYTICAL",
+            "recommendation_snapshot_json": {},
+            "parameter_snapshot_json": {},
+            "created_by_user_id": "user-a",
+            "created_by_request_id": "request-a",
+        },
+    )
+    repository = CalculationGroupChildRepository()
+    attempt_data = {
+        "candidate_key": "WEIBULL:ANALYTICAL",
+        "reliability_model": ReliabilityModelType.WEIBULL,
+        "execution_mode": DemandExecutionMode.ANALYTICAL,
+        "calculation_id": calculation.id,
+        "is_primary": True,
+    }
+
+    first = repository.create_attempt(
+        session,
+        "tenant-a",
+        group.id,
+        attempt_data,
+    )
+    second = repository.create_attempt(
+        session,
+        "tenant-a",
+        group.id,
+        attempt_data,
+    )
+
+    assert (first.attempt_number, first.is_current_attempt) == (
+        1,
+        False,
+    )
+    assert (second.attempt_number, second.is_current_attempt) == (
+        2,
+        True,
+    )
+    assert [
+        row.id
+        for row in repository.current_for_group(
+            session,
+            "tenant-a",
+            group.id,
+        )
+    ] == [second.id]
+    assert (
+        repository.current_for_group(
+            session,
+            "tenant-b",
+            group.id,
+        )
+        == []
+    )
+
+
+def test_calculation_item_decision_upsert_is_tenant_scoped_and_versioned(
+    session: Session,
+) -> None:
+    from app.models.enums import (
+        CalculationDecisionType,
+        CalculationGroupStatus,
+        DemandExecutionMode,
+        ReliabilityModelType,
+    )
+    from app.repositories.calculation_group_repository import (
+        CalculationGroupChildRepository,
+        CalculationGroupRepository,
+        CalculationItemDecisionRepository,
+    )
+
+    template = add_template(session, "tenant-a", "GROUP-DECISION")
+    version = add_version(
+        session,
+        "tenant-a",
+        template.id,
+        "V1",
+    )
+    calculation = add_calculation(session, "tenant-a", "DECISION")
+    spare = add_spare(session, "tenant-a", "DECISION")
+    group = CalculationGroupRepository().create(
+        session,
+        "tenant-a",
+        {
+            "scenario_version_id": version.id,
+            "status": CalculationGroupStatus.COMPLETED,
+            "primary_candidate_key": "WEIBULL:ANALYTICAL",
+            "recommendation_snapshot_json": {},
+            "parameter_snapshot_json": {},
+            "created_by_user_id": "user-a",
+            "created_by_request_id": "request-a",
+        },
+    )
+    child = CalculationGroupChildRepository().create_attempt(
+        session,
+        "tenant-a",
+        group.id,
+        {
+            "candidate_key": "WEIBULL:ANALYTICAL",
+            "reliability_model": ReliabilityModelType.WEIBULL,
+            "execution_mode": DemandExecutionMode.ANALYTICAL,
+            "calculation_id": calculation.id,
+            "is_primary": True,
+        },
+    )
+    repository = CalculationItemDecisionRepository()
+    decision_data = {
+        "source_child_id": child.id,
+        "selected_child_id": child.id,
+        "original_quantity": Decimal("4"),
+        "final_quantity": Decimal("4"),
+        "decision_type": CalculationDecisionType.SYSTEM_RECOMMENDATION,
+        "risk": "LOW",
+        "risk_rule_version": "v1",
+        "decided_by_user_id": "user-a",
+        "decided_by_request_id": "request-a",
+    }
+
+    created = repository.upsert(
+        session,
+        "tenant-a",
+        group.id,
+        spare.id,
+        decision_data,
+    )
+    updated = repository.upsert(
+        session,
+        "tenant-a",
+        group.id,
+        spare.id,
+        {
+            **decision_data,
+            "final_quantity": Decimal("5"),
+            "decision_type": CalculationDecisionType.MANUAL_QUANTITY,
+        },
+    )
+
+    assert updated.id == created.id
+    assert updated.version == 2
+    assert updated.final_quantity == Decimal("5")
+    assert (
+        repository.get_for_update(
+            session,
+            "tenant-b",
+            group.id,
+            spare.id,
+        )
+        is None
+    )

@@ -24,6 +24,12 @@ from app.models.ai_session import (
     AISession,
     AISessionSnapshot,
 )
+from app.models.calculation_group import (
+    CalculationGroup,
+    CalculationGroupChild,
+    CalculationGroupEvent,
+    CalculationItemDecision,
+)
 from app.models.catalog import Part, SparePart
 from app.models.demand_calculation import (
     DemandCalculation,
@@ -71,6 +77,10 @@ __all__ = [
     "Supplier",
     "SupplierOffer",
     "RepairProfile",
+    "CalculationGroup",
+    "CalculationGroupChild",
+    "CalculationGroupEvent",
+    "CalculationItemDecision",
     "DemandScenarioTemplate",
     "DemandScenarioVersion",
     "DemandScenarioStage",
