@@ -63,6 +63,23 @@ class AISessionRepository:
             )
         )
 
+    def get_for_update(
+        self,
+        session: Session,
+        tenant_id: str,
+        session_id: int,
+    ) -> AISession | None:
+        return session.scalar(
+            select(AISession)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AISession.id == session_id,
+                AISession.tenant_id == tenant_id,
+            )
+            .with_for_update()
+        )
+
     def _require_session(
         self,
         session: Session,
