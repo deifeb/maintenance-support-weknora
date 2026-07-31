@@ -11,6 +11,8 @@ from app.core.config import SERVICE_ROOT, get_settings
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
+TENANT_SECURITY_REVISION = "6c2dc8414b2f"
+
 TENANT_TABLES = {
     "equipment_models",
     "configuration_versions",
@@ -54,6 +56,7 @@ TENANT_TABLES = {
     "ai_report_citations",
     "ai_report_validation_findings",
     "ai_report_exports",
+    "master_data_import_tasks",
 }
 
 VERSIONED_TABLES = {
@@ -75,6 +78,7 @@ VERSIONED_TABLES = {
     "ai_execution_plans",
     "ai_review_runs",
     "ai_report_jobs",
+    "master_data_import_tasks",
 }
 
 TENANT_UNIQUE_INDEXES = {
@@ -134,9 +138,7 @@ def migration_config(
 
 def previous_revision(config: Config) -> str:
     script = ScriptDirectory.from_config(config)
-    head = script.get_current_head()
-    assert head is not None
-    revision = script.get_revision(head)
+    revision = script.get_revision(TENANT_SECURITY_REVISION)
     assert revision is not None
     assert isinstance(revision.down_revision, str)
     return revision.down_revision

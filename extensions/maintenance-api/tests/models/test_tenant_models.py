@@ -54,6 +54,7 @@ TENANT_TABLES = {
     "ai_report_citations",
     "ai_report_validation_findings",
     "ai_report_exports",
+    "master_data_import_tasks",
 }
 
 VERSIONED_TABLES = {
@@ -75,6 +76,7 @@ VERSIONED_TABLES = {
     "ai_execution_plans",
     "ai_review_runs",
     "ai_report_jobs",
+    "master_data_import_tasks",
 }
 
 TENANT_UNIQUE_INDEXES = {
