@@ -55,6 +55,13 @@ TENANT_TABLES = {
     "ai_report_validation_findings",
     "ai_report_exports",
     "master_data_import_tasks",
+    "calculation_groups",
+    "calculation_group_children",
+    "calculation_group_events",
+    "calculation_item_decisions",
+    "demand_lists",
+    "demand_list_items",
+    "demand_list_events",
 }
 
 VERSIONED_TABLES = {
@@ -77,6 +84,10 @@ VERSIONED_TABLES = {
     "ai_review_runs",
     "ai_report_jobs",
     "master_data_import_tasks",
+    "calculation_groups",
+    "calculation_item_decisions",
+    "demand_lists",
+    "demand_list_items",
 }
 
 TENANT_UNIQUE_INDEXES = {
