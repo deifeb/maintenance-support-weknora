@@ -37,6 +37,11 @@ from app.models.demand_calculation import (
     DemandRunContribution,
     DemandRunItemResult,
 )
+from app.models.demand_list import (
+    DemandList,
+    DemandListEvent,
+    DemandListItem,
+)
 from app.models.demand_scenario import (
     DemandAgeGroup,
     DemandCommonShockRule,
@@ -81,6 +86,9 @@ __all__ = [
     "CalculationGroupChild",
     "CalculationGroupEvent",
     "CalculationItemDecision",
+    "DemandList",
+    "DemandListItem",
+    "DemandListEvent",
     "DemandScenarioTemplate",
     "DemandScenarioVersion",
     "DemandScenarioStage",
