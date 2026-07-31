@@ -96,6 +96,14 @@ export function reduceGroupEvent(
                     )
                     ?? child.progress_percent
                   ),
+                  current_stage: (
+                    payloadString(event, 'stage')
+                    ?? child.current_stage
+                  ),
+                  terminal_error: (
+                    payloadString(event, 'error')
+                    ?? child.terminal_error
+                  ),
                 }
               : child
           ),

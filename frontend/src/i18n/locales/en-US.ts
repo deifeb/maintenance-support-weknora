@@ -1,3 +1,5 @@
+import { maintenanceCalculationLocales } from './maintenance-calculation'
+
 export default {
   menu: {
     knowledgeBase: 'Knowledge Base',
@@ -46,6 +48,7 @@ export default {
     loadMoreSessions: 'Load more',
   },
   maintenance: {
+    calculation: maintenanceCalculationLocales['en-US'],
     placeholder: 'This feature will be enabled in its implementation phase',
     pages: {
       dashboard: 'Dashboard',

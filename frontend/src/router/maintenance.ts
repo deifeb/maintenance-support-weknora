@@ -95,6 +95,39 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         meta: { ...maintenanceRouteMeta },
       },
       {
+        path: 'calculations/new',
+        name: 'maintenanceCalculationNew',
+        component: () => import(
+          '@/views/maintenance/calculations/CalculationSetup.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
+        path: 'calculations/:groupId/progress',
+        name: 'maintenanceCalculationProgress',
+        component: () => import(
+          '@/views/maintenance/calculations/CalculationProgress.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
+        path: 'calculations/:groupId/comparison',
+        name: 'maintenanceCalculationComparison',
+        component: () => import(
+          '@/views/maintenance/calculations/CalculationComparison.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
         path: 'inventory-gap',
         name: 'maintenanceInventoryGap',
         component: () => import('@/views/maintenance/inventory-gap/InventoryGapPage.vue'),

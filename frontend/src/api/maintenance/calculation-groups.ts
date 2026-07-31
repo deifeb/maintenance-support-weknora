@@ -43,6 +43,9 @@ export interface CalculationGroupChild {
   attempt_number: number
   is_primary: boolean
   selection_reason: string | null
+  current_stage?: string | null
+  warnings?: string[]
+  terminal_error?: string | null
 }
 
 export interface CalculationGroup {

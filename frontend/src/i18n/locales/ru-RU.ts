@@ -1,3 +1,5 @@
+import { maintenanceCalculationLocales } from './maintenance-calculation'
+
 export default {
   menu: {
     knowledgeBase: 'База знаний',
@@ -46,6 +48,7 @@ export default {
     maintenance: 'Техобслуживание',
   },
   maintenance: {
+    calculation: maintenanceCalculationLocales['ru-RU'],
     placeholder: 'Эта функция будет включена на соответствующем этапе реализации',
     pages: {
       dashboard: 'Обзор',

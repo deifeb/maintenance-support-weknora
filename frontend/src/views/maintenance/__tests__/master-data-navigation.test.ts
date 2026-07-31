@@ -59,6 +59,9 @@ test('visible Maintenance menu entries agree with route records while detail rou
       'maintenanceScenarioNew',
       'maintenanceScenarioDetail',
       'maintenanceScenarioVersionDetail',
+      'maintenanceCalculationNew',
+      'maintenanceCalculationProgress',
+      'maintenanceCalculationComparison',
     ],
   )
 })

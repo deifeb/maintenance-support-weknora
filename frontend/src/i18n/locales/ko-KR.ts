@@ -1,3 +1,5 @@
+import { maintenanceCalculationLocales } from './maintenance-calculation'
+
 export default {
   menu: {
     knowledgeBase: "지식베이스",
@@ -46,6 +48,7 @@ export default {
     loadMoreSessions: "더 보기",
   },
   maintenance: {
+    calculation: maintenanceCalculationLocales['ko-KR'],
     placeholder: "이 기능은 해당 구현 단계에서 활성화됩니다",
     pages: {
       dashboard: "대시보드",

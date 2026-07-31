@@ -1,3 +1,5 @@
+import { maintenanceCalculationLocales } from './maintenance-calculation'
+
 export default {
   menu: {
     knowledgeBase: "知识库",
@@ -46,6 +48,7 @@ export default {
     loadMoreSessions: "加载更多",
   },
   maintenance: {
+    calculation: maintenanceCalculationLocales['zh-CN'],
     placeholder: "该功能将在对应实施阶段启用",
     pages: {
       dashboard: "概览",
