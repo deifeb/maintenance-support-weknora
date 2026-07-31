@@ -264,7 +264,7 @@ class ToolRegistry:
         )
 
 
-_DEFAULT_TOOLS = {
+DEFAULT_TOOL_CONTRACTS = {
     "search_equipment_models": (
         "Search equipment models",
         "READ",
@@ -442,7 +442,7 @@ def build_default_tool_registry() -> ToolRegistry:
             permission,
             confirmation,
         ),
-    ) in _DEFAULT_TOOLS.items():
+    ) in DEFAULT_TOOL_CONTRACTS.items():
         registry.register(
             ToolDefinition(
                 name=name,

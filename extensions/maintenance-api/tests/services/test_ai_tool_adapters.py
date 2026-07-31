@@ -17,13 +17,19 @@ from app.models.enums import (
 from app.security.actor import ActorContext
 from app.services.ai_tool_adapters import (
     compute_tool_idempotency_key,
+    create_scenario_draft,
     get_calculation_status,
+    get_scenario_preview,
     search_equipment_models,
     start_demand_calculation,
+    update_scenario_draft,
+    validate_scenario_draft,
 )
 from app.services.ai_tool_registry import (
+    DEFAULT_TOOL_CONTRACTS,
     FlexiblePayload,
     ToolExecutionContext,
+    build_default_tool_registry,
 )
 from app.services.demand_calculation_service import (
     calculation_service,
@@ -39,11 +45,126 @@ def context(
     return ToolExecutionContext(
         actor=actor,
         permissions={
-            "CALCULATION_EXECUTE"
+            "CALCULATION_EXECUTE",
+            "SCENARIO_DRAFT",
         },
         intent="DEMAND_CALCULATE",
         confirmation_approved=True,
         business_idempotency_key=key,
+    )
+
+
+def test_ai_create_draft_returns_wizard_navigation(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    result = create_scenario_draft(
+        session,
+        FlexiblePayload(
+            scenario_name="Thirty day readiness",
+            fields={
+                "service_level": {
+                    "value": "0.95",
+                    "source": "AI_INFERRED",
+                    "confidence": "0.83",
+                    "risk": "BLOCKING",
+                    "confirmed": False,
+                    "evidence_refs": [
+                        "ai-message:1"
+                    ],
+                }
+            },
+        ),
+        context(actor_contributor),
+    )
+
+    assert result["navigation_url"].startswith(
+        "/platform/maintenance/scenarios/new?session_id="
+    )
+    assert result["draft_version"] == 1
+    assert result["status"] == "BLOCKED"
+    assert "service_level" in result["blocking_fields"]
+
+
+def test_ai_draft_update_validate_and_preview_use_latest_version(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    tool_context = context(actor_contributor)
+    created = create_scenario_draft(
+        session,
+        FlexiblePayload(
+            scenario_name="Initial name",
+            fields={},
+        ),
+        tool_context,
+    )
+    session_id = created["session_id"]
+
+    updated = update_scenario_draft(
+        session,
+        FlexiblePayload(
+            session_id=session_id,
+            expected_version=1,
+            scenario_name="Updated name",
+            current_step=2,
+            fields={
+                "mission_code": {
+                    "value": "MISSION-30D",
+                    "source": "AI_INFERRED",
+                    "confidence": "0.9",
+                    "risk": "HIGH",
+                    "confirmed": False,
+                    "evidence_refs": [],
+                }
+            },
+        ),
+        tool_context,
+    )
+    validated = validate_scenario_draft(
+        session,
+        FlexiblePayload(session_id=session_id),
+        tool_context,
+    )
+    preview = get_scenario_preview(
+        session,
+        FlexiblePayload(session_id=session_id),
+        tool_context,
+    )
+
+    assert updated["draft_version"] == 2
+    assert validated == preview
+    assert validated["draft_version"] == 2
+    assert (
+        validated["navigation_url"]
+        == (
+            "/platform/maintenance/scenarios/new"
+            f"?session_id={session_id}"
+        )
+    )
+
+
+def test_ai_registry_exposes_no_materialize_tool() -> None:
+    assert (
+        "materialize_scenario_draft"
+        not in DEFAULT_TOOL_CONTRACTS
+    )
+
+
+def test_default_registry_executes_scenario_draft_adapter(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    result = build_default_tool_registry().execute(
+        session,
+        "create_scenario_draft",
+        {"scenario_name": "Registry handoff"},
+        context(actor_contributor),
+    )
+
+    assert result["draft_version"] == 1
+    assert result["navigation_url"].endswith(
+        f"session_id={result['session_id']}"
     )
 
 

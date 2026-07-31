@@ -6,7 +6,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import (
+    BusinessValidationError,
+    NotFoundError,
+)
 from app.repositories import (
     ConfigurationRepository,
     DemandCalculationRepository,
@@ -19,11 +22,18 @@ from app.schemas.demand_calculation import (
     CalculationCreateRequest,
     CalculationPreviewRequest,
 )
+from app.schemas.scenario_draft import (
+    ScenarioDraftEnvelope,
+    ScenarioDraftPayload,
+)
 from app.services.demand_calculation_service import (
     calculation_service,
 )
 from app.services.inventory_gap_service import (
     inventory_gap_service,
+)
+from app.services.scenario_draft_service import (
+    scenario_draft_service,
 )
 
 
@@ -53,6 +63,179 @@ def compute_tool_idempotency_key(
     return hashlib.sha256(
         material.encode("utf-8")
     ).hexdigest()
+
+
+def scenario_draft_card(
+    envelope: ScenarioDraftEnvelope,
+) -> dict[str, object]:
+    return {
+        "session_id": envelope.session_id,
+        "draft_version": envelope.version,
+        "status": (
+            "BLOCKED"
+            if envelope.blocking_fields
+            else "READY"
+        ),
+        "blocking_fields": envelope.blocking_fields,
+        "navigation_url": (
+            "/platform/maintenance/scenarios/new"
+            f"?session_id={envelope.session_id}"
+        ),
+    }
+
+
+def _scenario_draft_session_id(
+    data: dict[str, Any],
+    context,
+) -> int:
+    identifier = data.get(
+        "session_id",
+        context.session_id,
+    )
+    if identifier is None:
+        raise BusinessValidationError(
+            "scenario draft session_id is required",
+            code="SCENARIO_DRAFT_SESSION_REQUIRED",
+        )
+    return int(identifier)
+
+
+def create_scenario_draft(
+    session: Session,
+    payload,
+    context,
+) -> dict[str, object]:
+    data = payload.model_dump(
+        exclude_none=True
+    )
+    scenario_name = str(
+        data.get(
+            "scenario_name",
+            data.get("title", ""),
+        )
+    ).strip()
+    if not scenario_name:
+        raise BusinessValidationError(
+            "scenario_name is required",
+            code="SCENARIO_DRAFT_NAME_REQUIRED",
+        )
+    draft = ScenarioDraftPayload.model_validate(
+        {
+            "scenario_name": scenario_name,
+            "current_step": data.get(
+                "current_step",
+                1,
+            ),
+            "fields": data.get("fields", {}),
+        }
+    )
+    envelope = scenario_draft_service.create(
+        session,
+        context.actor,
+        title=scenario_name,
+        sensitivity_level=(
+            data.get(
+                "sensitivity_level",
+                context.sensitivity_level,
+            )
+        ),
+        origin="AI",
+        draft=draft,
+    )
+    return scenario_draft_card(envelope)
+
+
+def update_scenario_draft(
+    session: Session,
+    payload,
+    context,
+) -> dict[str, object]:
+    data = payload.model_dump(
+        exclude_none=True
+    )
+    session_id = _scenario_draft_session_id(
+        data,
+        context,
+    )
+    expected_version = data.get(
+        "expected_version",
+        data.get("draft_version"),
+    )
+    if expected_version is None:
+        raise BusinessValidationError(
+            "expected_version is required",
+            code="SCENARIO_DRAFT_VERSION_REQUIRED",
+        )
+
+    if "draft" in data:
+        draft = ScenarioDraftPayload.model_validate(
+            data["draft"]
+        )
+    else:
+        current = scenario_draft_service.get(
+            session,
+            context.actor,
+            session_id,
+        )
+        draft = current.draft.model_copy(deep=True)
+        if "scenario_name" in data:
+            draft.scenario_name = str(
+                data["scenario_name"]
+            )
+        if "current_step" in data:
+            draft.current_step = int(
+                data["current_step"]
+            )
+        if "fields" in data:
+            merged = draft.model_dump(
+                mode="json"
+            )
+            merged["fields"].update(
+                data["fields"]
+            )
+            draft = ScenarioDraftPayload.model_validate(
+                merged
+            )
+
+    envelope = scenario_draft_service.save(
+        session,
+        context.actor,
+        session_id,
+        expected_version=int(expected_version),
+        draft=draft,
+    )
+    return scenario_draft_card(envelope)
+
+
+def validate_scenario_draft(
+    session: Session,
+    payload,
+    context,
+) -> dict[str, object]:
+    data = payload.model_dump(
+        exclude_none=True
+    )
+    envelope = scenario_draft_service.validate(
+        session,
+        context.actor,
+        _scenario_draft_session_id(
+            data,
+            context,
+        ),
+    )
+    return scenario_draft_card(envelope)
+
+
+def get_scenario_preview(
+    session: Session,
+    payload,
+    context,
+) -> dict[str, object]:
+    return validate_scenario_draft(
+        session,
+        payload,
+        context,
+    )
 
 
 def search_equipment_models(
@@ -417,6 +600,18 @@ def echo_payload(
 
 
 HANDLERS = {
+    "create_scenario_draft": (
+        create_scenario_draft
+    ),
+    "update_scenario_draft": (
+        update_scenario_draft
+    ),
+    "validate_scenario_draft": (
+        validate_scenario_draft
+    ),
+    "get_scenario_preview": (
+        get_scenario_preview
+    ),
     "search_equipment_models": (
         search_equipment_models
     ),
