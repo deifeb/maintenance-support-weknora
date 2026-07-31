@@ -20,7 +20,6 @@ from app.models import (
     DemandScenarioVersion,
 )
 from app.models.enums import (
-    CalculationDecisionType,
     CalculationGroupStatus,
     CalculationStatus,
     ScenarioVersionStatus,
@@ -46,6 +45,11 @@ from app.services.demand_calculation_service import (
     DemandCalculationService,
     calculation_service,
 )
+from app.services.demand_decision_policy import (
+    DEMAND_DECISION_RISK_RULE_VERSION,
+    DecisionCandidateEvidence,
+    evaluate_decision_risk,
+)
 from app.services.model_recommendation_service import (
     ModelRecommendationService,
     model_recommendation_service,
@@ -54,7 +58,7 @@ from app.services.snapshot_service import snapshot_service
 
 
 class CalculationGroupService:
-    DECISION_RISK_RULE_VERSION = "DEMAND-DECISION-RISK-1"
+    DECISION_RISK_RULE_VERSION = DEMAND_DECISION_RISK_RULE_VERSION
 
     def __init__(self) -> None:
         self.group_repository = CalculationGroupRepository()
@@ -854,19 +858,6 @@ class CalculationGroupService:
             rows=rows,
         )
 
-    @staticmethod
-    def _is_material_warning(warnings: list[str]) -> bool:
-        material_tokens = (
-            "MISSING",
-            "NON_CONVERGENCE",
-            "NOT_CONVERGED",
-            "HIGH",
-        )
-        return any(
-            any(token in warning.upper() for token in material_tokens)
-            for warning in warnings
-        )
-
     def save_decision(
         self,
         session: Session,
@@ -963,66 +954,35 @@ class CalculationGroupService:
                 },
             )
 
-        ten_percent_reduction = (
-            selected_quantity > 0
-            and final_quantity
-            <= selected_quantity * Decimal("0.90")
+        risk_evaluation = evaluate_decision_risk(
+            source_child_id=row.system_child_id,
+            selected_child_id=selected_child_id,
+            source_quantity=source.recommended_quantity,
+            selected_quantity=selected_quantity,
+            final_quantity=final_quantity,
+            criticality_level=row.criticality_level,
+            successful_candidates=tuple(
+                DecisionCandidateEvidence(
+                    child_id=cell.child_id,
+                    recommended_quantity=(
+                        cell.recommended_quantity
+                    ),
+                    p50=cell.p50,
+                    p99=cell.p99,
+                    warnings=tuple(cell.warnings),
+                )
+                for cell in row.candidates.values()
+                if (
+                    cell.status == "SUCCEEDED"
+                    and cell.recommended_quantity is not None
+                )
+            ),
         )
-        critical_reduction = (
-            (row.criticality_level or "").upper()
-            in {"HIGH", "CRITICAL"}
-            and final_quantity < selected_quantity
+        decision_type = risk_evaluation.decision_type
+        requires_admin = (
+            risk_evaluation.requires_admin_confirmation
         )
-        successful_cells = [
-            cell
-            for cell in row.candidates.values()
-            if (
-                cell.status == "SUCCEEDED"
-                and cell.p50 is not None
-                and cell.p99 is not None
-            )
-        ]
-        outside_all_ranges = (
-            bool(successful_cells)
-            and all(
-                final_quantity < cell.p50
-                or final_quantity > cell.p99
-                for cell in successful_cells
-            )
-        )
-        source_quantity = source.recommended_quantity
-        non_primary_material_difference = (
-            changed_candidate
-            and source_quantity > 0
-            and abs(
-                selected_quantity - source_quantity
-            ) / source_quantity
-            >= Decimal("0.10")
-        )
-        material_warning = self._is_material_warning(
-            selected.warnings
-        )
-        requires_admin = any(
-            (
-                ten_percent_reduction,
-                critical_reduction,
-                outside_all_ranges,
-                non_primary_material_difference,
-                material_warning,
-            )
-        )
-        if changed_quantity:
-            decision_type = (
-                CalculationDecisionType.MANUAL_QUANTITY
-            )
-        elif changed_candidate:
-            decision_type = (
-                CalculationDecisionType.ALTERNATIVE_CANDIDATE
-            )
-        else:
-            decision_type = (
-                CalculationDecisionType.SYSTEM_RECOMMENDATION
-            )
+
         try:
             decision = self.decision_repository.upsert(
                 session,

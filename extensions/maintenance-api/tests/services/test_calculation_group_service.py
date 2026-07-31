@@ -727,3 +727,267 @@ def test_cancel_running_is_idempotent(
         replay.current_children[0].calculation.status
         is CalculationStatus.CANCELLED
     )
+# Task 2I: shared decision-risk policy integration coverage.
+
+
+def _task2i_add_result_to_current_run(
+    session: Session,
+    child,
+    spare: SparePart,
+    *,
+    quantity: str,
+    warnings: list[str] | None = None,
+) -> DemandRunItemResult:
+    from sqlalchemy import select
+
+    run = session.scalar(
+        select(DemandCalculationRun).where(
+            DemandCalculationRun.tenant_id
+            == child.tenant_id,
+            DemandCalculationRun.calculation_id
+            == child.calculation_id,
+            DemandCalculationRun.status
+            == CalculationStatus.SUCCEEDED,
+        )
+    )
+    assert run is not None
+
+    recommended = Decimal(quantity)
+    result = DemandRunItemResult(
+        tenant_id=child.tenant_id,
+        calculation_run_id=run.id,
+        spare_part_id=spare.id,
+        spare_part_code_snapshot=spare.code,
+        spare_part_name_snapshot=spare.name,
+        criticality_level="MEDIUM",
+        calculation_status=(
+            ItemCalculationStatus.CALCULATED
+        ),
+        selected_model_type=child.reliability_model,
+        failure_process_mode=FailureProcessMode.AUTO,
+        target_service_level=Decimal("0.95"),
+        expected_demand=recommended,
+        variance=Decimal("1"),
+        standard_deviation=Decimal("1"),
+        p50=recommended - Decimal("10"),
+        p80=recommended - Decimal("5"),
+        p90=recommended,
+        p95=recommended + Decimal("5"),
+        p99=recommended + Decimal("10"),
+        target_quantile_demand=recommended,
+        gross_replacement_demand=recommended,
+        repair_pipeline_demand=Decimal("0"),
+        repair_pipeline_peak=Decimal("0"),
+        net_consumption_demand=recommended,
+        recommended_spare_quantity=recommended,
+        on_hand_quantity=Decimal("10"),
+        available_quantity=Decimal("10"),
+        usable_inventory=Decimal("10"),
+        net_demand_gap=recommended - Decimal("10"),
+        inventory_coverage_rate=Decimal("0.1"),
+        shortage_risk_level=ShortageRiskLevel.HIGH,
+        warning_codes_json=warnings,
+    )
+    session.add(result)
+    session.commit()
+    return result
+
+
+def test_task2i_policy_integration_default_system_recommendation(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.enums import CalculationDecisionType
+
+    service, group, spare_a, _ = (
+        completed_comparison_group(
+            session,
+            actor_contributor,
+            monkeypatch,
+        )
+    )
+    primary, alternative = group.current_children
+    _task2i_add_result_to_current_run(
+        session,
+        alternative,
+        spare_a,
+        quantity="120",
+    )
+
+    decision = service.save_decision(
+        session,
+        actor_contributor,
+        group.id,
+        spare_part_id=spare_a.id,
+        expected_version=0,
+        selected_child_id=primary.id,
+        final_quantity=Decimal("100"),
+        reason=None,
+    )
+
+    assert decision.decision_type == (
+        CalculationDecisionType.SYSTEM_RECOMMENDATION
+    )
+    assert decision.risk == "LOW"
+    assert (
+        decision.requires_admin_confirmation
+        is False
+    )
+    assert (
+        decision.risk_rule_version
+        == service.DECISION_RISK_RULE_VERSION
+    )
+
+
+def test_task2i_policy_integration_alternative_candidate(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.enums import CalculationDecisionType
+
+    service, group, spare_a, _ = (
+        completed_comparison_group(
+            session,
+            actor_contributor,
+            monkeypatch,
+        )
+    )
+    _, alternative = group.current_children
+    _task2i_add_result_to_current_run(
+        session,
+        alternative,
+        spare_a,
+        quantity="120",
+    )
+
+    decision = service.save_decision(
+        session,
+        actor_contributor,
+        group.id,
+        spare_part_id=spare_a.id,
+        expected_version=0,
+        selected_child_id=alternative.id,
+        final_quantity=Decimal("120"),
+        reason="Accepted alternative candidate",
+    )
+
+    assert decision.decision_type == (
+        CalculationDecisionType.ALTERNATIVE_CANDIDATE
+    )
+    assert decision.risk == "HIGH"
+    assert (
+        decision.requires_admin_confirmation
+        is True
+    )
+    assert (
+        decision.risk_rule_version
+        == service.DECISION_RISK_RULE_VERSION
+    )
+
+
+def test_task2i_policy_integration_material_warning(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.enums import CalculationDecisionType
+    from sqlalchemy import select
+
+    service, group, spare_a, _ = (
+        completed_comparison_group(
+            session,
+            actor_contributor,
+            monkeypatch,
+        )
+    )
+    primary = group.current_children[0]
+    result = session.scalar(
+        select(DemandRunItemResult).join(
+            DemandCalculationRun,
+            DemandRunItemResult.calculation_run_id
+            == DemandCalculationRun.id,
+        ).where(
+            DemandRunItemResult.tenant_id
+            == actor_contributor.tenant_id,
+            DemandRunItemResult.spare_part_id
+            == spare_a.id,
+            DemandCalculationRun.calculation_id
+            == primary.calculation_id,
+        )
+    )
+    assert result is not None
+    result.warning_codes_json = ["HIGH_VARIANCE"]
+    session.commit()
+
+    decision = service.save_decision(
+        session,
+        actor_contributor,
+        group.id,
+        spare_part_id=spare_a.id,
+        expected_version=0,
+        selected_child_id=primary.id,
+        final_quantity=Decimal("100"),
+        reason=None,
+    )
+
+    assert decision.decision_type == (
+        CalculationDecisionType.SYSTEM_RECOMMENDATION
+    )
+    assert decision.risk == "HIGH"
+    assert (
+        decision.requires_admin_confirmation
+        is True
+    )
+    assert (
+        decision.risk_rule_version
+        == service.DECISION_RISK_RULE_VERSION
+    )
+
+
+def test_task2i_policy_integration_outside_all_intervals(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.enums import CalculationDecisionType
+
+    service, group, spare_a, _ = (
+        completed_comparison_group(
+            session,
+            actor_contributor,
+            monkeypatch,
+        )
+    )
+    primary, alternative = group.current_children
+    _task2i_add_result_to_current_run(
+        session,
+        alternative,
+        spare_a,
+        quantity="120",
+    )
+
+    decision = service.save_decision(
+        session,
+        actor_contributor,
+        group.id,
+        spare_part_id=spare_a.id,
+        expected_version=0,
+        selected_child_id=primary.id,
+        final_quantity=Decimal("200"),
+        reason="Operational override",
+    )
+
+    assert decision.decision_type == (
+        CalculationDecisionType.MANUAL_QUANTITY
+    )
+    assert decision.risk == "HIGH"
+    assert (
+        decision.requires_admin_confirmation
+        is True
+    )
+    assert (
+        decision.risk_rule_version
+        == service.DECISION_RISK_RULE_VERSION
+    )
