@@ -305,18 +305,18 @@ Approved next plan:
 
 - `docs/superpowers/plans/2026-07-31-maintenance-plan05-03c-demand-list-lifecycle.md`
 
-Plan 05-3C implementation has not started.
+Plan 05-3C implementation is in progress.
 
 At the verified implementation baseline there are no demand-list model, repository, service, route, migration, typed client, store, or detail-view implementation files.
 
 The exact next task is:
 
-- Plan 05-3C Task 1
-- Add Demand List Persistence and Reversible Migration
+- Plan 05-3C Task 2
+- Generate a Complete Demand List Draft
 
-Expected first implementation commit:
+Task 1 implementation commit:
 
-- `feat: add versioned demand list persistence`
+- `3bb66f54 feat: add versioned demand list persistence`
 
 Do not reimplement:
 
@@ -329,3 +329,43 @@ Do not reimplement:
 - candidate comparison and item decisions.
 
 Do not begin Plan 05-4 or Plan 05-5 before all seven Plan 05-3C tasks and the complete Plan 05-3 vertical gate are finished.
+## Plan 05-3C Task 1 closure (2026-07-31)
+
+Plan document:
+
+- `docs/superpowers/plans/2026-07-31-maintenance-plan05-03c-task1-demand-list-persistence.md`
+
+Formal implementation commit:
+
+- `3bb66f54 feat: add versioned demand list persistence`
+
+Delivered boundaries:
+
+- versioned `DemandList`, `DemandListItem`, and `DemandListEvent` persistence;
+- exact demand-list lifecycle and event enums;
+- tenant-scoped demand-list and item repositories;
+- lineage-version uniqueness;
+- one current published version per tenant and lineage;
+- tenant-scoped lifecycle-event idempotency;
+- exact `Numeric(20, 6)` quantity storage;
+- decimal-string JSON serialization;
+- reversible Alembic revision `20260731_07`.
+
+Fresh Task 1 verification evidence:
+
+- focused migration and repository tests: **8 passed**;
+- Ruff over all Task 1 files: PASS;
+- `git diff --check`: PASS;
+- worktree cleanliness and branch synchronization: PASS;
+- local and remote branch difference after synchronization: `0 0`.
+
+The non-blocking Starlette/httpx deprecation warning remains unchanged from the previous baseline.
+
+Task 1 was developed on a temporary branch and squash-merged through PR #6. The temporary local branch was removed after the formal merge commit was synchronized.
+
+Next implementation boundary:
+
+- Plan 05-3C Task 2;
+- Generate a Complete Demand List Draft;
+- add authoritative draft-generation preconditions and immutable source snapshots;
+- do not begin lifecycle transitions, publication, derivation, API routes, or frontend work in Task 2.
