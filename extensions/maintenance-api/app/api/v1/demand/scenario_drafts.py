@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from app.core.responses import success_response
@@ -9,6 +9,8 @@ from app.schemas.common import MaintenanceSuccessResponse
 from app.schemas.scenario_draft import (
     ScenarioDraftCreateRequest,
     ScenarioDraftEnvelope,
+    ScenarioDraftMaterializeRequest,
+    ScenarioDraftMaterializeResponse,
     ScenarioDraftSaveRequest,
 )
 from app.security.actor import ActorContext
@@ -129,4 +131,48 @@ def validate_draft(
         "Scenario draft validated",
         actor=actor,
         version=envelope.version,
+    )
+
+
+@router.post(
+    "/scenario-drafts/{session_id}/materialize",
+    response_model=MaintenanceSuccessResponse[
+        ScenarioDraftMaterializeResponse
+    ],
+)
+def materialize_draft(
+    session_id: int,
+    payload: ScenarioDraftMaterializeRequest,
+    session: SessionDep,
+    actor: ContributorDep,
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=128,
+        ),
+    ],
+):
+    result = scenario_draft_service.materialize(
+        session,
+        actor,
+        session_id,
+        expected_version=payload.expected_version,
+        idempotency_key=idempotency_key,
+    )
+    response = ScenarioDraftMaterializeResponse(
+        scenario_id=result.template.id,
+        scenario_version_id=(
+            result.scenario_version.id
+        ),
+        status=result.status,
+        validation=result.validation,
+        replayed=result.replayed,
+    )
+    return success_response(
+        response,
+        "Scenario draft materialized",
+        actor=actor,
+        version=result.scenario_version.version,
     )

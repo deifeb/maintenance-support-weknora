@@ -279,6 +279,42 @@ class AISessionRepository:
             .limit(1)
         )
 
+    def materialization_snapshot(
+        self,
+        session: Session,
+        tenant_id: str,
+        session_id: int,
+        idempotency_key: str,
+    ) -> AISessionSnapshot | None:
+        self._require_session(
+            session,
+            tenant_id,
+            session_id,
+        )
+        snapshots = session.scalars(
+            select(AISessionSnapshot)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AISessionSnapshot.tenant_id == tenant_id,
+                AISessionSnapshot.session_id == session_id,
+            )
+            .order_by(
+                AISessionSnapshot.snapshot_version.desc()
+            )
+        )
+        for snapshot in snapshots:
+            materialization = (
+                snapshot.execution_context_json or {}
+            ).get("materialization")
+            if (
+                isinstance(materialization, dict)
+                and materialization.get("idempotency_key")
+                == idempotency_key
+            ):
+                return snapshot
+        return None
+
     def list_recent_messages(
         self,
         session: Session,

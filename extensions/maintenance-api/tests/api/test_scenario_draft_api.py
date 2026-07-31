@@ -4,6 +4,10 @@ from collections.abc import Callable
 
 from app.security.actor import MaintenanceRole
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+from tests.scenario_draft_factories import (
+    complete_scenario_draft,
+)
 
 
 def _headers(
@@ -212,3 +216,74 @@ def test_foreign_tenant_draft_returns_not_found(
     )
 
     assert response.status_code == 404
+
+
+def test_contributor_materializes_but_only_admin_publishes(
+    client: TestClient,
+    session: Session,
+    actor_contributor,
+    internal_auth_headers: Callable[..., dict[str, str]],
+) -> None:
+    draft = complete_scenario_draft(
+        session,
+        actor_contributor,
+        code="SC-API-MATERIALIZE",
+    )
+    headers = _headers(internal_auth_headers)
+    materialized = client.post(
+        (
+            "/api/v1/demand/scenario-drafts/"
+            f"{draft.session_id}/materialize"
+        ),
+        headers={
+            **headers,
+            "Idempotency-Key": "api-materialize-key",
+        },
+        json={"expected_version": draft.version},
+    )
+
+    assert materialized.status_code == 200
+    data = materialized.json()["data"]
+    assert data["status"] == "DRAFT"
+    assert data["validation"]["valid"] is True
+    assert data["replayed"] is False
+
+    replay = client.post(
+        (
+            "/api/v1/demand/scenario-drafts/"
+            f"{draft.session_id}/materialize"
+        ),
+        headers={
+            **headers,
+            "Idempotency-Key": "api-materialize-key",
+        },
+        json={"expected_version": draft.version},
+    )
+    assert replay.status_code == 200
+    assert (
+        replay.json()["data"]["scenario_version_id"]
+        == data["scenario_version_id"]
+    )
+    assert replay.json()["data"]["replayed"] is True
+
+    contributor_publish = client.post(
+        (
+            "/api/v1/demand/scenario-versions/"
+            f"{data['scenario_version_id']}/publish"
+        ),
+        headers=headers,
+    )
+    assert contributor_publish.status_code == 403
+
+    admin_publish = client.post(
+        (
+            "/api/v1/demand/scenario-versions/"
+            f"{data['scenario_version_id']}/publish"
+        ),
+        headers=_headers(
+            internal_auth_headers,
+            role=MaintenanceRole.ADMIN,
+        ),
+    )
+    assert admin_publish.status_code == 200
+    assert admin_publish.json()["data"]["status"] == "PUBLISHED"

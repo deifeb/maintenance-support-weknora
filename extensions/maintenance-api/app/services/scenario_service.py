@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -15,6 +16,7 @@ from app.core.exceptions import (
 from app.models import (
     DemandFleetGroup,
     DemandScenarioStage,
+    DemandScenarioTemplate,
     DemandScenarioVersion,
 )
 from app.models.enums import (
@@ -49,8 +51,18 @@ from app.schemas.demand_scenario import (
     ScenarioVersionCreate,
     ScenarioVersionUpdate,
 )
+from app.schemas.scenario_draft import (
+    ScenarioDraftMaterializationPayload,
+)
 from app.security.actor import ActorContext
 from app.services.base import CrudService
+
+
+@dataclass(slots=True)
+class MaterializedScenario:
+    template: DemandScenarioTemplate
+    scenario_version: DemandScenarioVersion
+    validation: ScenarioValidationResult
 
 
 class ScenarioService:
@@ -101,10 +113,11 @@ class ScenarioService:
         actor: ActorContext,
         payload: ScenarioTemplateCreate,
     ):
-        return self.template_crud.create(
+        return self._create_template_row(
             session,
             actor,
             payload,
+            commit=True,
         )
 
     def list_templates(
@@ -164,27 +177,11 @@ class ScenarioService:
         template_id: int,
         payload: ScenarioVersionCreate,
     ):
-        self.get_template(
+        instance = self._create_version_row(
             session,
             actor,
             template_id,
-        )
-        if self.version_repository.get_by_business_key(
-            session,
-            actor.tenant_id,
-            template_id,
-            payload.version_code,
-        ):
-            raise ConflictError(
-                "scenario version code already exists"
-            )
-        instance = self.version_repository.create(
-            session,
-            actor.tenant_id,
-            {
-                "scenario_template_id": template_id,
-                **payload.model_dump(mode="json"),
-            },
+            payload,
         )
         self._commit_and_refresh(session, instance)
         return instance
@@ -569,19 +566,11 @@ class ScenarioService:
         version_id: int,
         payload: ScenarioStageCreate,
     ):
-        version = self.get_version(
+        item = self._add_stage_row(
             session,
             actor,
             version_id,
-        )
-        self._require_draft(version)
-        item = self.stage_repository.create(
-            session,
-            actor.tenant_id,
-            {
-                "scenario_version_id": version.id,
-                **payload.model_dump(),
-            },
+            payload,
         )
         self._commit_and_refresh(session, item)
         return item
@@ -593,6 +582,365 @@ class ScenarioService:
         version_id: int,
         payload: FleetGroupCreate,
     ):
+        item = self._add_fleet_group_row(
+            session,
+            actor,
+            version_id,
+            payload,
+        )
+        self._commit_and_refresh(session, item)
+        return item
+
+    def add_age_group(
+        self,
+        session: Session,
+        actor: ActorContext,
+        fleet_group_id: int,
+        payload: AgeGroupCreate,
+    ):
+        item = self._add_age_group_row(
+            session,
+            actor,
+            fleet_group_id,
+            payload,
+        )
+        self._commit_and_refresh(session, item)
+        return item
+
+    def add_fleet_usage(
+        self,
+        session: Session,
+        actor: ActorContext,
+        stage_id: int,
+        payload: FleetUsageCreate,
+    ):
+        item = self._add_fleet_usage_row(
+            session,
+            actor,
+            stage_id,
+            payload,
+        )
+        self._commit_and_refresh(session, item)
+        return item
+
+    def add_override(
+        self,
+        session: Session,
+        actor: ActorContext,
+        version_id: int,
+        payload: ParameterOverrideCreate,
+    ):
+        item = self._add_override_row(
+            session,
+            actor,
+            version_id,
+            payload,
+        )
+        self._commit_and_refresh(session, item)
+        return item
+
+    def add_shock(
+        self,
+        session: Session,
+        actor: ActorContext,
+        stage_id: int,
+        payload: CommonShockCreate,
+    ):
+        item = self._add_shock_row(
+            session,
+            actor,
+            stage_id,
+            payload,
+        )
+        self._commit_and_refresh(session, item)
+        return item
+
+    def materialize_draft(
+        self,
+        session: Session,
+        actor: ActorContext,
+        payload: ScenarioDraftMaterializationPayload,
+    ) -> MaterializedScenario:
+        template = self._create_template_row(
+            session,
+            actor,
+            payload.template,
+        )
+        version = self._create_version_row(
+            session,
+            actor,
+            template.id,
+            payload.version,
+        )
+
+        fleet_ids: dict[str, int] = {}
+        for draft_fleet in payload.fleet_groups:
+            if draft_fleet.client_key in fleet_ids:
+                raise BusinessValidationError(
+                    "duplicate fleet group client key",
+                    code="SCENARIO_DRAFT_INVALID",
+                    details={
+                        "field": "fleet_groups",
+                        "client_key": draft_fleet.client_key,
+                    },
+                )
+            fleet_payload = FleetGroupCreate.model_validate(
+                draft_fleet.model_dump(
+                    exclude={"client_key", "age_groups"}
+                )
+            )
+            fleet = self._add_fleet_group_row(
+                session,
+                actor,
+                version.id,
+                fleet_payload,
+            )
+            fleet_ids[draft_fleet.client_key] = fleet.id
+            for age_group in draft_fleet.age_groups:
+                self._add_age_group_row(
+                    session,
+                    actor,
+                    fleet.id,
+                    age_group,
+                )
+
+        stage_ids: dict[str, int] = {}
+        for draft_stage in payload.stages:
+            if draft_stage.client_key in stage_ids:
+                raise BusinessValidationError(
+                    "duplicate stage client key",
+                    code="SCENARIO_DRAFT_INVALID",
+                    details={
+                        "field": "stages",
+                        "client_key": draft_stage.client_key,
+                    },
+                )
+            stage_payload = ScenarioStageCreate.model_validate(
+                draft_stage.model_dump(
+                    exclude={
+                        "client_key",
+                        "fleet_usages",
+                        "shocks",
+                    }
+                )
+            )
+            stage = self._add_stage_row(
+                session,
+                actor,
+                version.id,
+                stage_payload,
+            )
+            stage_ids[draft_stage.client_key] = stage.id
+
+            for draft_usage in draft_stage.fleet_usages:
+                fleet_id = fleet_ids.get(
+                    draft_usage.fleet_group_key
+                )
+                if fleet_id is None:
+                    raise BusinessValidationError(
+                        "unknown fleet group client key",
+                        code="SCENARIO_DRAFT_INVALID",
+                        details={
+                            "field": "fleet_usages",
+                            "fleet_group_key": (
+                                draft_usage.fleet_group_key
+                            ),
+                        },
+                    )
+                usage_payload = FleetUsageCreate.model_validate(
+                    {
+                        "fleet_group_id": fleet_id,
+                        **draft_usage.model_dump(
+                            exclude={"fleet_group_key"}
+                        ),
+                    }
+                )
+                self._add_fleet_usage_row(
+                    session,
+                    actor,
+                    stage.id,
+                    usage_payload,
+                )
+
+            for draft_shock in draft_stage.shocks:
+                fleet_id = draft_shock.fleet_group_id
+                if draft_shock.fleet_group_key is not None:
+                    fleet_id = fleet_ids.get(
+                        draft_shock.fleet_group_key
+                    )
+                    if fleet_id is None:
+                        raise BusinessValidationError(
+                            "unknown fleet group client key",
+                            code="SCENARIO_DRAFT_INVALID",
+                            details={
+                                "field": "shocks",
+                                "fleet_group_key": (
+                                    draft_shock
+                                    .fleet_group_key
+                                ),
+                            },
+                        )
+                shock_payload = CommonShockCreate.model_validate(
+                    {
+                        **draft_shock.model_dump(
+                            exclude={"fleet_group_key"}
+                        ),
+                        "fleet_group_id": fleet_id,
+                    }
+                )
+                self._add_shock_row(
+                    session,
+                    actor,
+                    stage.id,
+                    shock_payload,
+                )
+
+        for draft_override in payload.overrides:
+            stage_id = draft_override.stage_id
+            fleet_id = draft_override.fleet_group_id
+            if draft_override.stage_key is not None:
+                stage_id = stage_ids.get(
+                    draft_override.stage_key
+                )
+                if stage_id is None:
+                    raise BusinessValidationError(
+                        "unknown stage client key",
+                        code="SCENARIO_DRAFT_INVALID",
+                        details={
+                            "field": "overrides",
+                            "stage_key": (
+                                draft_override.stage_key
+                            ),
+                        },
+                    )
+            if draft_override.fleet_group_key is not None:
+                fleet_id = fleet_ids.get(
+                    draft_override.fleet_group_key
+                )
+                if fleet_id is None:
+                    raise BusinessValidationError(
+                        "unknown fleet group client key",
+                        code="SCENARIO_DRAFT_INVALID",
+                        details={
+                            "field": "overrides",
+                            "fleet_group_key": (
+                                draft_override
+                                .fleet_group_key
+                            ),
+                        },
+                    )
+            override_payload = (
+                ParameterOverrideCreate.model_validate(
+                    {
+                        **draft_override.model_dump(
+                            exclude={
+                                "stage_key",
+                                "fleet_group_key",
+                            }
+                        ),
+                        "stage_id": stage_id,
+                        "fleet_group_id": fleet_id,
+                    }
+                )
+            )
+            self._add_override_row(
+                session,
+                actor,
+                version.id,
+                override_payload,
+            )
+
+        validation = self.validate_version(
+            session,
+            actor,
+            version.id,
+        )
+        if not validation.valid:
+            raise BusinessValidationError(
+                "scenario validation failed",
+                details=validation.issues,
+                code="SCENARIO_DRAFT_INVALID",
+            )
+        return MaterializedScenario(
+            template=template,
+            scenario_version=version,
+            validation=validation,
+        )
+
+    def _create_template_row(
+        self,
+        session: Session,
+        actor: ActorContext,
+        payload: ScenarioTemplateCreate,
+        *,
+        commit: bool = False,
+    ) -> DemandScenarioTemplate:
+        return self.template_crud.create(
+            session,
+            actor,
+            payload,
+            commit=commit,
+        )
+
+    def _create_version_row(
+        self,
+        session: Session,
+        actor: ActorContext,
+        template_id: int,
+        payload: ScenarioVersionCreate,
+    ) -> DemandScenarioVersion:
+        self.get_template(
+            session,
+            actor,
+            template_id,
+        )
+        if self.version_repository.get_by_business_key(
+            session,
+            actor.tenant_id,
+            template_id,
+            payload.version_code,
+        ):
+            raise ConflictError(
+                "scenario version code already exists"
+            )
+        return self.version_repository.create(
+            session,
+            actor.tenant_id,
+            {
+                "scenario_template_id": template_id,
+                **payload.model_dump(mode="json"),
+            },
+        )
+
+    def _add_stage_row(
+        self,
+        session: Session,
+        actor: ActorContext,
+        version_id: int,
+        payload: ScenarioStageCreate,
+    ) -> DemandScenarioStage:
+        version = self.get_version(
+            session,
+            actor,
+            version_id,
+        )
+        self._require_draft(version)
+        return self.stage_repository.create(
+            session,
+            actor.tenant_id,
+            {
+                "scenario_version_id": version.id,
+                **payload.model_dump(),
+            },
+        )
+
+    def _add_fleet_group_row(
+        self,
+        session: Session,
+        actor: ActorContext,
+        version_id: int,
+        payload: FleetGroupCreate,
+    ) -> DemandFleetGroup:
         version = self.get_version(
             session,
             actor,
@@ -604,7 +952,7 @@ class ScenarioService:
             actor,
             payload.configuration_version_id,
         )
-        item = self.fleet_repository.create(
+        return self.fleet_repository.create(
             session,
             actor.tenant_id,
             {
@@ -612,10 +960,8 @@ class ScenarioService:
                 **payload.model_dump(),
             },
         )
-        self._commit_and_refresh(session, item)
-        return item
 
-    def add_age_group(
+    def _add_age_group_row(
         self,
         session: Session,
         actor: ActorContext,
@@ -633,7 +979,7 @@ class ScenarioService:
             fleet.scenario_version_id,
         )
         self._require_draft(version)
-        item = self.age_group_repository.create(
+        return self.age_group_repository.create(
             session,
             actor.tenant_id,
             {
@@ -641,10 +987,8 @@ class ScenarioService:
                 **payload.model_dump(),
             },
         )
-        self._commit_and_refresh(session, item)
-        return item
 
-    def add_fleet_usage(
+    def _add_fleet_usage_row(
         self,
         session: Session,
         actor: ActorContext,
@@ -680,7 +1024,7 @@ class ScenarioService:
                 "active_quantity exceeds "
                 "fleet initial_quantity"
             )
-        item = self.fleet_usage_repository.create(
+        return self.fleet_usage_repository.create(
             session,
             actor.tenant_id,
             {
@@ -688,10 +1032,8 @@ class ScenarioService:
                 **payload.model_dump(),
             },
         )
-        self._commit_and_refresh(session, item)
-        return item
 
-    def add_override(
+    def _add_override_row(
         self,
         session: Session,
         actor: ActorContext,
@@ -714,7 +1056,7 @@ class ScenarioService:
             payload.reliability_profile_id,
             payload.repair_profile_id,
         )
-        item = self.override_repository.create(
+        return self.override_repository.create(
             session,
             actor.tenant_id,
             {
@@ -722,10 +1064,8 @@ class ScenarioService:
                 **payload.model_dump(),
             },
         )
-        self._commit_and_refresh(session, item)
-        return item
 
-    def add_shock(
+    def _add_shock_row(
         self,
         session: Session,
         actor: ActorContext,
@@ -757,7 +1097,7 @@ class ScenarioService:
                     "fleet group must belong to "
                     "the same scenario version"
                 )
-        item = self.shock_repository.create(
+        return self.shock_repository.create(
             session,
             actor.tenant_id,
             {
@@ -765,8 +1105,6 @@ class ScenarioService:
                 **payload.model_dump(),
             },
         )
-        self._commit_and_refresh(session, item)
-        return item
 
     def validate_version(
         self,

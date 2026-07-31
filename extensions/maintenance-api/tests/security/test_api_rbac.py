@@ -29,7 +29,7 @@ EXCLUDED = {
 }
 EXPECTED_COUNTS = {
     "master_data": 67,
-    "demand": 40,
+    "demand": 45,
     "ai": 26,
 }
 MASTER_ROLE_BY_METHOD = {
@@ -44,6 +44,11 @@ MASTER_ROLE_BY_FUNCTION = {
     "download_import_errors": "require_contributor",
 }
 DEMAND_ROLE_BY_FUNCTION = {
+    "create_draft": "require_contributor",
+    "get_draft": "require_viewer",
+    "save_draft": "require_contributor",
+    "validate_draft": "require_contributor",
+    "materialize_draft": "require_contributor",
     "list_scenarios": "require_viewer",
     "get_scenario": "require_viewer",
     "list_versions": "require_viewer",
@@ -257,7 +262,7 @@ def test_business_route_inventory_is_exact() -> None:
         counts[domain] = count
 
     assert counts == EXPECTED_COUNTS
-    assert sum(counts.values()) == 133
+    assert sum(counts.values()) == 138
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
     )

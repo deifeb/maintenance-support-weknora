@@ -3,13 +3,52 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-from app.core.exceptions import ConflictError, NotFoundError
-from app.models import AISessionSnapshot
+from app.core.exceptions import (
+    BusinessValidationError,
+    ConflictError,
+    NotFoundError,
+)
+from app.models import (
+    AISessionSnapshot,
+    DemandAgeGroup,
+    DemandCommonShockRule,
+    DemandFleetGroup,
+    DemandParameterOverride,
+    DemandScenarioStage,
+    DemandScenarioTemplate,
+    DemandScenarioVersion,
+    DemandStageFleetUsage,
+)
 from app.schemas.scenario_draft import ScenarioFieldState
 from app.security.actor import ActorContext
 from app.services.scenario_draft_service import ScenarioDraftService
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from tests.scenario_draft_factories import (
+    complete_scenario_draft,
+)
+
+
+def _scenario_row_count(session: Session) -> int:
+    models = (
+        DemandScenarioTemplate,
+        DemandScenarioVersion,
+        DemandScenarioStage,
+        DemandFleetGroup,
+        DemandAgeGroup,
+        DemandStageFleetUsage,
+        DemandParameterOverride,
+        DemandCommonShockRule,
+    )
+    return sum(
+        int(
+            session.scalar(
+                select(func.count(model.id))
+            )
+            or 0
+        )
+        for model in models
+    )
 
 
 def test_manual_draft_creates_structured_session_and_snapshot(
@@ -142,3 +181,138 @@ def test_foreign_tenant_draft_is_not_visible(
             local_actor,
             foreign_draft.session_id,
         )
+
+
+def test_materialize_creates_validated_draft_version(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    draft = complete_scenario_draft(
+        session,
+        actor_contributor,
+    )
+
+    result = ScenarioDraftService().materialize(
+        session,
+        actor_contributor,
+        draft.session_id,
+        expected_version=draft.version,
+        idempotency_key="scenario-materialize-1",
+    )
+
+    assert result.scenario_version.status.value == "DRAFT"
+    assert result.validation.valid is True
+    assert result.replayed is False
+    assert result.scenario_version.id > 0
+
+
+def test_materialize_rolls_back_all_rows_on_invalid_reference(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    draft = complete_scenario_draft(
+        session,
+        actor_contributor,
+        code="SC-INVALID",
+    )
+    payload = draft.draft.model_copy(deep=True)
+    fleet_groups = payload.fields["fleet_groups"].value
+    assert isinstance(fleet_groups, list)
+    fleet_groups[0]["configuration_version_id"] = 999999
+    invalid = ScenarioDraftService().save(
+        session,
+        actor_contributor,
+        draft.session_id,
+        expected_version=draft.version,
+        draft=payload,
+    )
+
+    with pytest.raises(BusinessValidationError) as exc:
+        ScenarioDraftService().materialize(
+            session,
+            actor_contributor,
+            invalid.session_id,
+            expected_version=invalid.version,
+            idempotency_key="scenario-materialize-invalid",
+        )
+
+    assert exc.value.code == "SCENARIO_DRAFT_INVALID"
+    assert _scenario_row_count(session) == 0
+
+
+def test_materialize_replay_returns_same_version_before_version_check(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    draft = complete_scenario_draft(
+        session,
+        actor_contributor,
+        code="SC-REPLAY",
+    )
+    service = ScenarioDraftService()
+
+    first = service.materialize(
+        session,
+        actor_contributor,
+        draft.session_id,
+        expected_version=draft.version,
+        idempotency_key="stable-key",
+    )
+    second = service.materialize(
+        session,
+        actor_contributor,
+        draft.session_id,
+        expected_version=draft.version,
+        idempotency_key="stable-key",
+    )
+
+    assert (
+        first.scenario_version.id
+        == second.scenario_version.id
+    )
+    assert second.replayed is True
+    assert _scenario_row_count(session) == 6
+
+
+def test_materialize_rejects_reused_key_for_changed_draft(
+    session: Session,
+    actor_contributor: ActorContext,
+) -> None:
+    draft = complete_scenario_draft(
+        session,
+        actor_contributor,
+        code="SC-REUSED",
+    )
+    service = ScenarioDraftService()
+    service.materialize(
+        session,
+        actor_contributor,
+        draft.session_id,
+        expected_version=draft.version,
+        idempotency_key="reused-key",
+    )
+    latest = service.get(
+        session,
+        actor_contributor,
+        draft.session_id,
+    )
+    changed_payload = latest.draft.model_copy(deep=True)
+    changed_payload.scenario_name = "Changed name"
+    changed = service.save(
+        session,
+        actor_contributor,
+        draft.session_id,
+        expected_version=latest.version,
+        draft=changed_payload,
+    )
+
+    with pytest.raises(ConflictError) as exc:
+        service.materialize(
+            session,
+            actor_contributor,
+            draft.session_id,
+            expected_version=changed.version,
+            idempotency_key="reused-key",
+        )
+
+    assert exc.value.code == "IDEMPOTENCY_KEY_REUSED"
