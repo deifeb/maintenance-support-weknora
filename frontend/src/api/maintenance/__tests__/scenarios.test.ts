@@ -60,6 +60,21 @@ test('scenario API uses exact draft and publish paths', async () => {
   })
   await api.materialize(7, 2, 'materialize-key')
   await api.publishVersion(44)
+  await api.listScenarios({
+    page: 2,
+    page_size: 20,
+    keyword: 'night mission',
+    include_inactive: false,
+    sort_by: 'updated_at',
+    sort_order: 'desc',
+  })
+  await api.getScenario(9)
+  await api.listVersions(9)
+  await api.getFullVersion(44)
+  await api.updateVersion(44, {
+    version_name: 'Reviewed draft',
+  })
+  await api.retireVersion(44)
 
   assert.deepEqual(
     calls.map(({ method, path }) => [method, path]),
@@ -74,6 +89,15 @@ test('scenario API uses exact draft and publish paths', async () => {
         'POST',
         '/v1/demand/scenario-versions/44/publish',
       ],
+      [
+        'GET',
+        '/v1/demand/scenarios?page=2&page_size=20&keyword=night+mission&include_inactive=false&sort_by=updated_at&sort_order=desc',
+      ],
+      ['GET', '/v1/demand/scenarios/9'],
+      ['GET', '/v1/demand/scenarios/9/versions'],
+      ['GET', '/v1/demand/scenario-versions/44/full'],
+      ['PUT', '/v1/demand/scenario-versions/44'],
+      ['POST', '/v1/demand/scenario-versions/44/retire'],
     ],
   )
   assert.deepEqual(calls[2]?.config, {

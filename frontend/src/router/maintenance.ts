@@ -54,6 +54,41 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         meta: { ...maintenanceRouteMeta },
       },
       {
+        path: 'scenarios/new',
+        name: 'maintenanceScenarioNew',
+        component: () => import(
+          '@/views/maintenance/scenarios/ScenarioWizard.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
+        path: 'scenarios/:scenarioId',
+        name: 'maintenanceScenarioDetail',
+        component: () => import(
+          '@/views/maintenance/scenarios/ScenarioDetail.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
+        path: (
+          'scenarios/:scenarioId/versions/:versionId'
+        ),
+        name: 'maintenanceScenarioVersionDetail',
+        component: () => import(
+          '@/views/maintenance/scenarios/ScenarioDetail.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
         path: 'calculations',
         name: 'maintenanceCalculations',
         component: () => import('@/views/maintenance/calculations/CalculationList.vue'),

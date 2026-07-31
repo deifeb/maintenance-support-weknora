@@ -1,9 +1,13 @@
 import {
+  buildQuery,
   maintenanceGet,
   maintenancePost,
   maintenancePut,
 } from './client'
-import type { MaintenanceResult } from './types'
+import type {
+  MaintenanceResult,
+  PageData,
+} from './types'
 
 export type DecimalString = string
 export type ScenarioDraftOrigin = 'MANUAL' | 'AI'
@@ -190,6 +194,74 @@ export interface ScenarioVersionSummary {
   updated_at?: string
 }
 
+export interface ScenarioTemplate {
+  id: number
+  code: string
+  name: string
+  category: string | null
+  description: string | null
+  tags_json: string[] | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ScenarioVersionRecord {
+  id: number
+  scenario_template_id: number
+  version_code: string
+  version_name: string
+  status: ScenarioVersionStatus
+  default_service_level: DecimalString
+  criticality_service_levels_json: Record<
+    string,
+    DecimalString
+  >
+  missing_parameter_policy: MissingParameterPolicy
+  execution_mode: DemandExecutionMode
+  comparison_enabled: boolean
+  default_initial_age_hours: DecimalString
+  default_repair_parameters_json: (
+    Record<string, unknown> | null
+  )
+  fallback_parameters_json: (
+    Record<string, unknown> | null
+  )
+  simulation_config_json: Record<string, unknown>
+  formula_version: string
+  input_schema_version: string
+  description: string | null
+  published_at: string | null
+  retired_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ScenarioFullVersion {
+  version: ScenarioVersionRecord
+  stages: Array<Record<string, unknown>>
+  fleet_groups: Array<Record<string, unknown>>
+  overrides: Array<Record<string, unknown>>
+}
+
+export interface ScenarioListQuery {
+  page: number
+  page_size: number
+  keyword?: string
+  include_inactive: boolean
+  sort_by: string
+  sort_order: 'asc' | 'desc'
+}
+
+export interface ScenarioVersionUpdate {
+  version_name?: string
+  default_service_level?: DecimalString
+  missing_parameter_policy?: MissingParameterPolicy
+  execution_mode?: DemandExecutionMode
+  comparison_enabled?: boolean
+  description?: string | null
+}
+
 export interface ScenarioApiClient {
   get<T>(path: string): Promise<MaintenanceResult<T>>
   post<T>(
@@ -217,6 +289,73 @@ export function createScenarioApi(
   client: ScenarioApiClient = defaultScenarioClient,
 ) {
   return {
+    listScenarios(
+      query: ScenarioListQuery,
+    ): Promise<MaintenanceResult<
+      PageData<ScenarioTemplate>
+    >> {
+      return client.get<PageData<ScenarioTemplate>>(
+        `/v1/demand/scenarios?${buildQuery({ ...query })}`,
+      )
+    },
+
+    getScenario(
+      scenarioId: number,
+    ): Promise<MaintenanceResult<ScenarioTemplate>> {
+      return client.get<ScenarioTemplate>(
+        `/v1/demand/scenarios/${identifier(scenarioId)}`,
+      )
+    },
+
+    listVersions(
+      scenarioId: number,
+    ): Promise<MaintenanceResult<
+      ScenarioVersionRecord[]
+    >> {
+      return client.get<ScenarioVersionRecord[]>(
+        (
+          `/v1/demand/scenarios/`
+          + `${identifier(scenarioId)}/versions`
+        ),
+      )
+    },
+
+    getFullVersion(
+      versionId: number,
+    ): Promise<MaintenanceResult<ScenarioFullVersion>> {
+      return client.get<ScenarioFullVersion>(
+        (
+          `/v1/demand/scenario-versions/`
+          + `${identifier(versionId)}/full`
+        ),
+      )
+    },
+
+    updateVersion(
+      versionId: number,
+      request: ScenarioVersionUpdate,
+    ): Promise<MaintenanceResult<ScenarioVersionRecord>> {
+      return client.put<ScenarioVersionRecord>(
+        (
+          `/v1/demand/scenario-versions/`
+          + identifier(versionId)
+        ),
+        request,
+      )
+    },
+
+    retireVersion(
+      versionId: number,
+    ): Promise<MaintenanceResult<ScenarioVersionRecord>> {
+      return client.post<ScenarioVersionRecord>(
+        (
+          `/v1/demand/scenario-versions/`
+          + `${identifier(versionId)}/retire`
+        ),
+        {},
+      )
+    },
+
     createDraft(
       request: ScenarioDraftCreateRequest,
     ): Promise<MaintenanceResult<ScenarioDraftEnvelope>> {

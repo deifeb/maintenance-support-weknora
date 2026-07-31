@@ -53,7 +53,13 @@ test('visible Maintenance menu entries agree with route records while detail rou
     children
       .filter((route) => route.meta?.hideInMaintenanceMenu === true)
       .map((route) => route.name),
-    ['maintenanceConfigurationDetail', 'maintenanceSparePartDetail'],
+    [
+      'maintenanceConfigurationDetail',
+      'maintenanceSparePartDetail',
+      'maintenanceScenarioNew',
+      'maintenanceScenarioDetail',
+      'maintenanceScenarioVersionDetail',
+    ],
   )
 })
 
