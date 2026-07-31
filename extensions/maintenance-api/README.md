@@ -235,6 +235,52 @@ Main capabilities:
 - input snapshots, idempotency keys, cancellation, retry and replay;
 - inventory gap analysis and JSON/XLSX exports.
 
+### Phase 05-3B calculation groups
+
+A calculation group starts only from an immutable `PUBLISHED` scenario
+version. Model identity and execution mode stay separate in every candidate
+key, for example `WEIBULL:ANALYTICAL`. The recommendation endpoint uses
+`MODEL-RECOMMENDATION-1`; its stable order and primary candidate are
+deterministic for the same published snapshot.
+
+```text
+POST /api/v1/demand/model-recommendations
+POST /api/v1/demand/calculation-groups
+GET  /api/v1/demand/calculation-groups
+GET  /api/v1/demand/calculation-groups/{group_id}
+POST /api/v1/demand/calculation-groups/{group_id}/retry-failed
+POST /api/v1/demand/calculation-groups/{group_id}/cancel-running
+GET  /api/v1/demand/calculation-groups/{group_id}/events
+GET  /api/v1/demand/calculation-groups/{group_id}/events/stream
+GET  /api/v1/demand/calculation-groups/{group_id}/comparison
+PUT  /api/v1/demand/calculation-groups/{group_id}/decisions/{spare_part_id}
+```
+
+Group creation, retry, and cancellation require an `Idempotency-Key`.
+Reusing a creation key with another payload returns
+`IDEMPOTENCY_KEY_REUSED`. Candidates are independent calculations; a failed
+candidate does not cancel or erase successful siblings. Group states are
+`PENDING`, `RUNNING`, `COMPLETED`, `PARTIALLY_COMPLETED`, `FAILED`,
+`CANCELLED`, and `INTERRUPTED`. Recovery marks abandoned running work as
+interrupted and requeues pending work. Retry creates a new current attempt
+only for failed or interrupted candidates.
+
+Every persisted group event has a strictly increasing sequence. Resume SSE
+with either `last_event_sequence` or `Last-Event-ID`; the server replays only
+newer events. Browser clients use bounded reconnect backoff and fall back to
+finite-frequency polling after repeated connection failures, stopping the
+poller as soon as SSE reconnects.
+
+Comparison is available only for terminal groups with at least one successful
+candidate. Rows are the union of successful current item results. A candidate
+without an item result is `NO_RESULT`, never zero and never selectable.
+Decision updates use `expected_version`; stale updates return
+`CALCULATION_DECISION_VERSION_CONFLICT`. A reason is required for a
+non-primary candidate or manual quantity. Server risk evaluation is versioned
+as `DEMAND-DECISION-RISK-1`; flagged reductions, out-of-range quantities,
+material alternative differences, or material warnings require administrator
+confirmation. Original calculation results remain immutable.
+
 ## Maintenance AI orchestration
 
 Phase 04 在 `/api/v1/ai` 下提供持久化业务会话、自然语言场景解析、模型路由、确定性工具编排、关键操作确认、SSE 事件续传、需求清单审查和报告导出。
