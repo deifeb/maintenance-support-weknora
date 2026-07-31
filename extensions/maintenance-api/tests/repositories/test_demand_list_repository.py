@@ -7,7 +7,11 @@ from app.models import (
     DemandScenarioTemplate,
     DemandScenarioVersion,
 )
-from app.models.enums import CalculationGroupStatus, DemandListStatus
+from app.models.enums import (
+    CalculationGroupStatus,
+    DemandListEventType,
+    DemandListStatus,
+)
 from app.repositories.demand_list_repository import (
     DemandListItemRepository,
     DemandListRepository,
@@ -149,4 +153,66 @@ def test_demand_list_versions_and_decimal_items(
         "tenant-b",
         first.id,
         item.id,
+    ) is None
+
+
+def test_demand_list_events_are_tenant_scoped(
+    session: Session,
+) -> None:
+    repository = DemandListRepository()
+    list_a = _create_list(session, "tenant-a", "EVENT-A")
+    list_b = _create_list(session, "tenant-b", "EVENT-B")
+
+    event_a = repository.append_event(
+        session,
+        "tenant-a",
+        demand_list_id=list_a.id,
+        event_type=DemandListEventType.CREATED,
+        actor_user_id="user-a",
+        actor_roles=["contributor"],
+        request_id="request-a",
+        idempotency_key="shared-key",
+        request_hash="a" * 64,
+        after_summary={"status": "DRAFT"},
+        response_snapshot={"id": list_a.id},
+    )
+    event_b = repository.append_event(
+        session,
+        "tenant-b",
+        demand_list_id=list_b.id,
+        event_type=DemandListEventType.CREATED,
+        actor_user_id="user-b",
+        actor_roles=["contributor"],
+        request_id="request-b",
+        idempotency_key="shared-key",
+        request_hash="b" * 64,
+        after_summary={"status": "DRAFT"},
+        response_snapshot={"id": list_b.id},
+    )
+
+    assert repository.get_event_by_idempotency_key(
+        session,
+        "tenant-a",
+        "shared-key",
+    ).id == event_a.id
+    assert repository.get_event_by_idempotency_key(
+        session,
+        "tenant-b",
+        "shared-key",
+    ).id == event_b.id
+
+
+def test_demand_list_repository_does_not_commit(
+    session: Session,
+) -> None:
+    row = _create_list(session, "tenant-a", "ROLLBACK")
+    identifier = row.id
+
+    assert session.in_transaction()
+    session.rollback()
+
+    assert DemandListRepository().get(
+        session,
+        "tenant-a",
+        identifier,
     ) is None
