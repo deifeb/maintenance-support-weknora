@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 from math import ceil
 
 from sqlalchemy import select
@@ -11,8 +12,15 @@ from app.core.exceptions import (
     ConflictError,
     NotFoundError,
 )
-from app.models import CalculationGroup, DemandScenarioVersion
+from app.models import (
+    CalculationGroup,
+    CalculationItemDecision,
+    DemandCalculationRun,
+    DemandRunItemResult,
+    DemandScenarioVersion,
+)
 from app.models.enums import (
+    CalculationDecisionType,
     CalculationGroupStatus,
     CalculationStatus,
     ScenarioVersionStatus,
@@ -20,6 +28,13 @@ from app.models.enums import (
 from app.repositories.calculation_group_repository import (
     CalculationGroupChildRepository,
     CalculationGroupRepository,
+    CalculationItemDecisionRepository,
+)
+from app.schemas.calculation_group import (
+    CalculationComparisonRow,
+    CalculationGroupComparisonRead,
+    CalculationItemDecisionRead,
+    ComparisonCandidateCell,
 )
 from app.schemas.common import PageData
 from app.schemas.model_recommendation import (
@@ -39,10 +54,15 @@ from app.services.snapshot_service import snapshot_service
 
 
 class CalculationGroupService:
+    DECISION_RISK_RULE_VERSION = "DEMAND-DECISION-RISK-1"
+
     def __init__(self) -> None:
         self.group_repository = CalculationGroupRepository()
         self.child_repository = (
             CalculationGroupChildRepository()
+        )
+        self.decision_repository = (
+            CalculationItemDecisionRepository()
         )
         self.calculation_service: DemandCalculationService = (
             calculation_service
@@ -630,6 +650,430 @@ class CalculationGroupService:
             group_id,
             after_sequence=after_sequence,
         )
+
+    @staticmethod
+    def _successful_children(group: CalculationGroup):
+        successful = {
+            CalculationStatus.SUCCEEDED,
+            CalculationStatus.PARTIAL_SUCCESS,
+        }
+        return [
+            child
+            for child in group.current_children
+            if child.calculation.status in successful
+        ]
+
+    def comparison(
+        self,
+        session: Session,
+        actor: ActorContext,
+        group_id: int,
+    ) -> CalculationGroupComparisonRead:
+        group = self.get(session, actor, group_id)
+        terminal_statuses = {
+            CalculationGroupStatus.COMPLETED,
+            CalculationGroupStatus.PARTIALLY_COMPLETED,
+            CalculationGroupStatus.FAILED,
+            CalculationGroupStatus.CANCELLED,
+            CalculationGroupStatus.INTERRUPTED,
+        }
+        if group.status not in terminal_statuses:
+            raise ConflictError(
+                "calculation group is not terminal",
+                code="CALCULATION_GROUP_NOT_TERMINAL",
+            )
+        successful = self._successful_children(group)
+        if not successful:
+            raise ConflictError(
+                "calculation group has no successful candidates",
+                code="CALCULATION_GROUP_HAS_NO_RESULTS",
+            )
+        child_by_calculation = {
+            child.calculation_id: child
+            for child in successful
+        }
+        result_rows = session.execute(
+            select(
+                DemandRunItemResult,
+                DemandCalculationRun.calculation_id,
+            )
+            .join(
+                DemandCalculationRun,
+                DemandRunItemResult.calculation_run_id
+                == DemandCalculationRun.id,
+            )
+            .where(
+                DemandRunItemResult.tenant_id
+                == actor.tenant_id,
+                DemandCalculationRun.tenant_id
+                == actor.tenant_id,
+                DemandCalculationRun.calculation_id.in_(
+                    child_by_calculation
+                ),
+                DemandCalculationRun.is_current_attempt.is_(
+                    True
+                ),
+                DemandRunItemResult.calculation_status.in_(
+                    ["CALCULATED", "FALLBACK"]
+                ),
+            )
+        ).all()
+        by_spare: dict[
+            int,
+            dict[int, DemandRunItemResult],
+        ] = {}
+        for result, calculation_id in result_rows:
+            child = child_by_calculation[calculation_id]
+            by_spare.setdefault(
+                result.spare_part_id,
+                {},
+            )[child.id] = result
+
+        decisions = {
+            decision.spare_part_id: decision
+            for decision in session.scalars(
+                select(CalculationItemDecision).where(
+                    CalculationItemDecision.tenant_id
+                    == actor.tenant_id,
+                    CalculationItemDecision.group_id
+                    == group.id,
+                )
+            ).all()
+        }
+        rows: list[CalculationComparisonRow] = []
+        for spare_part_id, child_results in by_spare.items():
+            source_child = next(
+                (
+                    child
+                    for child in successful
+                    if child.is_primary
+                    and child.id in child_results
+                ),
+                next(
+                    child
+                    for child in successful
+                    if child.id in child_results
+                ),
+            )
+            identity = child_results[source_child.id]
+            cells: dict[str, ComparisonCandidateCell] = {}
+            for child in group.current_children:
+                item = child_results.get(child.id)
+                cells[child.candidate_key] = (
+                    ComparisonCandidateCell(
+                        child_id=child.id,
+                        candidate_key=child.candidate_key,
+                        reliability_model=(
+                            child.reliability_model
+                        ),
+                        execution_mode=child.execution_mode,
+                        status=(
+                            "SUCCEEDED"
+                            if item is not None
+                            else "NO_RESULT"
+                        ),
+                        item_status=(
+                            item.calculation_status.value
+                            if item is not None
+                            else None
+                        ),
+                        recommended_quantity=(
+                            item.recommended_spare_quantity
+                            if item is not None
+                            else None
+                        ),
+                        expected_demand=(
+                            item.expected_demand
+                            if item is not None
+                            else None
+                        ),
+                        p50=item.p50 if item else None,
+                        p95=item.p95 if item else None,
+                        p99=item.p99 if item else None,
+                        usable_inventory=(
+                            item.usable_inventory
+                            if item is not None
+                            else None
+                        ),
+                        net_demand_gap=(
+                            item.net_demand_gap
+                            if item is not None
+                            else None
+                        ),
+                        shortage_risk_level=(
+                            item.shortage_risk_level.value
+                            if item is not None
+                            else None
+                        ),
+                        warnings=(
+                            list(item.warning_codes_json or [])
+                            if item is not None
+                            else []
+                        ),
+                    )
+                )
+            decision = decisions.get(spare_part_id)
+            rows.append(
+                CalculationComparisonRow(
+                    spare_part_id=spare_part_id,
+                    spare_part_code=(
+                        identity.spare_part_code_snapshot
+                    ),
+                    spare_part_name=(
+                        identity.spare_part_name_snapshot
+                    ),
+                    criticality_level=(
+                        identity.criticality_level
+                    ),
+                    system_child_id=source_child.id,
+                    candidates=cells,
+                    decision=(
+                        CalculationItemDecisionRead.model_validate(
+                            decision
+                        )
+                        if decision is not None
+                        else None
+                    ),
+                )
+            )
+        rows.sort(
+            key=lambda row: (
+                row.spare_part_code,
+                row.spare_part_id,
+            )
+        )
+        return CalculationGroupComparisonRead(
+            group_id=group.id,
+            group_status=group.status,
+            primary_candidate_key=group.primary_candidate_key,
+            candidate_keys=[
+                child.candidate_key
+                for child in group.current_children
+            ],
+            risk_rule_version=self.DECISION_RISK_RULE_VERSION,
+            rows=rows,
+        )
+
+    @staticmethod
+    def _is_material_warning(warnings: list[str]) -> bool:
+        material_tokens = (
+            "MISSING",
+            "NON_CONVERGENCE",
+            "NOT_CONVERGED",
+            "HIGH",
+        )
+        return any(
+            any(token in warning.upper() for token in material_tokens)
+            for warning in warnings
+        )
+
+    def save_decision(
+        self,
+        session: Session,
+        actor: ActorContext,
+        group_id: int,
+        *,
+        spare_part_id: int,
+        expected_version: int,
+        selected_child_id: int,
+        final_quantity: Decimal,
+        reason: str | None,
+    ) -> CalculationItemDecision:
+        locked_group = self.group_repository.get_for_update(
+            session,
+            actor.tenant_id,
+            group_id,
+        )
+        if locked_group is None:
+            raise NotFoundError(
+                "calculation_group",
+                group_id,
+            )
+        comparison = self.comparison(
+            session,
+            actor,
+            group_id,
+        )
+        row = next(
+            (
+                item
+                for item in comparison.rows
+                if item.spare_part_id == spare_part_id
+            ),
+            None,
+        )
+        if row is None:
+            raise NotFoundError(
+                "calculation_comparison_item",
+                spare_part_id,
+            )
+        selected = next(
+            (
+                cell
+                for cell in row.candidates.values()
+                if cell.child_id == selected_child_id
+            ),
+            None,
+        )
+        if (
+            selected is None
+            or selected.status != "SUCCEEDED"
+            or selected.recommended_quantity is None
+        ):
+            raise BusinessValidationError(
+                "selected child has no successful current result",
+                code="CALCULATION_DECISION_INVALID_CHILD",
+            )
+        source = next(
+            cell
+            for cell in row.candidates.values()
+            if cell.child_id == row.system_child_id
+        )
+        assert source.recommended_quantity is not None
+        selected_quantity = selected.recommended_quantity
+        changed_candidate = (
+            selected_child_id != row.system_child_id
+        )
+        changed_quantity = final_quantity != selected_quantity
+        clean_reason = (reason or "").strip()
+        if (
+            changed_candidate or changed_quantity
+        ) and not clean_reason:
+            raise BusinessValidationError(
+                "a reason is required for a non-default decision",
+                code="CALCULATION_DECISION_REASON_REQUIRED",
+            )
+
+        existing = self.decision_repository.get_for_update(
+            session,
+            actor.tenant_id,
+            group_id,
+            spare_part_id,
+        )
+        actual_version = (
+            existing.version if existing is not None else 0
+        )
+        if actual_version != expected_version:
+            raise ConflictError(
+                "calculation decision version conflict",
+                code="CALCULATION_DECISION_VERSION_CONFLICT",
+                details={
+                    "expected_version": expected_version,
+                    "actual_version": actual_version,
+                },
+            )
+
+        ten_percent_reduction = (
+            selected_quantity > 0
+            and final_quantity
+            <= selected_quantity * Decimal("0.90")
+        )
+        critical_reduction = (
+            (row.criticality_level or "").upper()
+            in {"HIGH", "CRITICAL"}
+            and final_quantity < selected_quantity
+        )
+        successful_cells = [
+            cell
+            for cell in row.candidates.values()
+            if (
+                cell.status == "SUCCEEDED"
+                and cell.p50 is not None
+                and cell.p99 is not None
+            )
+        ]
+        outside_all_ranges = (
+            bool(successful_cells)
+            and all(
+                final_quantity < cell.p50
+                or final_quantity > cell.p99
+                for cell in successful_cells
+            )
+        )
+        source_quantity = source.recommended_quantity
+        non_primary_material_difference = (
+            changed_candidate
+            and source_quantity > 0
+            and abs(
+                selected_quantity - source_quantity
+            ) / source_quantity
+            >= Decimal("0.10")
+        )
+        material_warning = self._is_material_warning(
+            selected.warnings
+        )
+        requires_admin = any(
+            (
+                ten_percent_reduction,
+                critical_reduction,
+                outside_all_ranges,
+                non_primary_material_difference,
+                material_warning,
+            )
+        )
+        if changed_quantity:
+            decision_type = (
+                CalculationDecisionType.MANUAL_QUANTITY
+            )
+        elif changed_candidate:
+            decision_type = (
+                CalculationDecisionType.ALTERNATIVE_CANDIDATE
+            )
+        else:
+            decision_type = (
+                CalculationDecisionType.SYSTEM_RECOMMENDATION
+            )
+        try:
+            decision = self.decision_repository.upsert(
+                session,
+                actor.tenant_id,
+                group_id,
+                spare_part_id,
+                {
+                    "source_child_id": row.system_child_id,
+                    "selected_child_id": selected_child_id,
+                    "original_quantity": (
+                        source.recommended_quantity
+                    ),
+                    "final_quantity": final_quantity,
+                    "decision_type": decision_type,
+                    "reason": clean_reason or None,
+                    "risk": (
+                        "HIGH" if requires_admin else "LOW"
+                    ),
+                    "requires_admin_confirmation": (
+                        requires_admin
+                    ),
+                    "confirmed_by_admin": False,
+                    "risk_rule_version": (
+                        self.DECISION_RISK_RULE_VERSION
+                    ),
+                    "decided_by_user_id": actor.user_id,
+                    "decided_by_request_id": (
+                        actor.request_id
+                    ),
+                },
+            )
+            self.group_repository.append_event(
+                session,
+                actor.tenant_id,
+                group_id,
+                event_type="decision.updated",
+                payload={
+                    "spare_part_id": spare_part_id,
+                    "decision_id": decision.id,
+                    "decision_version": decision.version,
+                    "risk": decision.risk,
+                    "requires_admin_confirmation": (
+                        decision.requires_admin_confirmation
+                    ),
+                },
+            )
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        return decision
 
     def list(
         self,

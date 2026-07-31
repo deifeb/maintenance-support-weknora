@@ -7,7 +7,10 @@ import {
 import {
   calculationGroupApi,
   type CalculationGroup,
+  type CalculationGroupComparison,
   type CalculationGroupCreateRequest,
+  type CalculationDecision,
+  type CalculationDecisionSaveRequest,
   type CalculationGroupEvent,
   type CalculationGroupListQuery,
 } from '../../api/maintenance/calculation-groups'
@@ -56,6 +59,16 @@ export interface CalculationGroupStoreApi {
   ): Promise<MaintenanceResult<
     CalculationGroupEvent[]
   >>
+  comparison(
+    groupId: number,
+  ): Promise<MaintenanceResult<
+    CalculationGroupComparison
+  >>
+  saveDecision(
+    groupId: number,
+    sparePartId: number,
+    request: CalculationDecisionSaveRequest,
+  ): Promise<MaintenanceResult<CalculationDecision>>
 }
 
 type SSEFactory = () => ResumableSSEController
@@ -75,6 +88,9 @@ export function createCalculationGroupState(
 ) {
   const group = ref<CalculationGroup | null>(null)
   const groups = ref<CalculationGroup[]>([])
+  const comparison = ref<
+    CalculationGroupComparison | null
+  >(null)
   const total = ref(0)
   const currentSequence = ref(0)
   const connectionState = ref<
@@ -208,6 +224,28 @@ export function createCalculationGroupState(
     }
   }
 
+  async function loadComparison(
+    groupId: number,
+  ): Promise<void> {
+    const generation = ++requestGeneration
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.comparison(groupId)
+      if (generation !== requestGeneration) return
+      comparison.value = response.data
+    } catch (value) {
+      if (generation === requestGeneration) {
+        error.value = normalizeMaintenanceError(value)
+      }
+      throw value
+    } finally {
+      if (generation === requestGeneration) {
+        loading.value = false
+      }
+    }
+  }
+
   function beginMutation(): void {
     if (mutating.value) {
       throw new Error(
@@ -286,6 +324,43 @@ export function createCalculationGroupState(
     )
   }
 
+  async function saveDecision(
+    sparePartId: number,
+    request: CalculationDecisionSaveRequest,
+  ): Promise<CalculationDecision> {
+    const current = comparison.value
+    if (current === null) {
+      throw new Error(
+        'Calculation comparison is not loaded',
+      )
+    }
+    beginMutation()
+    try {
+      const response = await api.saveDecision(
+        current.group_id,
+        sparePartId,
+        request,
+      )
+      comparison.value = {
+        ...current,
+        rows: current.rows.map((row) => (
+          row.spare_part_id === sparePartId
+            ? {
+                ...row,
+                decision: response.data,
+              }
+            : row
+        )),
+      }
+      return response.data
+    } catch (value) {
+      error.value = normalizeMaintenanceError(value)
+      throw value
+    } finally {
+      mutating.value = false
+    }
+  }
+
   function reconnect(): void {
     connect()
   }
@@ -298,6 +373,7 @@ export function createCalculationGroupState(
   return {
     group,
     groups,
+    comparison,
     total,
     currentSequence,
     connectionState,
@@ -309,9 +385,11 @@ export function createCalculationGroupState(
     pageSize,
     load,
     list,
+    loadComparison,
     create,
     retryFailed,
     cancelRunning,
+    saveDecision,
     reconnect,
     applyEvent,
     dispose,

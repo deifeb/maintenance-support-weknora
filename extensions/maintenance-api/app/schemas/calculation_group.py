@@ -89,3 +89,49 @@ class CalculationGroupCreateRequest(BaseModel):
         max_length=10,
     )
     random_seed: int = 20260723
+
+
+class ComparisonCandidateCell(BaseModel):
+    child_id: int
+    candidate_key: str
+    reliability_model: ReliabilityModelType
+    execution_mode: DemandExecutionMode
+    status: str
+    item_status: str | None = None
+    recommended_quantity: Decimal | None = None
+    expected_demand: Decimal | None = None
+    p50: Decimal | None = None
+    p95: Decimal | None = None
+    p99: Decimal | None = None
+    usable_inventory: Decimal | None = None
+    net_demand_gap: Decimal | None = None
+    shortage_risk_level: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationComparisonRow(BaseModel):
+    spare_part_id: int
+    spare_part_code: str
+    spare_part_name: str
+    criticality_level: str | None
+    system_child_id: int
+    candidates: dict[str, ComparisonCandidateCell]
+    decision: CalculationItemDecisionRead | None = None
+
+
+class CalculationGroupComparisonRead(BaseModel):
+    group_id: int
+    group_status: CalculationGroupStatus
+    primary_candidate_key: str
+    candidate_keys: list[str]
+    risk_rule_version: str
+    rows: list[CalculationComparisonRow]
+
+
+class CalculationItemDecisionSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=0)
+    selected_child_id: int = Field(gt=0)
+    final_quantity: Decimal = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=2000)

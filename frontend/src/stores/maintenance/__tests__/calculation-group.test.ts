@@ -95,6 +95,17 @@ test('group mutations are mutually exclusive', async () => {
       {} as CalculationGroup,
     ),
     getEvents: async () => result([]),
+    comparison: async () => result({
+      group_id: 8,
+      group_status: 'COMPLETED' as const,
+      primary_candidate_key: 'WEIBULL:ANALYTICAL',
+      candidate_keys: ['WEIBULL:ANALYTICAL'],
+      risk_rule_version: 'DEMAND-DECISION-RISK-1' as const,
+      rows: [],
+    }),
+    saveDecision: async () => result(
+      {} as never,
+    ),
   }
   const state = createCalculationGroupState(
     api,

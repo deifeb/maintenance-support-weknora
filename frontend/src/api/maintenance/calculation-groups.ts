@@ -2,6 +2,7 @@ import {
   buildQuery,
   maintenanceGet,
   maintenancePost,
+  maintenancePut,
 } from './client'
 import type {
   MaintenanceResult,
@@ -74,6 +75,71 @@ export interface CalculationGroupEvent {
   occurred_at: string
 }
 
+export interface CalculationDecision {
+  id: number
+  group_id: number
+  spare_part_id: number
+  source_child_id: number
+  selected_child_id: number
+  original_quantity: DecimalString
+  final_quantity: DecimalString
+  decision_type:
+    | 'SYSTEM_RECOMMENDATION'
+    | 'ALTERNATIVE_CANDIDATE'
+    | 'MANUAL_QUANTITY'
+  reason: string | null
+  risk: string
+  requires_admin_confirmation: boolean
+  confirmed_by_admin: boolean
+  risk_rule_version: 'DEMAND-DECISION-RISK-1'
+  version: number
+  updated_at: string
+}
+
+export interface ComparisonCandidateCell {
+  child_id: number
+  candidate_key: string
+  reliability_model: ReliabilityModel
+  execution_mode: CandidateExecutionMode
+  status: 'SUCCEEDED' | 'NO_RESULT'
+  item_status: string | null
+  recommended_quantity: DecimalString | null
+  expected_demand: DecimalString | null
+  p50: DecimalString | null
+  p95: DecimalString | null
+  p99: DecimalString | null
+  usable_inventory: DecimalString | null
+  net_demand_gap: DecimalString | null
+  shortage_risk_level: string | null
+  warnings: string[]
+}
+
+export interface CalculationComparisonRow {
+  spare_part_id: number
+  spare_part_code: string
+  spare_part_name: string
+  criticality_level: string | null
+  system_child_id: number
+  candidates: Record<string, ComparisonCandidateCell>
+  decision: CalculationDecision | null
+}
+
+export interface CalculationGroupComparison {
+  group_id: number
+  group_status: CalculationGroupStatus
+  primary_candidate_key: string
+  candidate_keys: string[]
+  risk_rule_version: 'DEMAND-DECISION-RISK-1'
+  rows: CalculationComparisonRow[]
+}
+
+export interface CalculationDecisionSaveRequest {
+  expected_version: number
+  selected_child_id: number
+  final_quantity: DecimalString
+  reason: string | null
+}
+
 export interface CalculationGroupCreateRequest {
   scenario_version_id: number
   primary_candidate_key: string
@@ -94,11 +160,16 @@ export interface CalculationGroupApiClient {
     body: unknown,
     config?: unknown,
   ): Promise<MaintenanceResult<T>>
+  put<T>(
+    path: string,
+    body: unknown,
+  ): Promise<MaintenanceResult<T>>
 }
 
 const defaultClient: CalculationGroupApiClient = {
   get: maintenanceGet,
   post: maintenancePost,
+  put: maintenancePut,
 }
 
 function identifier(value: number): string {
@@ -201,6 +272,34 @@ export function createCalculationGroupApi(
             after_sequence: afterSequence,
           })
         ),
+      )
+    },
+
+    comparison(
+      groupId: number,
+    ): Promise<MaintenanceResult<
+      CalculationGroupComparison
+    >> {
+      return client.get<CalculationGroupComparison>(
+        (
+          '/v1/demand/calculation-groups/'
+          + `${identifier(groupId)}/comparison`
+        ),
+      )
+    },
+
+    saveDecision(
+      groupId: number,
+      sparePartId: number,
+      request: CalculationDecisionSaveRequest,
+    ): Promise<MaintenanceResult<CalculationDecision>> {
+      return client.put<CalculationDecision>(
+        (
+          '/v1/demand/calculation-groups/'
+          + `${identifier(groupId)}/decisions/`
+          + identifier(sparePartId)
+        ),
+        request,
       )
     },
   }

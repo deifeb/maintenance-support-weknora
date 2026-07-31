@@ -44,6 +44,13 @@ function fakeClient(calls: CapturedCall[]) {
       })
       return result({} as T)
     },
+    async put<T>(
+      path: string,
+      body: unknown,
+    ): Promise<MaintenanceResult<T>> {
+      calls.push({ method: 'PUT', path, body })
+      return result({} as T)
+    },
   }
 }
 
@@ -63,6 +70,13 @@ test('group API uses exact paths and idempotency headers', async () => {
   await api.retryFailed(9, 'retry-key')
   await api.cancelRunning(9, 'cancel-key')
   await api.getEvents(9, 14)
+  await api.comparison(9)
+  await api.saveDecision(9, 41, {
+    expected_version: 0,
+    selected_child_id: 12,
+    final_quantity: '80.000000',
+    reason: 'Accepted lower target',
+  })
 
   assert.equal(
     calls[0]?.path,
@@ -91,6 +105,15 @@ test('group API uses exact paths and idempotency headers', async () => {
     ).headers,
     { 'Idempotency-Key': 'group-key' },
   )
+  assert.equal(
+    calls[4]?.path,
+    '/v1/demand/calculation-groups/9/comparison',
+  )
+  assert.equal(
+    calls[5]?.path,
+    '/v1/demand/calculation-groups/9/decisions/41',
+  )
+  assert.equal(calls[5]?.method, 'PUT')
   assert.equal(
     JSON.stringify(calls).includes('tenant'),
     false,

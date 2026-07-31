@@ -12,6 +12,8 @@ from app.models import CalculationGroup
 from app.models.enums import CalculationGroupStatus
 from app.schemas.calculation_group import (
     CalculationGroupCreateRequest,
+    CalculationItemDecisionRead,
+    CalculationItemDecisionSaveRequest,
 )
 from app.security.actor import ActorContext
 from app.security.permissions import (
@@ -160,6 +162,51 @@ def get_group(
         _group_dict(group),
         actor=actor,
         version=group.version,
+    )
+
+
+@router.get("/{group_id}/comparison")
+def compare_group(
+    group_id: int,
+    session: SessionDep,
+    actor: ViewerDep,
+):
+    comparison = calculation_group_service.comparison(
+        session,
+        actor,
+        group_id,
+    )
+    return success_response(
+        comparison.model_dump(mode="json"),
+        actor=actor,
+    )
+
+
+@router.put("/{group_id}/decisions/{spare_part_id}")
+def save_item_decision(
+    group_id: int,
+    spare_part_id: int,
+    payload: CalculationItemDecisionSaveRequest,
+    session: SessionDep,
+    actor: ContributorDep,
+):
+    decision = calculation_group_service.save_decision(
+        session,
+        actor,
+        group_id,
+        spare_part_id=spare_part_id,
+        expected_version=payload.expected_version,
+        selected_child_id=payload.selected_child_id,
+        final_quantity=payload.final_quantity,
+        reason=payload.reason,
+    )
+    return success_response(
+        CalculationItemDecisionRead.model_validate(
+            decision
+        ).model_dump(mode="json"),
+        "Calculation item decision saved",
+        actor=actor,
+        version=decision.version,
     )
 
 

@@ -24,7 +24,73 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from tests.services.test_calculation_group_service import (
     compatible_snapshot,
+    completed_comparison_group,
 )
+
+
+def test_comparison_and_decision_endpoints(
+    client: TestClient,
+    session: Session,
+    actor_contributor,
+    internal_auth_headers: Callable[..., dict[str, str]],
+    monkeypatch,
+) -> None:
+    _, group, spare, _ = completed_comparison_group(
+        session,
+        actor_contributor,
+        monkeypatch,
+    )
+    primary = group.current_children[0]
+
+    compared = client.get(
+        (
+            "/api/v1/demand/calculation-groups/"
+            f"{group.id}/comparison"
+        ),
+        headers=internal_auth_headers(
+            role=MaintenanceRole.VIEWER,
+        ),
+    )
+    assert compared.status_code == 200
+    assert len(compared.json()["data"]["rows"]) == 2
+
+    saved = client.put(
+        (
+            "/api/v1/demand/calculation-groups/"
+            f"{group.id}/decisions/{spare.id}"
+        ),
+        headers=internal_auth_headers(),
+        json={
+            "expected_version": 0,
+            "selected_child_id": primary.id,
+            "final_quantity": "80",
+            "reason": "Accepted lower target",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["data"]["version"] == 1
+    assert saved.json()["data"]["final_quantity"] == "80"
+    assert (
+        saved.json()["data"]["risk_rule_version"]
+        == "DEMAND-DECISION-RISK-1"
+    )
+
+    denied = client.put(
+        (
+            "/api/v1/demand/calculation-groups/"
+            f"{group.id}/decisions/{spare.id}"
+        ),
+        headers=internal_auth_headers(
+            role=MaintenanceRole.VIEWER,
+        ),
+        json={
+            "expected_version": 1,
+            "selected_child_id": primary.id,
+            "final_quantity": "80",
+            "reason": "Viewer cannot update",
+        },
+    )
+    assert denied.status_code == 403
 
 
 def recommendation_result() -> ModelRecommendationSet:
