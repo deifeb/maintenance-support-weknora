@@ -508,6 +508,7 @@ DEMAND-DECISION-RISK-1
 ```text
 demand_lists
 demand_list_items
+demand_list_events
 ```
 
 每个 `demand_lists` 记录代表一个独立版本，包含：
@@ -531,6 +532,8 @@ demand_list_items
 - 最终数量；
 - 调整类型、理由和风险；
 - 参数、区间、警告和库存摘要。
+
+`demand_list_events` 是仅追加的生命周期审计与幂等回执表，保存事件类型、actor、request ID、幂等键与请求哈希、变更前后摘要和响应快照。它不作为清单当前状态的权威来源；当前状态仍由 `demand_lists` 提供。
 
 需求数量及相关数值使用 `Numeric/Decimal`。
 
