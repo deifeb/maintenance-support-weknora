@@ -172,3 +172,160 @@ feat: add typed maintenance frontend client
 No menu, dashboard, or master-data page work begins before the typed client
 passes its frontend tests and type checking.
 <!-- PLAN05-01-SECURITY-FOUNDATION:END -->
+
+## Plan 05-2 continuation and closure (2026-07-30)
+
+- Baseline Task 1: complete (commits `fb32b03..30fc216`, spec compliant, task quality approved; minor path-segment boundary note deferred to final review).
+- Baseline Task 2: complete (commits `30fc216..febccfb`, spec compliant, task quality approved; the affected Go gate reaches the separate gojieba no-CGO boundary).
+- Baseline Jieba Task 1: complete (commits `4b2dde5..b29d27a`, spec compliant, task quality approved; minor fallback edge-case coverage note deferred to final review).
+- Task 9B Task 1: complete (commit `3bde177`; typed binary transfer client; focused 11/11 and type-check pass; independent review approved).
+- Task 9B Task 2: complete (commits `4de02c7..6b63bcf`; reducer and visibility-aware polling; focused 10/10 and type-check pass; two race conditions fixed and rereview approved).
+- Task 9B Task 3: complete (commits `52ae74f..92074db`, plus Task 2 gate fix `1e3316e`; focused 5/5, maintenance 96/96, type-check and build pass).
+- Task 9B Task 4: complete (commits `2e67192`, `cf936a9`, and `45d8814`, with Task 3 serialization fix `c55f3bc`; frontend 327/327, type-check, build, backend 47, and Ruff pass).
+- Plan 05-2 Task 10: complete (commits `42d4d9e`, `39326e0`, and `cc1c158`; acceptance 9/9, frontend 336/336, backend 50, Ruff, no-CGO Go, and bundle scans pass).
+- Plan 05-2 implementation and automated acceptance are complete.
+- Runtime screenshots and human UX acceptance remain an explicit manual acceptance item. They do not reopen implementation unless the review identifies a concrete defect.
+
+## Plan 05-3 delivery status (2026-07-31)
+
+### Plan 05-3A: scenario draft wizard — complete
+
+Plan document:
+
+- `docs/superpowers/plans/2026-07-31-maintenance-plan05-03a-scenario-draft-wizard.md`
+
+Implementation range:
+
+- `ce9c8348..5af3ee7c`
+
+Delivered boundaries:
+
+- versioned scenario draft persistence;
+- manual and AI-assisted draft creation;
+- deterministic validation;
+- autosave with conflict handling;
+- atomic materialization into executable scenarios;
+- administrator-only publication;
+- multilingual six-step scenario wizard;
+- complete scenario-draft workflow verification.
+
+Completion commit:
+
+- `5af3ee7c feat: complete scenario draft workflow`
+
+### Plan 05-3B: calculation orchestration — complete
+
+Plan document:
+
+- `docs/superpowers/plans/2026-07-31-maintenance-plan05-03b-calculation-orchestration.md`
+
+Implementation and verification range:
+
+- `92a36d1f..42986b36`
+
+Delivered boundaries:
+
+- calculation-group persistence;
+- deterministic candidate recommendations;
+- independent candidate calculation creation;
+- resumable calculation-group execution;
+- child-identity-safe event streaming;
+- retry, cancellation, and recovery behavior;
+- typed resumable frontend client;
+- multi-candidate comparison workflow;
+- union comparison item decisions;
+- end-to-end scenario and calculation integration coverage.
+
+Final verification commit:
+
+- `42986b36 test: verify calculation group workflow`
+
+Recorded Plan 05-3B gate evidence:
+
+- focused backend gate: **38 passed**;
+- frontend gate: **377 passed**;
+- Vue type checking: PASS;
+- production frontend build: PASS;
+- Ruff: PASS;
+- Alembic `upgrade -> downgrade one revision -> upgrade`: PASS;
+- maintenance proxy and router Go tests: PASS;
+- Git diff and repository checks: PASS.
+
+## Closure revalidation (2026-07-31)
+
+The Plan 05-3B closure gate was rerun locally against the closure baseline before starting Plan 05-3C.
+
+Fresh verification results:
+
+- focused backend gate: **38 passed**, with one non-blocking Starlette/httpx deprecation warning;
+- Ruff over `app` and `tests`: PASS;
+- disposable SQLite migration cycle: empty database -> `20260731_06` -> downgrade to `20260729_05` -> restore to `20260731_06`: PASS;
+- full frontend test gate: PASS;
+- Vue and TypeScript type checking: PASS;
+- production frontend build: PASS;
+- maintenance proxy and router Go tests with `CGO_ENABLED=0`: PASS;
+- Git diff validation: PASS.
+
+The frontend build reports a non-blocking warning for minified chunks larger than 500 kB. This is retained as a future code-splitting and bundle-optimization item and does not block the current functional acceptance.
+
+The only repository modification after revalidation is this progress ledger. Runtime screenshots and human UX acceptance remain the separate manual acceptance item recorded above.
+
+## Implementation closure baseline and pull-request boundary
+
+Branch:
+
+- `feature/maintenance-frontend-plan05`
+
+Implementation baseline verified by this closure:
+
+- `42986b3630de00a6418960d29b6fad1c76bf5705`
+- `test: verify calculation group workflow`
+
+Pull request:
+
+- repository: `https://github.com/deifeb/maintenance-support-weknora`
+- pull request: `#4`
+- title: `feat: deliver Maintenance Plan 05 scenario and calculation workflows`
+- base: `feature/demand-calculation-engine`
+- head: `feature/maintenance-frontend-plan05`
+- state at closure review: open draft
+
+The branch has completed:
+
+- Plan 05-1;
+- Plan 05-2;
+- Plan 05-3A;
+- Plan 05-3B.
+
+Plan 05-3 as a whole is not complete because Plan 05-3C remains outstanding.
+
+## Next implementation boundary
+
+Approved next plan:
+
+- `docs/superpowers/plans/2026-07-31-maintenance-plan05-03c-demand-list-lifecycle.md`
+
+Plan 05-3C implementation has not started.
+
+At the verified implementation baseline there are no demand-list model, repository, service, route, migration, typed client, store, or detail-view implementation files.
+
+The exact next task is:
+
+- Plan 05-3C Task 1
+- Add Demand List Persistence and Reversible Migration
+
+Expected first implementation commit:
+
+- `feat: add versioned demand list persistence`
+
+Do not reimplement:
+
+- internal JWT and maintenance identity boundaries;
+- frontend master data;
+- scenario draft persistence and services;
+- the six-step scenario wizard;
+- calculation-group persistence;
+- resumable calculation orchestration;
+- candidate comparison and item decisions.
+
+Do not begin Plan 05-4 or Plan 05-5 before all seven Plan 05-3C tasks and the complete Plan 05-3 vertical gate are finished.
