@@ -10,6 +10,8 @@ from app.core.exceptions import (
 )
 from app.models import DemandScenarioTemplate, DemandScenarioVersion
 from app.models.enums import (
+    CalculationGroupStatus,
+    CalculationStatus,
     DemandExecutionMode,
     ReliabilityModelType,
     ScenarioVersionStatus,
@@ -289,3 +291,157 @@ def test_group_rejects_inapplicable_candidate(
         )
 
     assert exc.value.code == "CANDIDATE_NOT_APPLICABLE"
+
+
+def test_one_child_failure_preserves_successful_sibling(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = add_version(
+        session,
+        actor_contributor.tenant_id,
+    )
+    service = service_with_snapshot(monkeypatch)
+    group = service.create(
+        session,
+        actor_contributor,
+        scenario_version_id=version.id,
+        primary_candidate_key="WEIBULL:ANALYTICAL",
+        selected_candidate_keys=[
+            "WEIBULL:ANALYTICAL",
+            "WEIBULL:MONTE_CARLO",
+        ],
+        idempotency_key="mixed-result",
+    )
+    group.child(
+        "WEIBULL:ANALYTICAL"
+    ).calculation.status = CalculationStatus.SUCCEEDED
+    group.child(
+        "WEIBULL:MONTE_CARLO"
+    ).calculation.status = CalculationStatus.FAILED
+    session.commit()
+
+    refreshed = service.refresh_status(
+        session,
+        actor_contributor,
+        group.id,
+    )
+
+    assert (
+        refreshed.status
+        is CalculationGroupStatus.PARTIALLY_COMPLETED
+    )
+    assert (
+        refreshed.child(
+            "WEIBULL:ANALYTICAL"
+        ).calculation.status
+        is CalculationStatus.SUCCEEDED
+    )
+    assert (
+        refreshed.child(
+            "WEIBULL:MONTE_CARLO"
+        ).calculation.status
+        is CalculationStatus.FAILED
+    )
+
+
+def test_retry_failed_creates_only_new_failed_attempt(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = add_version(
+        session,
+        actor_contributor.tenant_id,
+    )
+    service = service_with_snapshot(monkeypatch)
+    group = service.create(
+        session,
+        actor_contributor,
+        scenario_version_id=version.id,
+        primary_candidate_key="WEIBULL:ANALYTICAL",
+        selected_candidate_keys=[
+            "WEIBULL:ANALYTICAL",
+            "WEIBULL:MONTE_CARLO",
+        ],
+        idempotency_key="retry-source",
+    )
+    group.child(
+        "WEIBULL:ANALYTICAL"
+    ).calculation.status = CalculationStatus.SUCCEEDED
+    group.child(
+        "WEIBULL:MONTE_CARLO"
+    ).calculation.status = CalculationStatus.FAILED
+    session.commit()
+
+    retried = service.retry_failed(
+        session,
+        actor_contributor,
+        group.id,
+        idempotency_key="retry-mixed-1",
+    )
+
+    assert retried.child(
+        "WEIBULL:ANALYTICAL"
+    ).attempt_number == 1
+    assert retried.child(
+        "WEIBULL:MONTE_CARLO"
+    ).attempt_number == 2
+    assert (
+        retried.child(
+            "WEIBULL:MONTE_CARLO"
+        ).calculation.status
+        is CalculationStatus.PENDING
+    )
+    replay = service.retry_failed(
+        session,
+        actor_contributor,
+        group.id,
+        idempotency_key="retry-mixed-1",
+    )
+    assert replay.child(
+        "WEIBULL:MONTE_CARLO"
+    ).attempt_number == 2
+
+
+def test_cancel_running_is_idempotent(
+    session: Session,
+    actor_contributor: ActorContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = add_version(
+        session,
+        actor_contributor.tenant_id,
+    )
+    service = service_with_snapshot(monkeypatch)
+    group = service.create(
+        session,
+        actor_contributor,
+        scenario_version_id=version.id,
+        primary_candidate_key="WEIBULL:ANALYTICAL",
+        selected_candidate_keys=[
+            "WEIBULL:ANALYTICAL",
+        ],
+        idempotency_key="cancel-source",
+    )
+
+    cancelled = service.cancel_running(
+        session,
+        actor_contributor,
+        group.id,
+        idempotency_key="cancel-1",
+    )
+    replay = service.cancel_running(
+        session,
+        actor_contributor,
+        group.id,
+        idempotency_key="cancel-1",
+    )
+
+    assert cancelled.status is CalculationGroupStatus.CANCELLED
+    assert replay.id == cancelled.id
+    assert (
+        replay.current_children[0].calculation.status
+        is CalculationStatus.CANCELLED
+    )

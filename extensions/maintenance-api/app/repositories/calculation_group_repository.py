@@ -132,6 +132,31 @@ class CalculationGroupRepository(
         session.flush()
         return event
 
+    def list_events(
+        self,
+        session: Session,
+        tenant_id: str,
+        group_id: int,
+        *,
+        after_sequence: int = 0,
+    ) -> list[CalculationGroupEvent]:
+        return list(
+            session.scalars(
+                select(CalculationGroupEvent)
+                .options(tenant_loader_criteria(tenant_id))
+                .execution_options(populate_existing=True)
+                .where(
+                    CalculationGroupEvent.tenant_id
+                    == tenant_id,
+                    CalculationGroupEvent.group_id
+                    == group_id,
+                    CalculationGroupEvent.sequence
+                    > after_sequence,
+                )
+                .order_by(CalculationGroupEvent.sequence)
+            ).all()
+        )
+
 
 class CalculationGroupChildRepository(
     BaseRepository[CalculationGroupChild]

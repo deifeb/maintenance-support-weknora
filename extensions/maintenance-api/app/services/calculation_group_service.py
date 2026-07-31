@@ -14,6 +14,7 @@ from app.core.exceptions import (
 from app.models import CalculationGroup, DemandScenarioVersion
 from app.models.enums import (
     CalculationGroupStatus,
+    CalculationStatus,
     ScenarioVersionStatus,
 )
 from app.repositories.calculation_group_repository import (
@@ -333,6 +334,302 @@ class CalculationGroupService:
                 group_id,
             )
         return group
+
+    @staticmethod
+    def _aggregate_status(
+        group: CalculationGroup,
+    ) -> CalculationGroupStatus:
+        statuses = [
+            child.calculation.status
+            for child in group.current_children
+        ]
+        if not statuses or all(
+            status is CalculationStatus.PENDING
+            for status in statuses
+        ):
+            return CalculationGroupStatus.PENDING
+        if any(
+            status
+            in {
+                CalculationStatus.PENDING,
+                CalculationStatus.RUNNING,
+            }
+            for status in statuses
+        ):
+            return CalculationGroupStatus.RUNNING
+        successful = {
+            CalculationStatus.SUCCEEDED,
+            CalculationStatus.PARTIAL_SUCCESS,
+        }
+        if all(status in successful for status in statuses):
+            return CalculationGroupStatus.COMPLETED
+        if all(
+            status is CalculationStatus.FAILED
+            for status in statuses
+        ):
+            return CalculationGroupStatus.FAILED
+        if all(
+            status is CalculationStatus.CANCELLED
+            for status in statuses
+        ):
+            return CalculationGroupStatus.CANCELLED
+        if any(status in successful for status in statuses):
+            return CalculationGroupStatus.PARTIALLY_COMPLETED
+        if any(
+            status is CalculationStatus.INTERRUPTED
+            for status in statuses
+        ):
+            return CalculationGroupStatus.INTERRUPTED
+        return CalculationGroupStatus.FAILED
+
+    def refresh_status_internal(
+        self,
+        session: Session,
+        tenant_id: str,
+        group_id: int,
+        *,
+        commit: bool = False,
+    ) -> CalculationGroup:
+        group = self.group_repository.get(
+            session,
+            tenant_id,
+            group_id,
+        )
+        if group is None:
+            raise NotFoundError(
+                "calculation_group",
+                group_id,
+            )
+        next_status = self._aggregate_status(group)
+        if group.status is not next_status:
+            previous = group.status
+            group.status = next_status
+            group.version += 1
+            session.flush()
+            self.group_repository.append_event(
+                session,
+                tenant_id,
+                group.id,
+                event_type="group.status_changed",
+                payload={
+                    "from": previous.value,
+                    "to": next_status.value,
+                },
+            )
+        if commit:
+            session.commit()
+            loaded = self.group_repository.get(
+                session,
+                tenant_id,
+                group_id,
+            )
+            assert loaded is not None
+            return loaded
+        session.flush()
+        return group
+
+    def refresh_status(
+        self,
+        session: Session,
+        actor: ActorContext,
+        group_id: int,
+    ) -> CalculationGroup:
+        return self.refresh_status_internal(
+            session,
+            actor.tenant_id,
+            group_id,
+            commit=True,
+        )
+
+    @staticmethod
+    def _retry_idempotency_key(
+        idempotency_key: str,
+        candidate_key: str,
+    ) -> str:
+        digest = hashlib.sha256(
+            (
+                f"{idempotency_key}:"
+                f"{candidate_key}"
+            ).encode("utf-8")
+        ).hexdigest()
+        return f"retry:{digest}"
+
+    def retry_failed(
+        self,
+        session: Session,
+        actor: ActorContext,
+        group_id: int,
+        *,
+        idempotency_key: str,
+    ) -> CalculationGroup:
+        group = self.get(session, actor, group_id)
+        replay_keys = {
+            self._retry_idempotency_key(
+                idempotency_key,
+                child.candidate_key,
+            )
+            for child in group.current_children
+        }
+        if any(
+            child.calculation.idempotency_key
+            in replay_keys
+            for child in group.current_children
+        ):
+            return group
+        retryable = [
+            child
+            for child in group.current_children
+            if child.calculation.status
+            in {
+                CalculationStatus.FAILED,
+                CalculationStatus.INTERRUPTED,
+            }
+        ]
+        if not retryable:
+            raise ConflictError(
+                "calculation group has no retryable children",
+                code="CALCULATION_GROUP_NOT_RETRYABLE",
+            )
+        try:
+            for child in retryable:
+                calculation = (
+                    self.calculation_service.retry_candidate(
+                        session,
+                        actor,
+                        source=child.calculation,
+                        idempotency_key=(
+                            self._retry_idempotency_key(
+                                idempotency_key,
+                                child.candidate_key,
+                            )
+                        ),
+                    )
+                )
+                created = self.child_repository.create_attempt(
+                    session,
+                    actor.tenant_id,
+                    group.id,
+                    {
+                        "candidate_key": child.candidate_key,
+                        "reliability_model": (
+                            child.reliability_model
+                        ),
+                        "execution_mode": (
+                            child.execution_mode
+                        ),
+                        "calculation_id": calculation.id,
+                        "is_primary": child.is_primary,
+                        "selection_reason": (
+                            child.selection_reason
+                        ),
+                    },
+                )
+                self.group_repository.append_event(
+                    session,
+                    actor.tenant_id,
+                    group.id,
+                    child_id=created.id,
+                    event_type="child.queued",
+                    payload={
+                        "candidate_key": (
+                            child.candidate_key
+                        ),
+                        "calculation_id": calculation.id,
+                        "attempt_number": (
+                            created.attempt_number
+                        ),
+                    },
+                )
+            self.refresh_status_internal(
+                session,
+                actor.tenant_id,
+                group.id,
+            )
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        return self.get(session, actor, group.id)
+
+    def cancel_running(
+        self,
+        session: Session,
+        actor: ActorContext,
+        group_id: int,
+        *,
+        idempotency_key: str,
+    ) -> CalculationGroup:
+        group = self.get(session, actor, group_id)
+        if any(
+            event.event_type == "group.cancel_requested"
+            and event.payload_json.get("idempotency_key")
+            == idempotency_key
+            for event in self.group_repository.list_events(
+                session,
+                actor.tenant_id,
+                group.id,
+            )
+        ):
+            return group
+        changed = False
+        for child in group.current_children:
+            calculation = child.calculation
+            if calculation.status not in {
+                CalculationStatus.PENDING,
+                CalculationStatus.RUNNING,
+            }:
+                continue
+            changed = True
+            calculation.cancel_requested = True
+            if calculation.status is CalculationStatus.PENDING:
+                calculation.status = CalculationStatus.CANCELLED
+                self.group_repository.append_event(
+                    session,
+                    actor.tenant_id,
+                    group.id,
+                    child_id=child.id,
+                    event_type="child.cancelled",
+                    payload={
+                        "candidate_key": (
+                            child.candidate_key
+                        )
+                    },
+                )
+        if not changed:
+            raise ConflictError(
+                "calculation group has no running children",
+                code="CALCULATION_GROUP_NOT_CANCELLABLE",
+            )
+        self.group_repository.append_event(
+            session,
+            actor.tenant_id,
+            group.id,
+            event_type="group.cancel_requested",
+            payload={"idempotency_key": idempotency_key},
+        )
+        self.refresh_status_internal(
+            session,
+            actor.tenant_id,
+            group.id,
+        )
+        session.commit()
+        return self.get(session, actor, group.id)
+
+    def events(
+        self,
+        session: Session,
+        actor: ActorContext,
+        group_id: int,
+        *,
+        after_sequence: int = 0,
+    ):
+        self.get(session, actor, group_id)
+        return self.group_repository.list_events(
+            session,
+            actor.tenant_id,
+            group_id,
+            after_sequence=after_sequence,
+        )
 
     def list(
         self,

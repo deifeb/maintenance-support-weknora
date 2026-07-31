@@ -25,3 +25,4 @@ class TaskRegistry:
 
 
 registry = TaskRegistry()
+group_registry = TaskRegistry()

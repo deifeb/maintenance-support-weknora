@@ -11,6 +11,7 @@ from app.db.session import SessionLocal
 from app.schemas.common import SuccessResponse
 from app.workers import (
     ai_task_executor,
+    calculation_group_executor,
     demand_task_executor,
     recover_interrupted_ai_tasks,
     recover_interrupted_calculations,
@@ -38,6 +39,7 @@ async def lifespan(application: FastAPI):
     import_task_executor.shutdown(wait=False)
     ai_task_executor.shutdown(wait=False)
     demand_task_executor.shutdown(wait=False)
+    calculation_group_executor.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:

@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from demand_engine import DemandCalculationEngine
 from demand_engine.enums import AgeDistributionType as EngineAgeDistributionType
@@ -13,6 +13,7 @@ from demand_engine.enums import ExecutionMode as EngineExecutionMode
 from demand_engine.enums import FailureProcessMode as EngineFailureProcessMode
 from demand_engine.enums import ReliabilityModelType as EngineReliabilityModelType
 from demand_engine.enums import ShockApplicationMode as EngineShockApplicationMode
+from demand_engine.exceptions import CalculationCancelledError
 from demand_engine.models import (
     AgeGroupInput,
     CalculationInput,
@@ -84,6 +85,34 @@ class CandidateExecutionSpec:
     reliability_model: ReliabilityModelType
     execution_mode: DemandExecutionMode
     random_seed: int
+
+
+class DemandExecutionObserver(Protocol):
+    def started(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+    ) -> None: ...
+
+    def progress(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+        percent: Decimal,
+    ) -> None: ...
+
+    def completed(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+    ) -> None: ...
+
+    def failed(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+        error: Exception,
+    ) -> None: ...
 
 
 class DemandCalculationService:
@@ -765,6 +794,62 @@ class DemandCalculationService:
         )
         return calculation
 
+    def retry_candidate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        source: DemandCalculation,
+        idempotency_key: str,
+    ) -> DemandCalculation:
+        existing = (
+            self.calculation_repository
+            .get_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                idempotency_key,
+            )
+        )
+        if existing is not None:
+            return existing
+        now = datetime.now(timezone.utc)
+        return self.calculation_repository.create(
+            session,
+            actor.tenant_id,
+            {
+                "calculation_code": (
+                    "DC-"
+                    f"{now:%Y%m%d%H%M%S}"
+                    f"-{uuid.uuid4().hex[:8].upper()}"
+                ),
+                "calculation_name": source.calculation_name,
+                "scenario_version_id": (
+                    source.scenario_version_id
+                ),
+                "rerun_mode": RerunMode.REPLAY_SNAPSHOT,
+                "source_calculation_id": source.id,
+                "execution_type": (
+                    CalculationExecutionType.ASYNCHRONOUS
+                ),
+                "requested_mode": source.requested_mode,
+                "status": CalculationStatus.PENDING,
+                "input_snapshot_json": deepcopy(
+                    source.input_snapshot_json
+                ),
+                "input_snapshot_hash": (
+                    source.input_snapshot_hash
+                ),
+                "inventory_snapshot_at": (
+                    source.inventory_snapshot_at
+                ),
+                "warnings_json": deepcopy(
+                    source.warnings_json
+                ),
+                "submitted_at": now,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
     def submit(
         self,
         session: Session,
@@ -900,12 +985,14 @@ class DemandCalculationService:
         tenant_id: str,
         calculation_id: int,
         random_seed: int | None = None,
+        observer: DemandExecutionObserver | None = None,
     ) -> DemandCalculation:
         return self._run_for_tenant(
             session,
             tenant_id,
             calculation_id,
             random_seed=random_seed,
+            observer=observer,
         )
 
     def _run_for_tenant(
@@ -915,6 +1002,7 @@ class DemandCalculationService:
         calculation_id: int,
         *,
         random_seed: int | None = None,
+        observer: DemandExecutionObserver | None = None,
     ) -> DemandCalculation:
         calculation = (
             self.calculation_repository.get_by_id(
@@ -943,6 +1031,9 @@ class DemandCalculationService:
         calculation.started_at = datetime.now(
             timezone.utc
         )
+        if observer is not None:
+            session.flush()
+            observer.started(session, calculation)
         session.commit()
 
         try:
@@ -961,6 +1052,7 @@ class DemandCalculationService:
                         calculation,
                         done,
                         maximum,
+                        observer,
                     )
                 ),
                 cancel_check=lambda: (
@@ -1000,6 +1092,9 @@ class DemandCalculationService:
                     else None
                 ),
             }
+            if observer is not None:
+                session.flush()
+                observer.completed(session, calculation)
             session.commit()
             session.refresh(calculation)
             return calculation
@@ -1013,7 +1108,14 @@ class DemandCalculationService:
                 )
             )
             if failed is not None:
-                failed.status = CalculationStatus.FAILED
+                failed.status = (
+                    CalculationStatus.CANCELLED
+                    if isinstance(
+                        exc,
+                        CalculationCancelledError,
+                    )
+                    else CalculationStatus.FAILED
+                )
                 failed.error_code = getattr(
                     exc,
                     "code",
@@ -1023,14 +1125,31 @@ class DemandCalculationService:
                 failed.completed_at = datetime.now(
                     timezone.utc
                 )
+                if observer is not None:
+                    session.flush()
+                    observer.failed(
+                        session,
+                        failed,
+                        exc,
+                    )
                 session.commit()
             raise
 
     @staticmethod
     def _update_progress(
-        session: Session, calculation: DemandCalculation, done: int, maximum: int
+        session: Session,
+        calculation: DemandCalculation,
+        done: int,
+        maximum: int,
+        observer: DemandExecutionObserver | None = None,
     ) -> None:
         calculation.progress_percent = Decimal(str(min(99, max(1, done * 100 / maximum))))
+        if observer is not None:
+            observer.progress(
+                session,
+                calculation,
+                calculation.progress_percent,
+            )
         session.commit()
 
     def _cancel_requested(
