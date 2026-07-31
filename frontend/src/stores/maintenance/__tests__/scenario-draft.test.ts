@@ -89,8 +89,21 @@ test('stale draft loads cannot replace the active session', async () => {
 
 test('save conflicts preserve local edits and expose server version', async () => {
   const initial = envelope(7, 2)
+  const latest = envelope(7, 4, {
+    draft: {
+      scenario_name: 'Server changed',
+      current_step: 2,
+      fields: {},
+    },
+  })
+  let loadCount = 0
   const api = {
-    getDraft: async () => result(initial),
+    getDraft: async () => {
+      loadCount += 1
+      return result(
+        loadCount === 1 ? initial : latest,
+      )
+    },
     createDraft: async () => result(initial),
     saveDraft: async () => {
       throw {
@@ -121,6 +134,8 @@ test('save conflicts preserve local edits and expose server version', async () =
     evidence_refs: [],
   })
   await state.flushSave()
+  await Promise.resolve()
+  await Promise.resolve()
 
   assert.equal(state.autosave.value.status, 'conflict')
   assert.equal(state.autosave.value.dirty, true)
@@ -130,6 +145,17 @@ test('save conflicts preserve local edits and expose server version', async () =
     '0.97',
   )
   assert.equal(state.version.value, 2)
+  assert.equal(
+    state.serverDraft.value?.scenario_name,
+    'Server changed',
+  )
+
+  state.discardLocalChanges()
+  assert.equal(state.version.value, 4)
+  assert.equal(
+    state.draft.value?.scenario_name,
+    'Server changed',
+  )
 })
 
 test('materialization flushes first and publication needs capability', async () => {

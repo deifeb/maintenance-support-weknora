@@ -111,6 +111,9 @@ export function createScenarioDraftState(
   const serverDraft = ref<
     ScenarioDraftPayload | null
   >(null)
+  const serverEnvelope = ref<
+    ScenarioDraftEnvelope | null
+  >(null)
   const completion = ref<Record<string, boolean>>(
     {},
   )
@@ -125,6 +128,7 @@ export function createScenarioDraftState(
     ScenarioMaterializeResult | null
   >(null)
   let loadGeneration = 0
+  let conflictLoadGeneration = 0
 
   const autosave = shallowRef<
     AutosaveState<PendingDraftSave>
@@ -153,6 +157,17 @@ export function createScenarioDraftState(
     ]
     updatedAt.value = envelope.updated_at
     serverDraft.value = cloneDraft(envelope.draft)
+    serverEnvelope.value = {
+      ...envelope,
+      draft: cloneDraft(envelope.draft),
+      completion: { ...envelope.completion },
+      blocking_fields: [
+        ...envelope.blocking_fields,
+      ],
+      permissions: [
+        ...(envelope.permissions ?? []),
+      ],
+    }
     if (applyOptions.replaceLocal) {
       draft.value = cloneDraft(envelope.draft)
     }
@@ -163,6 +178,10 @@ export function createScenarioDraftState(
       delayMs: options.autosaveDelayMs ?? 800,
       timers: options.timers,
       onStateChange(nextState) {
+        const enteringConflict = (
+          nextState.status === 'conflict'
+          && autosave.value.status !== 'conflict'
+        )
         autosave.value = nextState
         if (nextState.error !== undefined) {
           error.value = normalizeMaintenanceError(
@@ -173,6 +192,9 @@ export function createScenarioDraftState(
           || nextState.status === 'idle'
         ) {
           error.value = null
+        }
+        if (enteringConflict) {
+          void refreshConflictServerDraft()
         }
       },
       async save(value) {
@@ -227,6 +249,7 @@ export function createScenarioDraftState(
   ): Promise<void> {
     const generation = ++loadGeneration
     autosaveController.reset()
+    conflictLoadGeneration += 1
     loading.value = true
     error.value = null
     materialized.value = null
@@ -264,6 +287,7 @@ export function createScenarioDraftState(
   ): Promise<number> {
     const generation = ++loadGeneration
     autosaveController.reset()
+    conflictLoadGeneration += 1
     loading.value = true
     error.value = null
     try {
@@ -340,10 +364,53 @@ export function createScenarioDraftState(
     await load(sessionId.value)
   }
 
+  async function refreshConflictServerDraft(
+  ): Promise<void> {
+    const targetSessionId = sessionId.value
+    if (targetSessionId === null) return
+    const generation = ++conflictLoadGeneration
+    try {
+      const response = await api.getDraft(
+        targetSessionId,
+      )
+      if (
+        generation !== conflictLoadGeneration
+        || sessionId.value !== targetSessionId
+        || autosave.value.status !== 'conflict'
+        || response.data.session_id
+        !== targetSessionId
+      ) {
+        return
+      }
+      serverDraft.value = cloneDraft(
+        response.data.draft,
+      )
+      serverEnvelope.value = {
+        ...response.data,
+        draft: cloneDraft(response.data.draft),
+        completion: {
+          ...response.data.completion,
+        },
+        blocking_fields: [
+          ...response.data.blocking_fields,
+        ],
+        permissions: [
+          ...(response.data.permissions ?? []),
+        ],
+      }
+    } catch {
+      // The conflict itself remains actionable even when
+      // the comparison copy cannot be refreshed.
+    }
+  }
+
   function discardLocalChanges(): void {
-    if (serverDraft.value === null) return
+    if (serverEnvelope.value === null) return
     autosaveController.reset()
-    draft.value = cloneDraft(serverDraft.value)
+    applyEnvelope(
+      serverEnvelope.value,
+      { replaceLocal: true },
+    )
     error.value = null
   }
 
@@ -380,18 +447,23 @@ export function createScenarioDraftState(
       throw new Error('Scenario draft is not loaded')
     }
     const targetSession = sessionId.value
-    const response = await api.materialize(
-      targetSession,
-      version.value,
-      idempotencyKey,
-    )
-    if (sessionId.value !== targetSession) {
-      throw new Error(
-        'Scenario draft changed during materialization',
+    try {
+      const response = await api.materialize(
+        targetSession,
+        version.value,
+        idempotencyKey,
       )
+      if (sessionId.value !== targetSession) {
+        throw new Error(
+          'Scenario draft changed during materialization',
+        )
+      }
+      materialized.value = response.data
+      return response.data
+    } catch (value) {
+      error.value = normalizeMaintenanceError(value)
+      throw value
     }
-    materialized.value = response.data
-    return response.data
   }
 
   const canPublish = computed(() => (
@@ -422,7 +494,14 @@ export function createScenarioDraftState(
 
   function dispose(): void {
     loadGeneration += 1
+    conflictLoadGeneration += 1
     autosaveController.dispose()
+  }
+
+  function deactivate(): void {
+    loadGeneration += 1
+    conflictLoadGeneration += 1
+    autosaveController.reset()
   }
 
   return {
@@ -430,6 +509,7 @@ export function createScenarioDraftState(
     version,
     origin,
     draft,
+    serverDraft,
     completion,
     blockingFields,
     permissions,
@@ -452,6 +532,7 @@ export function createScenarioDraftState(
     discardLocalChanges,
     materialize,
     publishVersion,
+    deactivate,
     dispose,
   }
 }
