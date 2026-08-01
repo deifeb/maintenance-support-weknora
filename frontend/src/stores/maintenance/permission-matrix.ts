@@ -13,6 +13,8 @@ export interface MaintenancePermissions {
   adjustInventory: boolean
   confirmHighRisk: boolean
   publishRules: boolean
+  editDemandList: boolean
+  publishDemandList: boolean
 }
 
 export type MaintenanceAction = keyof MaintenancePermissions
@@ -30,6 +32,8 @@ const DENIED_PERMISSIONS: Readonly<MaintenancePermissions> = {
   adjustInventory: false,
   confirmHighRisk: false,
   publishRules: false,
+  editDemandList: false,
+  publishDemandList: false,
 }
 
 const VIEWER_PERMISSIONS: Readonly<MaintenancePermissions> = {
@@ -46,6 +50,7 @@ const CONTRIBUTOR_PERMISSIONS: Readonly<MaintenancePermissions> = {
   handleReview: true,
   reserveInventory: true,
   issueReturnInventory: true,
+  editDemandList: true,
 }
 
 const ADMIN_PERMISSIONS: Readonly<MaintenancePermissions> = {
@@ -54,6 +59,7 @@ const ADMIN_PERMISSIONS: Readonly<MaintenancePermissions> = {
   adjustInventory: true,
   confirmHighRisk: true,
   publishRules: true,
+  publishDemandList: true,
 }
 
 export function isTenantRole(value: unknown): value is TenantRole {
@@ -102,5 +108,10 @@ export function permissionsForAuth(
     adjustInventory: rolePermissions.adjustInventory && canAdminister,
     confirmHighRisk: rolePermissions.confirmHighRisk && canAdminister,
     publishRules: rolePermissions.publishRules && canAdminister,
+    editDemandList: rolePermissions.editDemandList && canMaintain,
+    publishDemandList: (
+      rolePermissions.publishDemandList
+      && canAdminister
+    ),
   }
 }

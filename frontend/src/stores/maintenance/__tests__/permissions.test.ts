@@ -20,6 +20,8 @@ const denied: MaintenancePermissions = {
   adjustInventory: false,
   confirmHighRisk: false,
   publishRules: false,
+  editDemandList: false,
+  publishDemandList: false,
 }
 
 const viewer: MaintenancePermissions = {
@@ -36,6 +38,7 @@ const contributor: MaintenancePermissions = {
   handleReview: true,
   reserveInventory: true,
   issueReturnInventory: true,
+  editDemandList: true,
 }
 
 const admin: MaintenancePermissions = {
@@ -44,6 +47,7 @@ const admin: MaintenancePermissions = {
   adjustInventory: true,
   confirmHighRisk: true,
   publishRules: true,
+  publishDemandList: true,
 }
 
 test('viewer is read only', () => {
@@ -79,5 +83,19 @@ test('auth hierarchy can reduce a recognized role to read only', () => {
   assert.deepEqual(
     permissionsForAuth('contributor', viewerOnly),
     viewer,
+  )
+})
+
+test('auth hierarchy removes demand-list admin authority', () => {
+  const contributorOnly = (
+    minimum: TenantRole,
+  ): boolean => (
+    minimum === 'viewer'
+    || minimum === 'contributor'
+  )
+
+  assert.deepEqual(
+    permissionsForAuth('admin', contributorOnly),
+    contributor,
   )
 })
