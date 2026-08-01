@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
 from math import ceil
@@ -28,7 +28,11 @@ from app.models.calculation_group import (
     CalculationGroupChild,
     CalculationItemDecision,
 )
-from app.models.demand_list import DemandListEvent
+from app.models.demand_list import (
+    DemandList,
+    DemandListEvent,
+    DemandListItem,
+)
 from app.models.enums import (
     CalculationStatus,
     DemandListEventType,
@@ -143,6 +147,319 @@ class DemandListService:
             )
 
     @staticmethod
+    def _require_admin(
+        actor: ActorContext,
+    ) -> None:
+        if actor.role is not MaintenanceRole.ADMIN:
+            raise InsufficientMaintenanceRoleError(
+                required_role=(
+                    MaintenanceRole.ADMIN.value
+                ),
+                actual_role=actor.role.value,
+                request_id=actor.request_id,
+            )
+
+    def _recover_lifecycle_receipt(
+        self,
+        session: Session,
+        actor: ActorContext,
+        idempotency_key: str,
+        request_hash: str,
+        expected_event_type: DemandListEventType,
+        original_error: IntegrityError,
+    ) -> DemandListRead:
+        session.rollback()
+        winner = (
+            self.repository
+            .get_event_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                idempotency_key,
+            )
+        )
+        if winner is None:
+            raise original_error
+        if (
+            expected_event_type
+            is DemandListEventType.CREATED
+        ):
+            return self._idempotent_response(
+                winner,
+                request_hash,
+            )
+        return self._idempotent_read_model(
+            winner,
+            request_hash,
+            expected_event_type=expected_event_type,
+        )
+
+    def _copy_item_to_derived(
+        self,
+        session: Session,
+        actor: ActorContext,
+        source_item: Any,
+        derived_demand_list_id: int,
+    ) -> Any:
+        return self.repository.add_item(
+            session,
+            actor.tenant_id,
+            demand_list_id=derived_demand_list_id,
+            spare_part_id=source_item.spare_part_id,
+            original_quantity=(
+                source_item.original_quantity
+            ),
+            final_quantity=source_item.final_quantity,
+            source_snapshot=deepcopy(
+                source_item.source_snapshot_json
+            ),
+            spare_part_code_snapshot=(
+                source_item.spare_part_code_snapshot
+            ),
+            spare_part_name_snapshot=(
+                source_item.spare_part_name_snapshot
+            ),
+            spare_part_unit_snapshot=(
+                source_item.spare_part_unit_snapshot
+            ),
+            criticality_level_snapshot=(
+                source_item.criticality_level_snapshot
+            ),
+            source_calculation_group_id=(
+                source_item.source_calculation_group_id
+            ),
+            source_group_child_id=(
+                source_item.source_group_child_id
+            ),
+            source_calculation_id=(
+                source_item.source_calculation_id
+            ),
+            source_calculation_run_id=(
+                source_item.source_calculation_run_id
+            ),
+            source_result_id=(
+                source_item.source_result_id
+            ),
+            reliability_model=(
+                source_item.reliability_model
+            ),
+            execution_mode=source_item.execution_mode,
+            decision_type=source_item.decision_type,
+            decision_reason=source_item.decision_reason,
+            decision_risk=source_item.decision_risk,
+            requires_admin_confirmation=(
+                source_item.requires_admin_confirmation
+            ),
+            confirmed_by_admin=(
+                source_item.confirmed_by_admin
+            ),
+            risk_rule_version=(
+                source_item.risk_rule_version
+            ),
+            decision_snapshot_json=deepcopy(
+                source_item.decision_snapshot_json
+            ),
+            interval_snapshot_json=deepcopy(
+                source_item.interval_snapshot_json
+            ),
+            parameter_snapshot_json=deepcopy(
+                source_item.parameter_snapshot_json
+            ),
+            warning_snapshot_json=deepcopy(
+                source_item.warning_snapshot_json
+            ),
+            inventory_snapshot_json=deepcopy(
+                source_item.inventory_snapshot_json
+            ),
+        )
+
+    @staticmethod
+    def _normalize_confirmation_note(
+        confirmation_note: str,
+    ) -> str:
+        note = confirmation_note.strip()
+        if not note:
+            raise BusinessValidationError(
+                "confirmation note is required",
+                code=(
+                    "DEMAND_LIST_CONFIRMATION_NOTE_REQUIRED"
+                ),
+            )
+        if len(note) > 1000:
+            raise BusinessValidationError(
+                "confirmation note is invalid",
+                code=(
+                    "DEMAND_LIST_CONFIRMATION_NOTE_INVALID"
+                ),
+            )
+        return note
+
+    @staticmethod
+    def _normalize_idempotency_key(
+        idempotency_key: str,
+    ) -> str:
+        clean_key = idempotency_key.strip()
+        if not clean_key:
+            raise BusinessValidationError(
+                "idempotency key is required",
+                code="IDEMPOTENCY_KEY_REQUIRED",
+            )
+        if len(clean_key) > 128:
+            raise BusinessValidationError(
+                "idempotency key is invalid",
+                code="INVALID_IDEMPOTENCY_KEY",
+            )
+        return clean_key
+
+    @staticmethod
+    def _require_expected_version(
+        expected_version: int,
+    ) -> None:
+        if expected_version < 1:
+            raise BusinessValidationError(
+                "expected version is invalid",
+                code="DEMAND_LIST_VERSION_INVALID",
+            )
+
+    @staticmethod
+    def _require_version(
+        demand_list: DemandList,
+        expected_version: int,
+    ) -> None:
+        if demand_list.version != expected_version:
+            raise ConflictError(
+                "demand list version conflict",
+                code="DEMAND_LIST_VERSION_CONFLICT",
+                details={
+                    "expected_version": expected_version,
+                    "actual_version": demand_list.version,
+                    "conflict_object": "demand_list",
+                    "retryable": False,
+                },
+            )
+
+    @staticmethod
+    def _require_status(
+        demand_list: DemandList,
+        *,
+        action: str,
+        expected_status: DemandListStatus,
+    ) -> None:
+        if demand_list.status is not expected_status:
+            raise ConflictError(
+                "invalid demand list transition",
+                code="DEMAND_LIST_INVALID_TRANSITION",
+                details={
+                    "action": action,
+                    "expected_status": (
+                        expected_status.value
+                    ),
+                    "actual_status": (
+                        demand_list.status.value
+                    ),
+                    "conflict_object": "demand_list",
+                    "retryable": False,
+                },
+            )
+
+    @staticmethod
+    def _lifecycle_request_hash(
+        *,
+        action: str,
+        demand_list_id: int,
+        expected_version: int,
+        confirmation_note: str | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "action": action,
+            "demand_list_id": demand_list_id,
+            "expected_version": expected_version,
+        }
+        if confirmation_note is not None:
+            payload["confirmation_note"] = (
+                confirmation_note
+            )
+        return snapshot_service.canonical_hash(payload)
+
+    def _load_locked_list(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+    ) -> DemandList:
+        demand_list = self.repository.get_for_update(
+            session,
+            actor.tenant_id,
+            demand_list_id,
+        )
+        if demand_list is None:
+            raise NotFoundError(
+                "demand_list",
+                demand_list_id,
+            )
+        return demand_list
+
+    def _items(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+    ) -> list[DemandListItem]:
+        return self.item_repository.list_for_demand_list(
+            session,
+            actor.tenant_id,
+            demand_list_id,
+        )
+
+    @staticmethod
+    def _item_counts(
+        items: list[DemandListItem],
+    ) -> dict[str, int]:
+        return {
+            "item_count": len(items),
+            "high_risk_item_count": sum(
+                1
+                for item in items
+                if (item.decision_risk or "").upper()
+                == "HIGH"
+            ),
+            "requires_admin_confirmation_count": sum(
+                1
+                for item in items
+                if item.requires_admin_confirmation
+            ),
+            "unconfirmed_item_count": sum(
+                1
+                for item in items
+                if item.requires_admin_confirmation
+                and not item.confirmed_by_admin
+            ),
+        }
+
+    def _response_with_event_snapshot(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        event: DemandListEvent,
+    ) -> DemandListRead:
+        loaded = self.repository.get(
+            session,
+            actor.tenant_id,
+            demand_list_id,
+        )
+        if loaded is None:
+            raise NotFoundError(
+                "demand_list",
+                demand_list_id,
+            )
+        response = self._read_model(loaded)
+        event.response_snapshot_json = (
+            response.model_dump(mode="json")
+        )
+        session.flush()
+        return response
+
+    @staticmethod
     def _request_hash(
         *,
         calculation_group_id: int,
@@ -160,17 +477,20 @@ class DemandListService:
         )
 
     @staticmethod
-    def _idempotent_response(
+    def _idempotent_read_model(
         receipt: DemandListEvent,
         request_hash: str,
+        *,
+        expected_event_type: DemandListEventType,
     ) -> DemandListRead:
-        if (
-            receipt.event_type
-            is not DemandListEventType.CREATED
-        ):
+        if receipt.event_type is not expected_event_type:
             raise ConflictError(
                 "idempotent response is unavailable",
                 code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={
+                    "conflict_object": "demand_list",
+                    "retryable": False,
+                },
             )
         if receipt.request_hash != request_hash:
             raise ConflictError(
@@ -185,6 +505,10 @@ class DemandListService:
             raise ConflictError(
                 "idempotent response is unavailable",
                 code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={
+                    "conflict_object": "demand_list",
+                    "retryable": False,
+                },
             )
         try:
             return (
@@ -197,7 +521,25 @@ class DemandListService:
             raise ConflictError(
                 "idempotent response is unavailable",
                 code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={
+                    "conflict_object": "demand_list",
+                    "retryable": False,
+                },
             ) from exc
+
+    @classmethod
+    def _idempotent_response(
+        cls,
+        receipt: DemandListEvent,
+        request_hash: str,
+    ) -> DemandListRead:
+        return cls._idempotent_read_model(
+            receipt,
+            request_hash,
+            expected_event_type=(
+                DemandListEventType.CREATED
+            ),
+        )
 
     @staticmethod
     def _successful_children(
@@ -761,6 +1103,22 @@ class DemandListService:
                 )
             if (
                 demand_list.status
+                is DemandListStatus.PUBLISHED
+            ):
+                raise ConflictError(
+                    "published demand list is immutable",
+                    code=(
+                        "PUBLISHED_DEMAND_LIST_IMMUTABLE"
+                    ),
+                    details={
+                        "conflict_object": (
+                            "demand_list"
+                        ),
+                        "retryable": False,
+                    },
+                )
+            if (
+                demand_list.status
                 is not DemandListStatus.DRAFT
             ):
                 raise ConflictError(
@@ -874,6 +1232,848 @@ class DemandListService:
             demand_list_id,
         )
 
+    def void(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        *,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> DemandListRead:
+        self._require_admin(actor)
+        self._require_expected_version(
+            expected_version
+        )
+        clean_key = self._normalize_idempotency_key(
+            idempotency_key
+        )
+        request_hash = self._lifecycle_request_hash(
+            action="void",
+            demand_list_id=demand_list_id,
+            expected_version=expected_version,
+        )
+        existing = (
+            self.repository
+            .get_event_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                clean_key,
+            )
+        )
+        if existing is not None:
+            return self._idempotent_read_model(
+                existing,
+                request_hash,
+                expected_event_type=(
+                    DemandListEventType.VOIDED
+                ),
+            )
+
+        try:
+            demand_list = self._load_locked_list(
+                session,
+                actor,
+                demand_list_id,
+            )
+            self._require_version(
+                demand_list,
+                expected_version,
+            )
+            self._require_status(
+                demand_list,
+                action="void",
+                expected_status=(
+                    DemandListStatus.PUBLISHED
+                ),
+            )
+            before = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "version": demand_list.version,
+            }
+
+            now = datetime.now(UTC)
+            demand_list.status = (
+                DemandListStatus.VOIDED
+            )
+            demand_list.is_current = False
+            demand_list.voided_by_user_id = (
+                actor.user_id
+            )
+            demand_list.voided_by_request_id = (
+                actor.request_id
+            )
+            demand_list.voided_at = now
+            demand_list.version += 1
+            session.flush()
+
+            after = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "version": demand_list.version,
+            }
+            event = self.repository.append_event(
+                session,
+                actor.tenant_id,
+                demand_list_id=demand_list.id,
+                event_type=(
+                    DemandListEventType.VOIDED
+                ),
+                actor_user_id=actor.user_id,
+                actor_roles=[actor.role.value],
+                request_id=actor.request_id,
+                idempotency_key=clean_key,
+                request_hash=request_hash,
+                before_summary=before,
+                after_summary=after,
+                response_snapshot={
+                    "id": demand_list.id,
+                },
+            )
+            response = (
+                self._response_with_event_snapshot(
+                    session,
+                    actor,
+                    demand_list.id,
+                    event,
+                )
+            )
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            return self._recover_lifecycle_receipt(
+                session,
+                actor,
+                clean_key,
+                request_hash,
+                DemandListEventType.VOIDED,
+                exc,
+            )
+        except Exception:
+            session.rollback()
+            raise
+
+    def derive(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        *,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> DemandListRead:
+        self._require_admin(actor)
+        self._require_expected_version(
+            expected_version
+        )
+        clean_key = self._normalize_idempotency_key(
+            idempotency_key
+        )
+        request_hash = self._lifecycle_request_hash(
+            action="derive",
+            demand_list_id=demand_list_id,
+            expected_version=expected_version,
+        )
+        existing = (
+            self.repository
+            .get_event_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                clean_key,
+            )
+        )
+        if existing is not None:
+            return self._idempotent_read_model(
+                existing,
+                request_hash,
+                expected_event_type=(
+                    DemandListEventType.DERIVED
+                ),
+            )
+
+        try:
+            source = self._load_locked_list(
+                session,
+                actor,
+                demand_list_id,
+            )
+            self._require_version(
+                source,
+                expected_version,
+            )
+            self._require_status(
+                source,
+                action="derive",
+                expected_status=(
+                    DemandListStatus.PUBLISHED
+                ),
+            )
+            source_items = self._items(
+                session,
+                actor,
+                source.id,
+            )
+
+            derived = self.repository.create_version(
+                session,
+                actor.tenant_id,
+                {
+                    "name": source.name,
+                    "description": source.description,
+                    "lineage_id": source.lineage_id,
+                    "derived_from_id": source.id,
+                    "scenario_version_id": (
+                        source.scenario_version_id
+                    ),
+                    "calculation_group_id": (
+                        source.calculation_group_id
+                    ),
+                    "status": DemandListStatus.DRAFT,
+                    "is_current": False,
+                    "created_by_user_id": (
+                        actor.user_id
+                    ),
+                    "created_by_request_id": (
+                        actor.request_id
+                    ),
+                },
+            )
+            session.flush()
+
+            for source_item in source_items:
+                self._copy_item_to_derived(
+                    session,
+                    actor,
+                    source_item,
+                    derived.id,
+                )
+
+            before = {
+                "source_demand_list_id": source.id,
+                "lineage_id": source.lineage_id,
+                "source_version_number": (
+                    source.version_number
+                ),
+                "source_status": source.status.value,
+                "source_is_current": source.is_current,
+                "source_version": source.version,
+            }
+            after = {
+                "derived_from_id": source.id,
+                "lineage_id": source.lineage_id,
+                "source_version_number": (
+                    source.version_number
+                ),
+                "new_version_number": (
+                    derived.version_number
+                ),
+                "copied_item_count": len(
+                    source_items
+                ),
+                "status": derived.status.value,
+                "version": derived.version,
+            }
+            event = self.repository.append_event(
+                session,
+                actor.tenant_id,
+                demand_list_id=derived.id,
+                event_type=DemandListEventType.DERIVED,
+                actor_user_id=actor.user_id,
+                actor_roles=[actor.role.value],
+                request_id=actor.request_id,
+                idempotency_key=clean_key,
+                request_hash=request_hash,
+                before_summary=before,
+                after_summary=after,
+                response_snapshot={
+                    "id": derived.id,
+                },
+            )
+            response = (
+                self._response_with_event_snapshot(
+                    session,
+                    actor,
+                    derived.id,
+                    event,
+                )
+            )
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            return self._recover_lifecycle_receipt(
+                session,
+                actor,
+                clean_key,
+                request_hash,
+                DemandListEventType.DERIVED,
+                exc,
+            )
+        except Exception:
+            session.rollback()
+            raise
+
+    def publish(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        *,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> DemandListRead:
+        self._require_admin(actor)
+        self._require_expected_version(
+            expected_version
+        )
+        clean_key = self._normalize_idempotency_key(
+            idempotency_key
+        )
+        request_hash = self._lifecycle_request_hash(
+            action="publish",
+            demand_list_id=demand_list_id,
+            expected_version=expected_version,
+        )
+        existing = (
+            self.repository
+            .get_event_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                clean_key,
+            )
+        )
+        if existing is not None:
+            return self._idempotent_read_model(
+                existing,
+                request_hash,
+                expected_event_type=(
+                    DemandListEventType.PUBLISHED
+                ),
+            )
+
+        try:
+            demand_list = self._load_locked_list(
+                session,
+                actor,
+                demand_list_id,
+            )
+            self._require_version(
+                demand_list,
+                expected_version,
+            )
+            self._require_status(
+                demand_list,
+                action="publish",
+                expected_status=(
+                    DemandListStatus.CONFIRMED
+                ),
+            )
+            items = self._items(
+                session,
+                actor,
+                demand_list.id,
+            )
+            if not items:
+                raise ConflictError(
+                    "demand list is empty",
+                    code="DEMAND_LIST_EMPTY",
+                    details={
+                        "conflict_object": (
+                            "demand_list"
+                        ),
+                        "retryable": False,
+                    },
+                )
+
+            unconfirmed_item_ids = sorted(
+                item.id
+                for item in items
+                if item.requires_admin_confirmation
+                and not item.confirmed_by_admin
+            )
+            if unconfirmed_item_ids:
+                raise ConflictError(
+                    "admin confirmation is required",
+                    code=(
+                        "DEMAND_LIST_ADMIN_CONFIRMATION_REQUIRED"
+                    ),
+                    details={
+                        "unconfirmed_item_ids": (
+                            unconfirmed_item_ids
+                        ),
+                        "conflict_object": (
+                            "demand_list"
+                        ),
+                        "retryable": False,
+                    },
+                )
+
+            previous_current = (
+                self.repository
+                .current_published_for_update(
+                    session,
+                    actor.tenant_id,
+                    demand_list.lineage_id,
+                )
+            )
+            previous_summary = (
+                {
+                    "id": previous_current.id,
+                    "version_number": (
+                        previous_current.version_number
+                    ),
+                    "version": previous_current.version,
+                }
+                if previous_current is not None
+                else None
+            )
+            before = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "version": demand_list.version,
+                "previous_current": previous_summary,
+            }
+
+            now = datetime.now(UTC)
+            superseded_demand_list_id = None
+            if previous_current is not None:
+                superseded_demand_list_id = (
+                    previous_current.id
+                )
+                previous_current.is_current = False
+                previous_current.superseded_by_id = (
+                    demand_list.id
+                )
+                previous_current.superseded_at = now
+                previous_current.version += 1
+                session.flush()
+
+            demand_list.status = (
+                DemandListStatus.PUBLISHED
+            )
+            demand_list.is_current = True
+            demand_list.published_by_user_id = (
+                actor.user_id
+            )
+            demand_list.published_by_request_id = (
+                actor.request_id
+            )
+            demand_list.published_at = now
+            demand_list.version += 1
+            session.flush()
+
+            after = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "item_count": len(items),
+                "superseded_demand_list_id": (
+                    superseded_demand_list_id
+                ),
+                "version": demand_list.version,
+            }
+            event = self.repository.append_event(
+                session,
+                actor.tenant_id,
+                demand_list_id=demand_list.id,
+                event_type=(
+                    DemandListEventType.PUBLISHED
+                ),
+                actor_user_id=actor.user_id,
+                actor_roles=[actor.role.value],
+                request_id=actor.request_id,
+                idempotency_key=clean_key,
+                request_hash=request_hash,
+                before_summary=before,
+                after_summary=after,
+                response_snapshot={
+                    "id": demand_list.id,
+                },
+            )
+            response = (
+                self._response_with_event_snapshot(
+                    session,
+                    actor,
+                    demand_list.id,
+                    event,
+                )
+            )
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            return self._recover_lifecycle_receipt(
+                session,
+                actor,
+                clean_key,
+                request_hash,
+                DemandListEventType.PUBLISHED,
+                exc,
+            )
+        except Exception:
+            session.rollback()
+            raise
+
+    def confirm(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        *,
+        expected_version: int,
+        confirmation_note: str,
+        idempotency_key: str,
+    ) -> DemandListRead:
+        self._require_admin(actor)
+        self._require_expected_version(
+            expected_version
+        )
+        note = self._normalize_confirmation_note(
+            confirmation_note
+        )
+        clean_key = self._normalize_idempotency_key(
+            idempotency_key
+        )
+        request_hash = self._lifecycle_request_hash(
+            action="confirm",
+            demand_list_id=demand_list_id,
+            expected_version=expected_version,
+            confirmation_note=note,
+        )
+        existing = (
+            self.repository
+            .get_event_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                clean_key,
+            )
+        )
+        if existing is not None:
+            return self._idempotent_read_model(
+                existing,
+                request_hash,
+                expected_event_type=(
+                    DemandListEventType.CONFIRMED
+                ),
+            )
+
+        try:
+            demand_list = self._load_locked_list(
+                session,
+                actor,
+                demand_list_id,
+            )
+            self._require_version(
+                demand_list,
+                expected_version,
+            )
+            self._require_status(
+                demand_list,
+                action="confirm",
+                expected_status=(
+                    DemandListStatus
+                    .PENDING_CONFIRMATION
+                ),
+            )
+            items = self._items(
+                session,
+                actor,
+                demand_list.id,
+            )
+            confirmed_item_ids = sorted(
+                item.id
+                for item in items
+                if item.requires_admin_confirmation
+            )
+            unconfirmed_item_ids_before = sorted(
+                item.id
+                for item in items
+                if item.requires_admin_confirmation
+                and not item.confirmed_by_admin
+            )
+            before = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "unconfirmed_item_ids": (
+                    unconfirmed_item_ids_before
+                ),
+                "version": demand_list.version,
+            }
+
+            for item in items:
+                if (
+                    item.requires_admin_confirmation
+                    and not item.confirmed_by_admin
+                ):
+                    item.confirmed_by_admin = True
+                    item.version += 1
+
+            now = datetime.now(UTC)
+            demand_list.status = (
+                DemandListStatus.CONFIRMED
+            )
+            demand_list.confirmed_by_user_id = (
+                actor.user_id
+            )
+            demand_list.confirmed_by_request_id = (
+                actor.request_id
+            )
+            demand_list.confirmed_at = now
+            demand_list.version += 1
+            session.flush()
+
+            after = {
+                "confirmation_note": note,
+                "confirmed_item_ids": (
+                    confirmed_item_ids
+                ),
+                "confirmed_item_count": len(
+                    confirmed_item_ids
+                ),
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "version": demand_list.version,
+            }
+            event = self.repository.append_event(
+                session,
+                actor.tenant_id,
+                demand_list_id=demand_list.id,
+                event_type=(
+                    DemandListEventType.CONFIRMED
+                ),
+                actor_user_id=actor.user_id,
+                actor_roles=[actor.role.value],
+                request_id=actor.request_id,
+                idempotency_key=clean_key,
+                request_hash=request_hash,
+                before_summary=before,
+                after_summary=after,
+                response_snapshot={
+                    "id": demand_list.id,
+                },
+            )
+            response = (
+                self._response_with_event_snapshot(
+                    session,
+                    actor,
+                    demand_list.id,
+                    event,
+                )
+            )
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            return self._recover_lifecycle_receipt(
+                session,
+                actor,
+                clean_key,
+                request_hash,
+                DemandListEventType.CONFIRMED,
+                exc,
+            )
+        except Exception:
+            session.rollback()
+            raise
+
+    def submit(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        *,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> DemandListRead:
+        self._require_contributor(actor)
+        self._require_expected_version(
+            expected_version
+        )
+        clean_key = self._normalize_idempotency_key(
+            idempotency_key
+        )
+        request_hash = self._lifecycle_request_hash(
+            action="submit",
+            demand_list_id=demand_list_id,
+            expected_version=expected_version,
+        )
+        existing = (
+            self.repository
+            .get_event_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                clean_key,
+            )
+        )
+        if existing is not None:
+            return self._idempotent_read_model(
+                existing,
+                request_hash,
+                expected_event_type=(
+                    DemandListEventType.SUBMITTED
+                ),
+            )
+
+        try:
+            demand_list = self._load_locked_list(
+                session,
+                actor,
+                demand_list_id,
+            )
+            self._require_version(
+                demand_list,
+                expected_version,
+            )
+            self._require_status(
+                demand_list,
+                action="submit",
+                expected_status=DemandListStatus.DRAFT,
+            )
+            items = self._items(
+                session,
+                actor,
+                demand_list.id,
+            )
+            if not items:
+                raise ConflictError(
+                    "demand list is empty",
+                    code="DEMAND_LIST_EMPTY",
+                    details={
+                        "conflict_object": (
+                            "demand_list"
+                        ),
+                        "retryable": False,
+                    },
+                )
+
+            before = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                "version": demand_list.version,
+            }
+            now = datetime.now(UTC)
+            demand_list.status = (
+                DemandListStatus
+                .PENDING_CONFIRMATION
+            )
+            demand_list.submitted_by_user_id = (
+                actor.user_id
+            )
+            demand_list.submitted_by_request_id = (
+                actor.request_id
+            )
+            demand_list.submitted_at = now
+            demand_list.version += 1
+            session.flush()
+
+            after = {
+                "lineage_id": (
+                    demand_list.lineage_id
+                ),
+                "version_number": (
+                    demand_list.version_number
+                ),
+                "status": demand_list.status.value,
+                "is_current": (
+                    demand_list.is_current
+                ),
+                **self._item_counts(items),
+                "version": demand_list.version,
+            }
+            event = self.repository.append_event(
+                session,
+                actor.tenant_id,
+                demand_list_id=demand_list.id,
+                event_type=(
+                    DemandListEventType.SUBMITTED
+                ),
+                actor_user_id=actor.user_id,
+                actor_roles=[actor.role.value],
+                request_id=actor.request_id,
+                idempotency_key=clean_key,
+                request_hash=request_hash,
+                before_summary=before,
+                after_summary=after,
+                response_snapshot={
+                    "id": demand_list.id,
+                },
+            )
+            response = (
+                self._response_with_event_snapshot(
+                    session,
+                    actor,
+                    demand_list.id,
+                    event,
+                )
+            )
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            return self._recover_lifecycle_receipt(
+                session,
+                actor,
+                clean_key,
+                request_hash,
+                DemandListEventType.SUBMITTED,
+                exc,
+            )
+        except Exception:
+            session.rollback()
+            raise
+
     def create_from_group(
         self,
         session: Session,
@@ -892,17 +2092,9 @@ class DemandListService:
             name=name,
             description=description,
         )
-        clean_key = idempotency_key.strip()
-        if not clean_key:
-            raise BusinessValidationError(
-                "idempotency key is required",
-                code="IDEMPOTENCY_KEY_REQUIRED",
-            )
-        if len(clean_key) > 128:
-            raise BusinessValidationError(
-                "idempotency key is invalid",
-                code="INVALID_IDEMPOTENCY_KEY",
-            )
+        clean_key = self._normalize_idempotency_key(
+            idempotency_key
+        )
         request_hash = self._request_hash(
             calculation_group_id=(
                 payload.calculation_group_id
@@ -1313,21 +2505,14 @@ class DemandListService:
             session.flush()
             session.commit()
             return response
-        except IntegrityError:
-            session.rollback()
-            winner = (
-                self.repository
-                .get_event_by_idempotency_key(
-                    session,
-                    actor.tenant_id,
-                    clean_key,
-                )
-            )
-            if winner is None:
-                raise
-            return self._idempotent_response(
-                winner,
+        except IntegrityError as exc:
+            return self._recover_lifecycle_receipt(
+                session,
+                actor,
+                clean_key,
                 request_hash,
+                DemandListEventType.CREATED,
+                exc,
             )
         except Exception:
             session.rollback()

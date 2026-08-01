@@ -79,6 +79,36 @@ class DemandListItemUpdateRequest(BaseModel):
         return value.strip() if isinstance(value, str) else value
 
 
+class DemandListTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+
+
+class DemandListConfirmRequest(
+    DemandListTransitionRequest
+):
+    confirmation_note: str = Field(
+        min_length=1,
+        max_length=1000,
+    )
+
+    @field_validator(
+        "confirmation_note",
+        mode="before",
+    )
+    @classmethod
+    def strip_confirmation_note(
+        cls,
+        value: object,
+    ) -> object:
+        return (
+            value.strip()
+            if isinstance(value, str)
+            else value
+        )
+
+
 class DemandListItemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
