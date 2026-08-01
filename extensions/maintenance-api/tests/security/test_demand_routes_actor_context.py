@@ -71,6 +71,17 @@ _ROUTE_FUNCTIONS = {
         "set_active",
         "delete_profile",
     },
+    "demand_lists.py": {
+        "create_demand_list",
+        "list_demand_lists",
+        "get_demand_list",
+        "update_demand_list_item",
+        "submit_demand_list",
+        "confirm_demand_list",
+        "publish_demand_list",
+        "derive_demand_list",
+        "void_demand_list",
+    },
 }
 
 _SERVICE_NAMES = {
@@ -78,6 +89,7 @@ _SERVICE_NAMES = {
     "comparisons.py": "calculation_service",
     "calculations.py": "calculation_service",
     "repair_profiles.py": "repair_service",
+    "demand_lists.py": "demand_list_service",
 }
 
 _DIRECT_CALCULATION_QUERIES = {
@@ -529,6 +541,45 @@ def test_demand_success_responses_include_actor_metadata(
                     )
 
     assert failures == [], "\n".join(failures)
+
+_DEMAND_LIST_ROLES = {
+    "create_demand_list": "ContributorDep",
+    "list_demand_lists": "ViewerDep",
+    "get_demand_list": "ViewerDep",
+    "update_demand_list_item": "ContributorDep",
+    "submit_demand_list": "ContributorDep",
+    "confirm_demand_list": "AdminDep",
+    "publish_demand_list": "AdminDep",
+    "derive_demand_list": "AdminDep",
+    "void_demand_list": "AdminDep",
+}
+
+
+def test_demand_list_routes_use_exact_role_aliases(
+) -> None:
+    functions = _functions(_tree("demand_lists.py"))
+    failures: list[str] = []
+
+    for name, expected_alias in (
+        _DEMAND_LIST_ROLES.items()
+    ):
+        if name not in functions:
+            failures.append(
+                f"demand_lists.py:{name}: missing"
+            )
+            continue
+        actual_alias = _actor_annotation(
+            functions[name]
+        )
+        if actual_alias != expected_alias:
+            failures.append(
+                f"demand_lists.py:{name}: "
+                f"expected={expected_alias}, "
+                f"actual={actual_alias}"
+            )
+
+    assert failures == [], "\n".join(failures)
+
 
 _SCENARIO_COMPARISON_ROLES = {
     "scenarios.py": {

@@ -4,6 +4,7 @@ from app.api.v1.demand import (
     calculation_groups,
     calculations,
     comparisons,
+    demand_lists,
     model_recommendations,
     repair_profiles,
     scenario_drafts,
@@ -12,6 +13,7 @@ from app.api.v1.demand import (
 
 router = APIRouter(prefix="/demand")
 router.include_router(calculation_groups.router)
+router.include_router(demand_lists.router)
 router.include_router(model_recommendations.router)
 router.include_router(repair_profiles.router)
 router.include_router(scenario_drafts.router)
