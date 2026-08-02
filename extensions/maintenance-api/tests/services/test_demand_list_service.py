@@ -2264,22 +2264,126 @@ def test_task2g_event_uses_decimal_strings_and_preserves_origin(
     assert event.event_type.value == "ITEM_UPDATED"
     assert event.actor_user_id == actor_contributor.user_id
     assert event.request_id == actor_contributor.request_id
-    assert event.before_summary_json == {
-        "item_id": target.id,
-        "final_quantity": format(
-            target.final_quantity,
-            "f",
-        ),
-        "version": target.version,
+    expected_summary_keys = {
+        "item_id",
+        "original_quantity",
+        "final_quantity",
+        "decision_reason",
+        "decision_type",
+        "decision_risk",
+        "requires_admin_confirmation",
+        "confirmed_by_admin",
+        "risk_rule_version",
+        "version",
     }
-    assert event.after_summary_json == {
-        "item_id": target.id,
-        "final_quantity": "91.250000",
-        "version": target.version + 1,
-    }
+    assert set(event.before_summary_json) == (
+        expected_summary_keys
+    )
+    assert set(event.after_summary_json) == (
+        expected_summary_keys
+    )
+    assert event.before_summary_json[
+        "final_quantity"
+    ] == format(target.final_quantity, "f")
+    assert event.before_summary_json["version"] == (
+        target.version
+    )
+    assert event.after_summary_json[
+        "final_quantity"
+    ] == "91.250000"
+    assert event.after_summary_json[
+        "decision_reason"
+    ] == "Event evidence"
+    assert event.after_summary_json["version"] == (
+        target.version + 1
+    )
     assert updated_item.decision_snapshot_json == (
         original_decision_snapshot
     )
+
+
+def test_closure_item_update_preserves_complete_decision_history(
+    session,
+    actor_contributor,
+) -> None:
+    service, created = _task2g_create_draft(
+        session,
+        actor_contributor,
+        key="closure-item-audit",
+    )
+    target = created.items[0]
+    expected_keys = {
+        "item_id",
+        "original_quantity",
+        "final_quantity",
+        "decision_reason",
+        "decision_type",
+        "decision_risk",
+        "requires_admin_confirmation",
+        "confirmed_by_admin",
+        "risk_rule_version",
+        "version",
+    }
+
+    first = service.update_item(
+        session,
+        actor_contributor,
+        created.id,
+        target.id,
+        expected_version=created.version,
+        final_quantity=Decimal("9"),
+        adjustment_reason="First reviewed adjustment",
+    )
+    first_item = next(
+        item for item in first.items if item.id == target.id
+    )
+    second = service.update_item(
+        session,
+        actor_contributor,
+        first.id,
+        target.id,
+        expected_version=first.version,
+        final_quantity=Decimal("7"),
+        adjustment_reason="Second reviewed adjustment",
+    )
+    events = [
+        event
+        for event in second.events
+        if event.event_type.value == "ITEM_UPDATED"
+    ]
+
+    assert len(events) == 2
+    assert set(events[0].before_summary_json) == expected_keys
+    assert set(events[0].after_summary_json) == expected_keys
+    assert events[0].after_summary_json == (
+        events[1].before_summary_json
+    )
+    assert events[0].after_summary_json["decision_reason"] == (
+        "First reviewed adjustment"
+    )
+    assert events[1].after_summary_json["decision_reason"] == (
+        "Second reviewed adjustment"
+    )
+    assert events[1].after_summary_json["final_quantity"] == (
+        "7.000000"
+    )
+    assert events[0].after_summary_json["decision_type"] == (
+        first_item.decision_type.value
+        if first_item.decision_type is not None
+        else None
+    )
+    assert events[0].after_summary_json["decision_risk"] == (
+        first_item.decision_risk
+    )
+    assert events[0].after_summary_json[
+        "requires_admin_confirmation"
+    ] is first_item.requires_admin_confirmation
+    assert events[0].after_summary_json[
+        "confirmed_by_admin"
+    ] is first_item.confirmed_by_admin
+    assert events[0].after_summary_json[
+        "risk_rule_version"
+    ] == first_item.risk_rule_version
 
 
 def test_task2g_stale_list_version_has_contract_details(

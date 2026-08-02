@@ -435,6 +435,35 @@ class DemandListService:
             ),
         }
 
+    @staticmethod
+    def _item_decision_summary(
+        item: DemandListItem,
+    ) -> dict[str, Any]:
+        return {
+            "item_id": item.id,
+            "original_quantity": _decimal_string(
+                item.original_quantity
+            ),
+            "final_quantity": _decimal_string(
+                item.final_quantity
+            ),
+            "decision_reason": item.decision_reason,
+            "decision_type": _enum_value(
+                item.decision_type
+            ),
+            "decision_risk": item.decision_risk,
+            "requires_admin_confirmation": (
+                item.requires_admin_confirmation
+            ),
+            "confirmed_by_admin": (
+                item.confirmed_by_admin
+            ),
+            "risk_rule_version": (
+                item.risk_rule_version
+            ),
+            "version": item.version,
+        }
+
     def _response_with_event_snapshot(
         self,
         session: Session,
@@ -1182,8 +1211,9 @@ class DemandListService:
                 successful_candidates=candidates,
             )
 
-            previous_quantity = item.final_quantity
-            previous_item_version = item.version
+            before_summary = self._item_decision_summary(
+                item
+            )
 
             item.final_quantity = normalized_quantity
             item.decision_type = (
@@ -1213,24 +1243,10 @@ class DemandListService:
                 actor_user_id=actor.user_id,
                 actor_roles=[actor.role.value],
                 request_id=actor.request_id,
-                before_summary={
-                    "item_id": item.id,
-                    "final_quantity": (
-                        _decimal_string(
-                            previous_quantity
-                        )
-                    ),
-                    "version": previous_item_version,
-                },
-                after_summary={
-                    "item_id": item.id,
-                    "final_quantity": (
-                        _decimal_string(
-                            normalized_quantity
-                        )
-                    ),
-                    "version": item.version,
-                },
+                before_summary=before_summary,
+                after_summary=(
+                    self._item_decision_summary(item)
+                ),
             )
             session.commit()
         except Exception:
