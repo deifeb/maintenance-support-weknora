@@ -538,6 +538,8 @@ def test_create_from_group_persists_complete_draft_snapshots(
     actor_contributor,
     monkeypatch,
 ) -> None:
+    from app.models import DemandListEvent
+
     service = _demand_list_service()
     group, child, run, source_rows = (
         _completed_group_with_decisions(
@@ -633,9 +635,23 @@ def test_create_from_group_persists_complete_draft_snapshots(
         "demand-list-create-1"
     )
     assert event.request_hash
-    assert event.response_snapshot_json[
+    assert event.response_snapshot_json is None
+
+    persisted_event = session.query(DemandListEvent).filter(
+        DemandListEvent.tenant_id
+        == actor_contributor.tenant_id,
+        DemandListEvent.idempotency_key
+        == "demand-list-create-1",
+    ).one()
+    assert persisted_event.response_snapshot_json[
         "id"
     ] == created.id
+    assert all(
+        nested["response_snapshot_json"] is None
+        for nested in (
+            persisted_event.response_snapshot_json["events"]
+        )
+    )
 
     source_result.recommended_spare_quantity = Decimal(
         "999.000000"
