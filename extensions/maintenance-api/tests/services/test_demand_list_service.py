@@ -6319,6 +6319,58 @@ def test_task3g_sequential_replay_is_exact_and_isolated(
     )
 
 
+def test_closure_lifecycle_receipts_are_non_recursive_and_exact(
+    session,
+    actor_contributor,
+    actor_admin,
+) -> None:
+    from app.models import DemandListEvent
+    from app.schemas.demand_list import DemandListRead
+
+    service, confirmed = _task3_confirmed_list(
+        session,
+        actor_contributor,
+        actor_admin,
+        source_key="closure-normalized-source",
+        submit_key="closure-normalized-submit",
+        confirm_key="closure-normalized-confirm",
+    )
+    key = "closure-normalized-publish"
+
+    first = service.publish(
+        session,
+        actor_admin,
+        confirmed.id,
+        expected_version=confirmed.version,
+        idempotency_key=key,
+    )
+    receipt = session.query(DemandListEvent).filter(
+        DemandListEvent.tenant_id == actor_admin.tenant_id,
+        DemandListEvent.idempotency_key == key,
+    ).one()
+    stored = DemandListRead.model_validate(
+        receipt.response_snapshot_json,
+    )
+    replay = service.publish(
+        session,
+        actor_admin,
+        confirmed.id,
+        expected_version=confirmed.version,
+        idempotency_key=key,
+    )
+
+    assert all(
+        event.response_snapshot_json is None
+        for event in stored.events
+    )
+    assert first.model_dump(mode="json") == (
+        stored.model_dump(mode="json")
+    )
+    assert replay.model_dump(mode="json") == (
+        first.model_dump(mode="json")
+    )
+
+
 @pytest.mark.parametrize(
     "action",
     _TASK3G_ACTIONS,

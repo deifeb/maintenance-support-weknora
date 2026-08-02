@@ -452,7 +452,9 @@ class DemandListService:
                 "demand_list",
                 demand_list_id,
             )
-        response = self._read_model(loaded)
+        response = self._normalized_replay_snapshot(
+            self._read_model(loaded)
+        )
         event.response_snapshot_json = (
             response.model_dump(mode="json")
         )
@@ -892,6 +894,15 @@ class DemandListService:
             )
         )
         return response
+
+    @staticmethod
+    def _normalized_replay_snapshot(
+        response: DemandListRead,
+    ) -> DemandListRead:
+        normalized = response.model_copy(deep=True)
+        for event in normalized.events:
+            event.response_snapshot_json = None
+        return normalized
 
     def get(
         self,
@@ -2498,14 +2509,11 @@ class DemandListService:
                 demand_list.id,
             )
             assert loaded is not None
-            response = self._read_model(
-                loaded
-            )
-            stored_response = response.model_dump(
-                mode="json"
+            response = self._normalized_replay_snapshot(
+                self._read_model(loaded)
             )
             event.response_snapshot_json = (
-                stored_response
+                response.model_dump(mode="json")
             )
             session.flush()
             session.commit()
