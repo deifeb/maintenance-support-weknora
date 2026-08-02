@@ -4,10 +4,43 @@ import test from 'node:test'
 import type {
   MaintenancePermissions,
 } from '../../../stores/maintenance/permission-matrix.ts'
-import {
+import * as lifecycle from '../demand-list-lifecycle.ts'
+
+const {
   canEditDemandListItem,
   demandListActions,
-} from '../demand-list-lifecycle.ts'
+} = lifecycle
+
+type CalculationGroupStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'PARTIALLY_COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'INTERRUPTED'
+
+type GenerationComparison = {
+  group_status: CalculationGroupStatus
+  rows: Array<{
+    decision: Record<string, unknown> | null
+    candidates: Record<
+      string,
+      { status: 'SUCCEEDED' | 'NO_RESULT' }
+    >
+  }>
+}
+
+type GenerationHelper = (
+  comparison: GenerationComparison | null,
+  permissions: MaintenancePermissions,
+) => boolean
+
+function generationHelper(): GenerationHelper {
+  return (
+    lifecycle as unknown as Record<string, unknown>
+  ).canOfferDemandListGeneration as GenerationHelper
+}
 
 const viewer: MaintenancePermissions = {
   view: true,
@@ -34,6 +67,24 @@ const contributor: MaintenancePermissions = {
 const admin: MaintenancePermissions = {
   ...contributor,
   publishDemandList: true,
+}
+
+function eligibleComparison(
+  overrides: Partial<GenerationComparison> = {},
+): GenerationComparison {
+  return {
+    group_status: 'COMPLETED',
+    rows: [
+      {
+        decision: { id: 1 },
+        candidates: {
+          primary: { status: 'SUCCEEDED' },
+          alternative: { status: 'NO_RESULT' },
+        },
+      },
+    ],
+    ...overrides,
+  }
 }
 
 test('demand-list actions follow exact status and capabilities', () => {
@@ -98,6 +149,97 @@ test('item editing is limited to capable users on DRAFT', () => {
     assert.equal(
       canEditDemandListItem(status, admin),
       false,
+    )
+  }
+})
+
+test('generation requires demand-list edit capability and terminal status', () => {
+  const canGenerate = generationHelper()
+
+  assert.equal(
+    canGenerate(eligibleComparison(), viewer),
+    false,
+  )
+  assert.equal(
+    canGenerate(eligibleComparison(), contributor),
+    true,
+  )
+  assert.equal(
+    canGenerate(
+      eligibleComparison({ group_status: 'RUNNING' }),
+      contributor,
+    ),
+    false,
+  )
+  assert.equal(
+    canGenerate(
+      eligibleComparison({ group_status: 'PENDING' }),
+      admin,
+    ),
+    false,
+  )
+})
+
+test('generation requires rows, saved decisions, and a successful cell per row', () => {
+  const canGenerate = generationHelper()
+
+  assert.equal(
+    canGenerate(
+      eligibleComparison({ rows: [] }),
+      contributor,
+    ),
+    false,
+  )
+  assert.equal(
+    canGenerate(
+      eligibleComparison({
+        rows: [
+          {
+            decision: null,
+            candidates: {
+              primary: { status: 'SUCCEEDED' },
+            },
+          },
+        ],
+      }),
+      contributor,
+    ),
+    false,
+  )
+  assert.equal(
+    canGenerate(
+      eligibleComparison({
+        rows: [
+          {
+            decision: { id: 1 },
+            candidates: {
+              primary: { status: 'NO_RESULT' },
+            },
+          },
+        ],
+      }),
+      contributor,
+    ),
+    false,
+  )
+})
+
+test('generation accepts every terminal group status when row evidence is complete', () => {
+  const canGenerate = generationHelper()
+
+  for (const group_status of [
+    'COMPLETED',
+    'PARTIALLY_COMPLETED',
+    'FAILED',
+    'CANCELLED',
+    'INTERRUPTED',
+  ] as const) {
+    assert.equal(
+      canGenerate(
+        eligibleComparison({ group_status }),
+        contributor,
+      ),
+      true,
     )
   }
 })

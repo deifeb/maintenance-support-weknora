@@ -45,6 +45,105 @@
       </dl>
     </section>
 
+    <section
+      v-if="comparison"
+      class="calculation-comparison__demand-list"
+    >
+      <header>
+        <div>
+          <span>
+            {{
+              t(
+                'maintenance.calculation.demandList.generation.eyebrow',
+              )
+            }}
+          </span>
+          <h2>
+            {{
+              t(
+                'maintenance.calculation.demandList.generation.title',
+              )
+            }}
+          </h2>
+          <p>
+            {{
+              t(
+                'maintenance.calculation.demandList.generation.description',
+              )
+            }}
+          </p>
+        </div>
+      </header>
+
+      <form @submit.prevent="createDemandList">
+        <label>
+          <span>
+            {{
+              t(
+                'maintenance.calculation.demandList.generation.name',
+              )
+            }}
+          </span>
+          <input
+            v-model="demandListName"
+            maxlength="200"
+            required
+          >
+        </label>
+
+        <label>
+          <span>
+            {{
+              t(
+                'maintenance.calculation.demandList.generation.notes',
+              )
+            }}
+          </span>
+          <textarea
+            v-model="demandListDescription"
+            maxlength="2000"
+          />
+        </label>
+
+        <button
+          type="submit"
+          :disabled="(
+            demandListMutating
+            || !canGenerateDemandList
+            || !demandListName.trim()
+          )"
+        >
+          {{
+            demandListMutating
+              ? t(
+                  'maintenance.calculation.demandList.generation.creating',
+                )
+              : t(
+                  'maintenance.calculation.demandList.generation.create',
+                )
+          }}
+        </button>
+      </form>
+
+      <p
+        v-if="!canGenerateDemandList"
+        class="calculation-comparison__demand-list-hint"
+      >
+        {{
+          t(
+            'maintenance.calculation.demandList.generation.unavailable',
+          )
+        }}
+      </p>
+
+      <MaintenanceErrorState
+        v-if="demandListError"
+        :error="demandListError"
+        :locale="locale"
+        @retry="createDemandList"
+      />
+    </section>
+
     <div
       v-if="loading && !comparison"
       class="calculation-comparison__loading"
@@ -91,33 +190,50 @@ import type {
   CalculationDecisionSaveRequest,
 } from '@/api/maintenance/calculation-groups'
 import DemandItemDecisionDrawer from '@/components/maintenance/calculation/DemandItemDecisionDrawer.vue'
+import {
+  canOfferDemandListGeneration,
+} from '@/components/maintenance/calculation/demand-list-lifecycle'
 import ModelComparisonTable from '@/components/maintenance/calculation/ModelComparisonTable.vue'
 import MaintenanceEmptyState from '@/components/maintenance/common/MaintenanceEmptyState.vue'
 import MaintenanceErrorState from '@/components/maintenance/common/MaintenanceErrorState.vue'
 import MaintenancePageHeader from '@/components/maintenance/common/MaintenancePageHeader.vue'
 import { useCalculationGroupStore } from '@/stores/maintenance/calculationGroup'
+import { useDemandListStore } from '@/stores/maintenance/demandList'
 import { useMaintenancePermissionsStore } from '@/stores/maintenance/permissions'
 
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const store = useCalculationGroupStore()
+const calculationStore = useCalculationGroupStore()
+const demandListStore = useDemandListStore()
 const permissionStore = useMaintenancePermissionsStore()
 const {
   comparison,
   loading,
   mutating,
   error,
-} = storeToRefs(store)
+} = storeToRefs(calculationStore)
+const {
+  mutating: demandListMutating,
+  error: demandListError,
+} = storeToRefs(demandListStore)
 const groupId = Number(route.params.groupId)
 const selectedRow = ref<CalculationComparisonRow | null>(null)
+const demandListName = ref('')
+const demandListDescription = ref('')
 const canDecide = computed(
   () => permissionStore.permissions.runCalculation,
 )
+const canGenerateDemandList = computed(() => (
+  canOfferDemandListGeneration(
+    comparison.value,
+    permissionStore.permissions,
+  )
+))
 
 function load(): void {
   if (Number.isInteger(groupId) && groupId > 0) {
-    void store.loadComparison(groupId)
+    void calculationStore.loadComparison(groupId)
   }
 }
 
@@ -137,7 +253,7 @@ async function saveDecision(
   request: CalculationDecisionSaveRequest,
 ): Promise<void> {
   try {
-    await store.saveDecision(sparePartId, request)
+    await calculationStore.saveDecision(sparePartId, request)
     selectedRow.value = (
       comparison.value?.rows.find(
         (row) => row.spare_part_id === sparePartId,
@@ -148,8 +264,52 @@ async function saveDecision(
   }
 }
 
+function requestKey(action: string): string {
+  return (
+    `${action}:${groupId}:`
+    + (
+      globalThis.crypto?.randomUUID?.()
+      ?? Date.now()
+    )
+  )
+}
+
+async function createDemandList(): Promise<void> {
+  const name = demandListName.value.trim()
+  const description = demandListDescription.value.trim()
+
+  if (
+    !canGenerateDemandList.value
+    || demandListMutating.value
+    || !name
+  ) {
+    return
+  }
+
+  try {
+    const created = await demandListStore.create(
+      {
+        calculation_group_id: groupId,
+        name,
+        description: description || null,
+      },
+      requestKey('create-demand-list'),
+    )
+
+    await router.push({
+      name: 'maintenanceDemandListDetail',
+      params: { listId: created.id },
+    })
+  } catch {
+    // The Task 5 store retains the normalized error.
+  }
+}
+
 onMounted(load)
-onBeforeUnmount(store.dispose)
+onBeforeUnmount(() => {
+  calculationStore.dispose()
+  demandListStore.dispose()
+})
 </script>
 
 <style scoped>
@@ -217,6 +377,82 @@ onBeforeUnmount(store.dispose)
   font-size: 11px;
 }
 
+.calculation-comparison__demand-list {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+}
+
+.calculation-comparison__demand-list header span {
+  color: var(--td-text-color-placeholder);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.calculation-comparison__demand-list header h2 {
+  margin: 6px 0;
+  color: var(--td-text-color-primary);
+}
+
+.calculation-comparison__demand-list header p {
+  margin: 0 0 16px;
+  color: var(--td-text-color-secondary);
+}
+
+.calculation-comparison__demand-list form {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 1fr)
+    minmax(280px, 2fr)
+    auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.calculation-comparison__demand-list label {
+  display: grid;
+  gap: 6px;
+}
+
+.calculation-comparison__demand-list input,
+.calculation-comparison__demand-list textarea {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 5px;
+  background: var(--td-bg-color-container);
+  color: var(--td-text-color-primary);
+  font: inherit;
+}
+
+.calculation-comparison__demand-list textarea {
+  resize: vertical;
+}
+
+.calculation-comparison__demand-list button {
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--td-brand-color);
+  border-radius: 5px;
+  background: var(--td-brand-color);
+  color: var(--td-text-color-anti);
+  font: inherit;
+  cursor: pointer;
+}
+
+.calculation-comparison__demand-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.calculation-comparison__demand-list-hint {
+  color: var(--td-text-color-secondary);
+}
+
 .calculation-comparison__loading {
   display: grid;
   min-height: 240px;
@@ -230,6 +466,9 @@ onBeforeUnmount(store.dispose)
     grid-template-columns: 1fr;
   }
   .calculation-comparison__summary dl {
+    grid-template-columns: 1fr;
+  }
+  .calculation-comparison__demand-list form {
     grid-template-columns: 1fr;
   }
 }

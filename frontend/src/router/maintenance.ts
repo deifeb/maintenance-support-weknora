@@ -128,6 +128,17 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'calculations/demand-lists/:listId',
+        name: 'maintenanceDemandListDetail',
+        component: () => import(
+          '@/views/maintenance/calculations/DemandListDetail.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
+      },
+      {
         path: 'inventory-gap',
         name: 'maintenanceInventoryGap',
         component: () => import('@/views/maintenance/inventory-gap/InventoryGapPage.vue'),

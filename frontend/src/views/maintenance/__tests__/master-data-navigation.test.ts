@@ -62,6 +62,7 @@ test('visible Maintenance menu entries agree with route records while detail rou
       'maintenanceCalculationNew',
       'maintenanceCalculationProgress',
       'maintenanceCalculationComparison',
+      'maintenanceDemandListDetail',
     ],
   )
 })
