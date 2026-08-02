@@ -83,6 +83,7 @@ test('comparison uses the conservative gate and routes with the created aggregat
     comparison,
     /tenant[_-]?id/i,
   )
+  assert.doesNotMatch(comparison, /function requestKey/)
 })
 
 test('lifecycle action component is presentation-only', () => {
@@ -154,7 +155,7 @@ test('detail owns explicit lifecycle confirmations and exact confirmation note f
   assert.match(detail, /confirmationNote/)
   assert.match(
     detail,
-    /store\.confirm\(\s*note,\s*requestKey\('confirm'\)\s*\)/s,
+    /store\.confirm\(\s*note\s*\)/s,
   )
   assert.match(detail, /store\.submit/)
   assert.match(detail, /store\.publish/)
@@ -163,6 +164,8 @@ test('detail owns explicit lifecycle confirmations and exact confirmation note f
     detail,
     /confirmation_note/,
   )
+  assert.doesNotMatch(detail, /function requestKey/)
+  assert.doesNotMatch(detail, /requestKey\(/)
 })
 
 test('derive routes to the aggregate id returned by the store', () => {

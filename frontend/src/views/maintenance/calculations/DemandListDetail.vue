@@ -928,20 +928,6 @@ async function saveItem(): Promise<void> {
   }
 }
 
-function requestKey(
-  action: string,
-): string {
-  const id = current.value?.id ?? listId.value ?? 'unknown'
-
-  return (
-    `${action}:${id}:`
-    + (
-      globalThis.crypto?.randomUUID?.()
-      ?? Date.now()
-    )
-  )
-}
-
 type ConfirmableLifecycleAction =
   | 'submit'
   | 'publish'
@@ -953,19 +939,17 @@ async function runLifecycle(
 ): Promise<void> {
   try {
     if (action === 'submit') {
-      await store.submit(requestKey('submit'))
+      await store.submit()
     } else if (action === 'publish') {
-      await store.publish(requestKey('publish'))
+      await store.publish()
     } else if (action === 'derive') {
-      const derived = await store.derive(
-        requestKey('derive'),
-      )
+      const derived = await store.derive()
       await router.push({
         name: 'maintenanceDemandListDetail',
         params: { listId: derived.id },
       })
     } else {
-      await store.voidList(requestKey('void'))
+      await store.voidList()
     }
 
     MessagePlugin.success(
@@ -1042,10 +1026,7 @@ async function submitConfirmationNote(): Promise<void> {
   }
 
   try {
-    await store.confirm(
-      note,
-      requestKey('confirm')
-    )
+    await store.confirm(note)
     confirmationNoteOpen.value = false
     confirmationNote.value = ''
     MessagePlugin.success(

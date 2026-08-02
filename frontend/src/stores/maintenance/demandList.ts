@@ -57,8 +57,32 @@ export interface DemandListStoreApi {
   ): Promise<MaintenanceResult<DemandList>>
 }
 
+type DemandListCommandAction =
+  | 'create'
+  | 'submit'
+  | 'confirm'
+  | 'publish'
+  | 'derive'
+  | 'void'
+
+interface PendingDemandListCommand {
+  fingerprint: string
+  idempotencyKey: string
+}
+
+function defaultCommandKey(
+  action: DemandListCommandAction,
+): string {
+  const suffix = globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `demand-list:${action}:${suffix}`
+}
+
 export function createDemandListState(
   api: DemandListStoreApi = demandListApi,
+  commandKeyFactory: (
+    action: DemandListCommandAction,
+  ) => string = defaultCommandKey,
 ) {
   const current = ref<DemandList | null>(null)
   const loading = ref(false)
@@ -66,6 +90,11 @@ export function createDemandListState(
   const error = ref<MaintenanceClientError | null>(
     null,
   )
+
+  const pendingCommands = new Map<
+    DemandListCommandAction,
+    PendingDemandListCommand
+  >()
 
   let requestGeneration = 0
 
@@ -162,15 +191,84 @@ export function createDemandListState(
     }
   }
 
+  function acquireCommandKey(
+    action: DemandListCommandAction,
+    fingerprint: string,
+  ): string {
+    const pending = pendingCommands.get(action)
+    if (pending?.fingerprint === fingerprint) {
+      return pending.idempotencyKey
+    }
+
+    const idempotencyKey = commandKeyFactory(action)
+    pendingCommands.set(action, {
+      fingerprint,
+      idempotencyKey,
+    })
+    return idempotencyKey
+  }
+
+  function releaseCommandKey(
+    action: DemandListCommandAction,
+    idempotencyKey: string,
+  ): void {
+    if (
+      pendingCommands.get(action)?.idempotencyKey
+      === idempotencyKey
+    ) {
+      pendingCommands.delete(action)
+    }
+  }
+
+  async function runIdempotentMutation(
+    action: DemandListCommandAction,
+    fingerprint: string,
+    operation: (
+      idempotencyKey: string,
+    ) => Promise<MaintenanceResult<DemandList>>,
+    options: {
+      sourceId: number | null
+      allowResultIdChange: boolean
+    },
+  ): Promise<DemandList> {
+    const idempotencyKey = acquireCommandKey(
+      action,
+      fingerprint,
+    )
+
+    try {
+      const response = await runMutation(
+        () => operation(idempotencyKey),
+        options,
+      )
+      releaseCommandKey(action, idempotencyKey)
+      return response
+    } catch (value) {
+      if (!normalizeMaintenanceError(value).retryable) {
+        releaseCommandKey(action, idempotencyKey)
+      }
+      throw value
+    }
+  }
+
   function create(
     request: DemandListCreateRequest,
-    idempotencyKey: string,
   ): Promise<DemandList> {
-    return runMutation(
-      () => api.create(
-        request,
-        idempotencyKey,
-      ),
+    const normalizedRequest = {
+      ...request,
+      name: request.name.trim(),
+      description: request.description?.trim() || null,
+    }
+    const fingerprint = JSON.stringify([
+      normalizedRequest.calculation_group_id,
+      normalizedRequest.name,
+      normalizedRequest.description,
+    ])
+
+    return runIdempotentMutation(
+      'create',
+      fingerprint,
+      (key) => api.create(normalizedRequest, key),
       {
         sourceId: null,
         allowResultIdChange: true,
@@ -202,16 +300,16 @@ export function createDemandListState(
     )
   }
 
-  async function submit(
-    idempotencyKey: string,
-  ): Promise<DemandList> {
+  async function submit(): Promise<DemandList> {
     const source = requireCurrent()
 
-    return runMutation(
-      () => api.submit(
+    return runIdempotentMutation(
+      'submit',
+      JSON.stringify([source.id, source.version]),
+      (key) => api.submit(
         source.id,
         source.version,
-        idempotencyKey,
+        key,
       ),
       {
         sourceId: source.id,
@@ -222,16 +320,21 @@ export function createDemandListState(
 
   async function confirm(
     confirmationNote: string,
-    idempotencyKey: string,
   ): Promise<DemandList> {
     const source = requireCurrent()
 
-    return runMutation(
-      () => api.confirm(
+    return runIdempotentMutation(
+      'confirm',
+      JSON.stringify([
         source.id,
         source.version,
         confirmationNote,
-        idempotencyKey,
+      ]),
+      (key) => api.confirm(
+        source.id,
+        source.version,
+        confirmationNote,
+        key,
       ),
       {
         sourceId: source.id,
@@ -240,16 +343,16 @@ export function createDemandListState(
     )
   }
 
-  async function publish(
-    idempotencyKey: string,
-  ): Promise<DemandList> {
+  async function publish(): Promise<DemandList> {
     const source = requireCurrent()
 
-    return runMutation(
-      () => api.publish(
+    return runIdempotentMutation(
+      'publish',
+      JSON.stringify([source.id, source.version]),
+      (key) => api.publish(
         source.id,
         source.version,
-        idempotencyKey,
+        key,
       ),
       {
         sourceId: source.id,
@@ -258,16 +361,16 @@ export function createDemandListState(
     )
   }
 
-  async function derive(
-    idempotencyKey: string,
-  ): Promise<DemandList> {
+  async function derive(): Promise<DemandList> {
     const source = requireCurrent()
 
-    return runMutation(
-      () => api.derive(
+    return runIdempotentMutation(
+      'derive',
+      JSON.stringify([source.id, source.version]),
+      (key) => api.derive(
         source.id,
         source.version,
-        idempotencyKey,
+        key,
       ),
       {
         sourceId: source.id,
@@ -276,16 +379,16 @@ export function createDemandListState(
     )
   }
 
-  async function voidList(
-    idempotencyKey: string,
-  ): Promise<DemandList> {
+  async function voidList(): Promise<DemandList> {
     const source = requireCurrent()
 
-    return runMutation(
-      () => api.void(
+    return runIdempotentMutation(
+      'void',
+      JSON.stringify([source.id, source.version]),
+      (key) => api.void(
         source.id,
         source.version,
-        idempotencyKey,
+        key,
       ),
       {
         sourceId: source.id,
@@ -296,6 +399,7 @@ export function createDemandListState(
 
   function dispose(): void {
     requestGeneration += 1
+    pendingCommands.clear()
   }
 
   return {

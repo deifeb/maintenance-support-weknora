@@ -264,16 +264,6 @@ async function saveDecision(
   }
 }
 
-function requestKey(action: string): string {
-  return (
-    `${action}:${groupId}:`
-    + (
-      globalThis.crypto?.randomUUID?.()
-      ?? Date.now()
-    )
-  )
-}
-
 async function createDemandList(): Promise<void> {
   const name = demandListName.value.trim()
   const description = demandListDescription.value.trim()
@@ -287,14 +277,11 @@ async function createDemandList(): Promise<void> {
   }
 
   try {
-    const created = await demandListStore.create(
-      {
-        calculation_group_id: groupId,
-        name,
-        description: description || null,
-      },
-      requestKey('create-demand-list'),
-    )
+    const created = await demandListStore.create({
+      calculation_group_id: groupId,
+      name,
+      description: description || null,
+    })
 
     await router.push({
       name: 'maintenanceDemandListDetail',
