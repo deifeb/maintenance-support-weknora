@@ -2137,6 +2137,11 @@ class DemandListService:
                     payload.calculation_group_id,
                 )
             )
+            if not comparison.rows:
+                raise BusinessValidationError(
+                    "demand list cannot be empty",
+                    code="DEMAND_LIST_EMPTY",
+                )
             incomplete = sorted(
                 row.spare_part_id
                 for row in comparison.rows

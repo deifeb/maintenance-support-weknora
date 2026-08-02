@@ -900,6 +900,46 @@ def test_task2d_rejects_group_without_successful_current_child(
     _task2d_assert_no_demand_aggregate(session)
 
 
+def test_closure_rejects_empty_comparison_before_aggregate_write(
+    session,
+    actor_contributor,
+    monkeypatch,
+) -> None:
+    from app.core.exceptions import BusinessValidationError
+
+    service = _demand_list_service()
+    group, _, _, _ = _completed_group_with_decisions(
+        session,
+        actor_contributor,
+    )
+    comparison = service.calculation_group_service.comparison(
+        session,
+        actor_contributor,
+        group.id,
+    )
+    empty_comparison = comparison.model_copy(
+        update={"rows": []},
+    )
+    monkeypatch.setattr(
+        service.calculation_group_service,
+        "comparison",
+        lambda *_args, **_kwargs: empty_comparison,
+    )
+
+    with pytest.raises(BusinessValidationError) as captured:
+        service.create_from_group(
+            session,
+            actor_contributor,
+            calculation_group_id=group.id,
+            name="Empty comparison must fail",
+            description=None,
+            idempotency_key="closure-empty-comparison",
+        )
+
+    assert captured.value.code == "DEMAND_LIST_EMPTY"
+    _task2d_assert_no_demand_aggregate(session)
+
+
 def test_task2d_rejects_missing_decisions_with_sorted_ids(
     session,
     actor_contributor,
