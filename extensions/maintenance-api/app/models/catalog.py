@@ -22,7 +22,6 @@ from app.models.mixins import (
 
 if TYPE_CHECKING:
     from app.models.equipment import ConfigurationItem
-    from app.models.inventory import WarehouseInventory
     from app.models.reliability import ReliabilityProfile
     from app.models.supplier import SupplierOffer
 
@@ -90,7 +89,6 @@ class SparePart(
     reliability_profiles: Mapped[list["ReliabilityProfile"]] = relationship(
         back_populates="spare_part"
     )
-    inventories: Mapped[list["WarehouseInventory"]] = relationship(back_populates="spare_part")
     supplier_offers: Mapped[list["SupplierOffer"]] = relationship(back_populates="spare_part")
 
     __table_args__ = (

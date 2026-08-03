@@ -8,6 +8,8 @@ from app.schemas.common import PageData
 from app.schemas.inventory_ledger import InventoryBalanceRead, InventorySummaryRead
 from app.security.actor import ActorContext
 
+SUMMARY_PART_ID_CHUNK_SIZE = 500
+
 
 class InventoryQueryService:
     def __init__(self, repository: InventoryLedgerRepository | None = None) -> None:
@@ -92,14 +94,32 @@ class InventoryQueryService:
         actor: ActorContext,
         spare_part_ids: Sequence[int] | None = None,
     ) -> list[InventorySummaryRead]:
-        return [
+        if spare_part_ids is None:
+            chunks: list[Sequence[int] | None] = [None]
+        else:
+            identifiers = sorted(set(spare_part_ids))
+            if not identifiers:
+                return []
+            chunks = [
+                identifiers[index : index + SUMMARY_PART_ID_CHUNK_SIZE]
+                for index in range(0, len(identifiers), SUMMARY_PART_ID_CHUNK_SIZE)
+            ]
+        summaries = [
             InventorySummaryRead.model_validate(row)
+            for chunk in chunks
             for row in self.repository.summaries_for_parts(
                 session,
                 actor.tenant_id,
-                spare_part_ids,
+                chunk,
             )
         ]
+        return sorted(
+            summaries,
+            key=lambda summary: (
+                summary.warehouse_id,
+                summary.spare_part_id,
+            ),
+        )
 
     def summary_for_part(
         self,
@@ -111,6 +131,16 @@ class InventoryQueryService:
             session,
             actor,
             [spare_part_id],
+        )
+
+    def count_low_stock_spare_parts(
+        self,
+        session: Session,
+        actor: ActorContext,
+    ) -> int:
+        return self.repository.count_low_stock_spare_parts(
+            session,
+            actor.tenant_id,
         )
 
     @staticmethod

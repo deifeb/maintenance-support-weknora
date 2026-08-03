@@ -16,8 +16,8 @@ class WarehouseRepository(BaseRepository[Warehouse]):
         tenant_id: str,
         identifier: int,
     ) -> int:
-        return self.inventory_ledger_repository.count_balance_references(
+        return self.inventory_ledger_repository.count_warehouse_references(
             session,
             tenant_id,
-            warehouse_id=identifier,
+            identifier,
         )

@@ -28,7 +28,7 @@ from app.services.ai_tool_adapters import get_inventory_snapshot
 from app.services.demand_calculation_service import DemandCalculationService
 from app.services.spare_part_service import spare_part_service
 from app.services.warehouse_service import warehouse_service
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 
@@ -237,6 +237,122 @@ def test_demand_snapshot_aggregates_all_locations_and_lots_without_tenant_leakag
     }
 
 
+def test_demand_snapshot_batches_inventory_for_distinct_spare_parts(
+    session: Session,
+    actor_viewer: ActorContext,
+) -> None:
+    first_spare, warehouse = _seed_ledger_inventory(session)
+    configuration = session.scalar(
+        select(ConfigurationVersion).where(
+            ConfigurationVersion.tenant_id == actor_viewer.tenant_id
+        )
+    )
+    assert configuration is not None
+
+    second_part = Part(
+        tenant_id="tenant-a",
+        code="PART-LEDGER-SECOND",
+        name="Second ledger part",
+    )
+    second_spare = SparePart(
+        tenant_id="tenant-a",
+        code="SP-LEDGER-SECOND",
+        name="Second ledger spare",
+        unit="piece",
+        is_repairable=False,
+    )
+    session.add_all((second_part, second_spare))
+    session.flush()
+    session.add(
+        ConfigurationItem(
+            tenant_id="tenant-a",
+            configuration_version_id=configuration.id,
+            item_code="ITEM-LEDGER-SECOND",
+            part_id=second_part.id,
+            spare_part_id=second_spare.id,
+            install_quantity=Decimal("1"),
+            replacement_ratio=Decimal("1"),
+            criticality_level=CriticalityLevel.HIGH,
+        )
+    )
+    location = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="SHELF-SECOND",
+        name="Second shelf",
+        location_type="SHELF",
+    )
+    session.add(location)
+    session.flush()
+    session.add_all(
+        (
+            InventoryPolicy(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                spare_part_id=second_spare.id,
+                safety_stock=Decimal("1"),
+                reorder_point=Decimal("2"),
+            ),
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                location_id=location.id,
+                spare_part_id=second_spare.id,
+                on_hand_quantity=Decimal("4"),
+                reserved_quantity=Decimal("1"),
+            ),
+        )
+    )
+    session.commit()
+
+    inventory_statements: list[str] = []
+
+    def count_inventory_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        if "FROM inventory_balances" in statement and "GROUP BY" in statement:
+            inventory_statements.append(statement)
+
+    event.listen(
+        session.get_bind(),
+        "before_cursor_execute",
+        count_inventory_statement,
+    )
+    try:
+        snapshot, _warnings = DemandCalculationService()._snapshot_from_version(
+            session,
+            actor_viewer,
+            _scenario_version(configuration.id),
+        )
+    finally:
+        event.remove(
+            session.get_bind(),
+            "before_cursor_execute",
+            count_inventory_statement,
+        )
+
+    inventory_by_spare = {
+        item["spare_part_id"]: item["inventory"]
+        for item in snapshot["items"]
+    }
+    assert set(inventory_by_spare) == {first_spare.id, second_spare.id}
+    assert len(inventory_statements) == 1
+    assert all(
+        set(inventory) == {
+            "on_hand_quantity",
+            "available_quantity",
+            "in_transit_quantity",
+            "safety_stock",
+        }
+        for inventory in inventory_by_spare.values()
+    )
+
+
 def test_ai_inventory_snapshot_uses_ledger_aggregate_and_actor_tenant(
     session: Session,
     actor_viewer: ActorContext,
@@ -252,6 +368,8 @@ def test_ai_inventory_snapshot_uses_ledger_aggregate_and_actor_tenant(
 
     result = get_inventory_snapshot(session, payload, context)
 
+    assert result["total"] == 1
+    assert result["truncated"] is False
     assert len(result["items"]) == 1
     item = result["items"][0]
     assert item["spare_part_id"] == spare.id
@@ -260,6 +378,60 @@ def test_ai_inventory_snapshot_uses_ledger_aggregate_and_actor_tenant(
     assert Decimal(item["available_quantity"]) == Decimal("9")
     assert Decimal(item["in_transit_quantity"]) == Decimal("5")
     assert Decimal(item["safety_stock"]) == Decimal("2")
+
+
+def test_ai_inventory_snapshot_is_bounded_and_reports_truncation(
+    session: Session,
+    actor_viewer: ActorContext,
+) -> None:
+    warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code="WH-AI-BOUND",
+        name="AI bounded warehouse",
+    )
+    session.add(warehouse)
+    session.flush()
+    location = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="AI-BOUND",
+        name="AI bounded location",
+        location_type="SHELF",
+    )
+    session.add(location)
+    session.flush()
+    spare_parts = [
+        SparePart(
+            tenant_id="tenant-a",
+            code=f"SP-AI-{index:04d}",
+            name=f"AI spare {index}",
+            unit="piece",
+        )
+        for index in range(501)
+    ]
+    session.add_all(spare_parts)
+    session.flush()
+    session.add_all(
+        InventoryBalance(
+            tenant_id="tenant-a",
+            warehouse_id=warehouse.id,
+            location_id=location.id,
+            spare_part_id=spare.id,
+            on_hand_quantity=Decimal("1"),
+        )
+        for spare in spare_parts
+    )
+    session.commit()
+
+    result = get_inventory_snapshot(
+        session,
+        SimpleNamespace(model_dump=lambda: {"spare_part_id": None}),
+        SimpleNamespace(actor=actor_viewer, tenant_id=actor_viewer.tenant_id),
+    )
+
+    assert result["total"] == 501
+    assert result["truncated"] is True
+    assert len(result["items"]) == 500
 
 
 def test_ledger_balances_protect_warehouse_and_spare_part_deletion(

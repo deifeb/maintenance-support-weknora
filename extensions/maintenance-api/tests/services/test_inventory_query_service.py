@@ -9,8 +9,11 @@ from app.models import (
     Warehouse,
     WarehouseLocation,
 )
-from app.services.inventory_query_service import inventory_query_service
-from sqlalchemy import select
+from app.services.inventory_query_service import (
+    InventoryQueryService,
+    inventory_query_service,
+)
+from sqlalchemy import event, select
 
 
 def seed_balance(
@@ -200,3 +203,180 @@ def test_balance_page_filters_by_serial_and_paginates(session, actor_context) ->
     assert page.items[0].serial_item_ids == [serial.id]
     assert page.items[0].available_quantity == Decimal("8")
     assert page.items[0].version == 1
+
+
+class _RecordingSummaryRepository:
+    def __init__(self) -> None:
+        self.calls: list[list[int]] = []
+
+    def summaries_for_parts(
+        self,
+        _session,
+        _tenant_id: str,
+        spare_part_ids,
+    ) -> list[dict]:
+        self.calls.append(list(spare_part_ids))
+        return []
+
+
+def test_summaries_for_parts_short_circuits_empty_ids(
+    session,
+    actor_context,
+) -> None:
+    repository = _RecordingSummaryRepository()
+    service = InventoryQueryService(repository)
+
+    assert service.summaries_for_parts(session, actor_context(), []) == []
+    assert repository.calls == []
+
+
+def test_summaries_for_parts_chunks_large_deduplicated_id_sets(
+    session,
+    actor_context,
+) -> None:
+    repository = _RecordingSummaryRepository()
+    service = InventoryQueryService(repository)
+    requested_ids = list(range(1201, 0, -1)) + [1, 500, 1201]
+
+    assert service.summaries_for_parts(
+        session,
+        actor_context(),
+        requested_ids,
+    ) == []
+
+    assert [len(chunk) for chunk in repository.calls] == [500, 500, 201]
+    assert [item for chunk in repository.calls for item in chunk] == list(
+        range(1, 1202)
+    )
+
+
+def test_summaries_for_parts_returns_stable_warehouse_part_order(
+    session,
+    actor_context,
+) -> None:
+    first, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="ORDER-FIRST",
+    )
+    second, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="ORDER-SECOND",
+    )
+    session.commit()
+
+    summaries = inventory_query_service.summaries_for_parts(
+        session,
+        actor_context(),
+        [second.spare_part_id, first.spare_part_id, second.spare_part_id],
+    )
+
+    assert [
+        (summary.warehouse_id, summary.spare_part_id)
+        for summary in summaries
+    ] == sorted(
+        (
+            (first.warehouse_id, first.spare_part_id),
+            (second.warehouse_id, second.spare_part_id),
+        )
+    )
+
+
+def test_low_stock_count_is_active_tenant_scoped_and_one_statement(
+    session,
+    actor_context,
+) -> None:
+    active_warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code="WH-RISK-ACTIVE",
+        name="Active warehouse",
+    )
+    active_part = SparePart(
+        tenant_id="tenant-a",
+        code="SP-RISK-ACTIVE",
+        name="Active part",
+    )
+    seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="RISK-ACTIVE-ONE",
+        warehouse=active_warehouse,
+        part=active_part,
+        on_hand="1",
+    )
+    seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="RISK-ACTIVE-TWO",
+        warehouse=active_warehouse,
+        part=active_part,
+        on_hand="1",
+    )
+
+    inactive_warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code="WH-RISK-INACTIVE",
+        name="Inactive warehouse",
+        is_active=False,
+    )
+    seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="RISK-INACTIVE-WH",
+        warehouse=inactive_warehouse,
+        on_hand="0",
+    )
+    inactive_part = SparePart(
+        tenant_id="tenant-a",
+        code="SP-RISK-INACTIVE",
+        name="Inactive part",
+        is_active=False,
+    )
+    seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="RISK-INACTIVE-PART",
+        part=inactive_part,
+        on_hand="0",
+    )
+    seed_balance(
+        session,
+        tenant_id="tenant-b",
+        suffix="RISK-FOREIGN",
+        on_hand="0",
+    )
+    session.commit()
+
+    inventory_statements: list[str] = []
+
+    def count_inventory_statement(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        if "FROM inventory_balances" in statement:
+            inventory_statements.append(statement)
+
+    event.listen(
+        session.get_bind(),
+        "before_cursor_execute",
+        count_inventory_statement,
+    )
+    try:
+        count = inventory_query_service.count_low_stock_spare_parts(
+            session,
+            actor_context(),
+        )
+    finally:
+        event.remove(
+            session.get_bind(),
+            "before_cursor_execute",
+            count_inventory_statement,
+        )
+
+    assert count == 1
+    assert len(inventory_statements) == 1

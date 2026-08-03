@@ -17,7 +17,6 @@ from app.models import (
     DemandScenarioVersion,
     EquipmentModel,
     SparePart,
-    Warehouse,
 )
 from app.models.enums import (
     AIReviewFindingStatus,
@@ -76,34 +75,9 @@ class DashboardService:
         actor: ActorContext,
     ) -> list[DashboardMetric]:
         tenant_id = actor.tenant_id
-        summaries = self.inventory_query_service.summaries_for_parts(
+        inventory_risk_count = self.inventory_query_service.count_low_stock_spare_parts(
             session,
             actor,
-        )
-        active_warehouse_ids = set(
-            session.scalars(
-                select(Warehouse.id).where(
-                    Warehouse.tenant_id == tenant_id,
-                    Warehouse.is_active.is_(True),
-                )
-            )
-        )
-        active_spare_part_ids = set(
-            session.scalars(
-                select(SparePart.id).where(
-                    SparePart.tenant_id == tenant_id,
-                    SparePart.is_active.is_(True),
-                )
-            )
-        )
-        inventory_risk_count = len(
-            {
-                summary.spare_part_id
-                for summary in summaries
-                if summary.warehouse_id in active_warehouse_ids
-                and summary.spare_part_id in active_spare_part_ids
-                and summary.available_quantity < summary.reorder_point
-            }
         )
 
         active_equipment = (

@@ -10,8 +10,12 @@ from sqlalchemy.orm import Session, aliased
 
 from app.models import (
     InventoryBalance,
+    InventoryExpiryRule,
+    InventoryLot,
     InventoryPolicy,
     SerializedItem,
+    SparePart,
+    Warehouse,
     WarehouseLocation,
 )
 
@@ -144,6 +148,115 @@ class InventoryLedgerRepository:
                 select(func.count())
                 .select_from(InventoryBalance)
                 .where(*conditions)
+            )
+            or 0
+        )
+
+    def count_warehouse_references(
+        self,
+        session: Session,
+        tenant_id: str,
+        warehouse_id: int,
+    ) -> int:
+        references = (
+            select(WarehouseLocation.id).where(
+                WarehouseLocation.tenant_id == tenant_id,
+                WarehouseLocation.warehouse_id == warehouse_id,
+            ).exists(),
+            select(InventoryPolicy.id).where(
+                InventoryPolicy.tenant_id == tenant_id,
+                InventoryPolicy.warehouse_id == warehouse_id,
+            ).exists(),
+            select(SerializedItem.id).where(
+                SerializedItem.tenant_id == tenant_id,
+                SerializedItem.warehouse_id == warehouse_id,
+            ).exists(),
+            select(InventoryBalance.id).where(
+                InventoryBalance.tenant_id == tenant_id,
+                InventoryBalance.warehouse_id == warehouse_id,
+            ).exists(),
+        )
+        return int(bool(session.scalar(select(or_(*references)))))
+
+    def count_spare_part_references(
+        self,
+        session: Session,
+        tenant_id: str,
+        spare_part_id: int,
+    ) -> int:
+        references = (
+            select(InventoryPolicy.id).where(
+                InventoryPolicy.tenant_id == tenant_id,
+                InventoryPolicy.spare_part_id == spare_part_id,
+            ).exists(),
+            select(InventoryExpiryRule.id).where(
+                InventoryExpiryRule.tenant_id == tenant_id,
+                InventoryExpiryRule.spare_part_id == spare_part_id,
+            ).exists(),
+            select(InventoryLot.id).where(
+                InventoryLot.tenant_id == tenant_id,
+                InventoryLot.spare_part_id == spare_part_id,
+            ).exists(),
+            select(SerializedItem.id).where(
+                SerializedItem.tenant_id == tenant_id,
+                SerializedItem.spare_part_id == spare_part_id,
+            ).exists(),
+            select(InventoryBalance.id).where(
+                InventoryBalance.tenant_id == tenant_id,
+                InventoryBalance.spare_part_id == spare_part_id,
+            ).exists(),
+        )
+        return int(bool(session.scalar(select(or_(*references)))))
+
+    def count_low_stock_spare_parts(
+        self,
+        session: Session,
+        tenant_id: str,
+    ) -> int:
+        summaries = (
+            self._summary_statement(
+                tenant_id,
+                self._balance_conditions(
+                    tenant_id,
+                    warehouse_id=None,
+                    spare_part_id=None,
+                    location_id=None,
+                    lot_id=None,
+                    serial_item_id=None,
+                ),
+            )
+            .order_by(None)
+            .subquery()
+        )
+        available_quantity = (
+            summaries.c.on_hand_quantity
+            - summaries.c.reserved_quantity
+            - summaries.c.damaged_quantity
+            - summaries.c.quarantined_quantity
+        )
+        return int(
+            session.scalar(
+                select(func.count(func.distinct(summaries.c.spare_part_id)))
+                .select_from(summaries)
+                .join(
+                    Warehouse,
+                    and_(
+                        Warehouse.id == summaries.c.warehouse_id,
+                        Warehouse.tenant_id == tenant_id,
+                    ),
+                )
+                .join(
+                    SparePart,
+                    and_(
+                        SparePart.id == summaries.c.spare_part_id,
+                        SparePart.tenant_id == tenant_id,
+                    ),
+                )
+                .where(
+                    Warehouse.is_active.is_(True),
+                    SparePart.is_active.is_(True),
+                    available_quantity < summaries.c.reorder_point,
+                )
             )
             or 0
         )

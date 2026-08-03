@@ -63,6 +63,7 @@ from app.schemas.demand_calculation import (
     CalculationPreviewRead,
     CalculationPreviewRequest,
 )
+from app.schemas.inventory_ledger import InventorySummaryRead
 from app.security.actor import ActorContext
 from app.services.inventory_gap_service import inventory_gap_service
 from app.services.inventory_query_service import InventoryQueryService
@@ -437,6 +438,18 @@ class DemandCalculationService:
             for stage in version.stages
             for shock in stage.shocks
         ]
+        inventory_by_spare: dict[int, list[InventorySummaryRead]] = {
+            spare_id: [] for spare_id in aggregate
+        }
+        for inventory in self.inventory_query_service.summaries_for_parts(
+            session,
+            actor,
+            list(aggregate),
+        ):
+            inventory_by_spare.setdefault(
+                inventory.spare_part_id,
+                [],
+            ).append(inventory)
         snapshot_items = []
         for spare_id, row in aggregate.items():
             spare: SparePart = row["spare"]
@@ -485,11 +498,7 @@ class DemandCalculationService:
                 if spare.is_repairable
                 else None
             )
-            inventories = self.inventory_query_service.summary_for_part(
-                session,
-                actor,
-                spare_id,
-            )
+            inventories = inventory_by_spare[spare_id]
             available = sum(
                 (inventory.available_quantity for inventory in inventories), Decimal("0")
             )

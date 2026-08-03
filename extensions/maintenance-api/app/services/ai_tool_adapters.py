@@ -528,16 +528,16 @@ def get_inventory_snapshot(
     spare_part_id = payload.model_dump().get(
         "spare_part_id"
     )
-    rows = InventoryQueryService().summaries_for_parts(
+    page = InventoryQueryService().list_summaries(
         session,
         context.actor,
-        (
-            None
-            if spare_part_id is None
-            else [spare_part_id]
-        ),
+        page=1,
+        page_size=500,
+        spare_part_id=spare_part_id,
     )
     return {
+        "total": page.total,
+        "truncated": page.total > len(page.items),
         "items": [
             {
                 "spare_part_id": (
@@ -557,7 +557,7 @@ def get_inventory_snapshot(
                     row.safety_stock
                 ),
             }
-            for row in rows
+            for row in page.items
         ]
     }
 

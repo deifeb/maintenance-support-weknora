@@ -55,7 +55,6 @@ class Warehouse(
     )
     description: Mapped[str | None] = mapped_column(Text)
 
-    inventories: Mapped[list["WarehouseInventory"]] = relationship(back_populates="warehouse")
     locations: Mapped[list["WarehouseLocation"]] = relationship(back_populates="warehouse")
 
     __table_args__ = (
@@ -94,8 +93,8 @@ class WarehouseInventory(
     last_counted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
-    warehouse: Mapped[Warehouse] = relationship(back_populates="inventories")
-    spare_part: Mapped["SparePart"] = relationship(back_populates="inventories")
+    warehouse: Mapped[Warehouse] = relationship()
+    spare_part: Mapped["SparePart"] = relationship()
 
     @hybrid_property
     def available_quantity(self) -> Decimal:

@@ -39,10 +39,10 @@ class SparePartRepository(BaseRepository[SparePart]):
                     ReliabilityProfile.spare_part_id == identifier,
                 )
             ),
-            self.inventory_ledger_repository.count_balance_references(
+            self.inventory_ledger_repository.count_spare_part_references(
                 session,
                 tenant_id,
-                spare_part_id=identifier,
+                identifier,
             ),
             session.scalar(
                 select(func.count())
