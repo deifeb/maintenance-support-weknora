@@ -10,7 +10,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.util.exc import CommandError
 from app.core.config import get_settings
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 
@@ -217,6 +218,71 @@ def test_downgrade_rejects_other_non_lossless_ledger_facts(tmp_path: Path, monke
 
     with pytest.raises(CommandError, match="inventory ledger contains granular facts"):
         command.downgrade(config, PREVIOUS_REVISION)
+    engine.dispose()
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "mutation_sql",
+    [
+        "UPDATE warehouse_locations SET name = 'Renamed default' WHERE code = 'DEFAULT'",
+        "UPDATE warehouse_locations SET location_type = 'STORAGE', is_pickable = 0, is_active = 0 WHERE code = 'DEFAULT'",
+        "UPDATE inventory_transactions SET reference_type = NULL",
+        "UPDATE inventory_transactions SET reason = 'changed migration reason'",
+        "UPDATE inventory_transactions SET response_snapshot_json = '{}'",
+        "UPDATE inventory_ledger_entries SET state_after_json = '{}'",
+        "UPDATE inventory_ledger_entries SET resulting_balance_version = 99",
+    ],
+)
+def test_downgrade_rejects_mutated_migration_facts(tmp_path: Path, monkeypatch, mutation_sql: str) -> None:
+    config, url = _config(tmp_path / "mutated-migration-facts.db", monkeypatch)
+    command.upgrade(config, PREVIOUS_REVISION)
+    engine = create_engine(url)
+    _seed_legacy_inventory(engine)
+    command.upgrade(config, REVISION)
+    with engine.begin() as connection:
+        connection.execute(text(mutation_sql))
+
+    with pytest.raises(CommandError, match="inventory ledger contains granular facts"):
+        command.downgrade(config, PREVIOUS_REVISION)
+    engine.dispose()
+    get_settings.cache_clear()
+
+
+def test_upgrade_conservation_failure_keeps_legacy_source_data(tmp_path: Path, monkeypatch) -> None:
+    config, url = _config(tmp_path / "conservation-failure.db", monkeypatch)
+    command.upgrade(config, PREVIOUS_REVISION)
+    engine = create_engine(url)
+    _seed_legacy_inventory(engine)
+    corrupted = False
+
+    def corrupt_destination_after_balance_insert(
+        connection,
+        cursor,
+        statement,
+        parameters,
+        execution_context,
+        executemany,
+    ) -> None:
+        nonlocal corrupted
+        if (
+            not corrupted
+            and str(connection.engine.url) == url
+            and "INSERT INTO inventory_balances" in statement
+        ):
+            corrupted = True
+            connection.exec_driver_sql("UPDATE inventory_balances SET on_hand_quantity = 13")
+
+    event.listen(Engine, "after_cursor_execute", corrupt_destination_after_balance_insert)
+    try:
+        with pytest.raises(CommandError, match="inventory ledger migration conservation check failed"):
+            command.upgrade(config, REVISION)
+    finally:
+        event.remove(Engine, "after_cursor_execute", corrupt_destination_after_balance_insert)
+
+    assert "warehouse_inventories" in inspect(engine).get_table_names()
+    legacy = _one(engine, "warehouse_inventories")
+    assert _decimal_string(legacy["on_hand_quantity"]) == "12.5000"
     engine.dispose()
     get_settings.cache_clear()
 

@@ -428,6 +428,139 @@ def upgrade() -> None:
     op.drop_table("warehouse_inventories")
 
 
+def _decode_json(value: object) -> object:
+    return value if isinstance(value, (dict, list)) else json.loads(str(value))
+
+
+def _quantity_string(value: object) -> str:
+    return format(Decimal(str(value)).quantize(Decimal("0.0001")), ".4f")
+
+
+def _migration_locations_are_canonical() -> bool:
+    rows = op.get_bind().execute(
+        sa.text(
+            "SELECT l.tenant_id, l.warehouse_id, l.code, l.name, l.location_type, "
+            "l.is_pickable, l.is_active, l.version, l.created_at, l.updated_at, "
+            "w.tenant_id AS warehouse_tenant_id, w.created_at AS warehouse_created_at, "
+            "w.updated_at AS warehouse_updated_at "
+            "FROM warehouse_locations l JOIN warehouses w ON w.id = l.warehouse_id"
+        )
+    ).mappings()
+    for row in rows:
+        if (
+            row["tenant_id"] != row["warehouse_tenant_id"]
+            or row["code"] != "DEFAULT"
+            or row["name"] != "Default location"
+            or row["location_type"] != "DEFAULT"
+            or not row["is_pickable"]
+            or not row["is_active"]
+            or row["version"] != 1
+            or str(row["created_at"]) != str(row["warehouse_created_at"])
+            or str(row["updated_at"]) != str(row["warehouse_updated_at"])
+        ):
+            return False
+    return True
+
+
+def _migration_transactions_are_canonical() -> bool:
+    rows = op.get_bind().execute(
+        sa.text(
+            "SELECT t.*, b.tenant_id AS balance_tenant_id, b.created_at AS balance_created_at, "
+            "b.updated_at AS balance_updated_at FROM inventory_transactions t "
+            "JOIN inventory_ledger_entries e ON e.transaction_id = t.id "
+            "JOIN inventory_balances b ON b.id = e.balance_id"
+        )
+    ).mappings()
+    for row in rows:
+        try:
+            snapshot = _decode_json(row["response_snapshot_json"])
+            snapshot_is_canonical = (
+                isinstance(snapshot, dict)
+                and set(snapshot) == {"legacy_last_counted_at"}
+                and (
+                    snapshot["legacy_last_counted_at"] is None
+                    or isinstance(snapshot["legacy_last_counted_at"], str)
+                )
+            )
+            if not snapshot_is_canonical:
+                return False
+            if snapshot["legacy_last_counted_at"] is not None:
+                datetime.fromisoformat(snapshot["legacy_last_counted_at"])
+            actor_roles = _decode_json(row["actor_roles_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if (
+            row["tenant_id"] != row["balance_tenant_id"]
+            or row["operation_type"] != "MIGRATION_OPENING"
+            or row["status"] != "COMPLETED"
+            or row["reference_type"] != "warehouse_inventories"
+            or row["reference_id"] is None
+            or row["idempotency_key"] != f"migration-opening-{row['reference_id']}"
+            or row["request_hash"] != "0" * 64
+            or not snapshot_is_canonical
+            or row["reason"] != "legacy inventory migration opening balance"
+            or row["confirmation_token_hash"] is not None
+            or row["confirmation_expires_at"] is not None
+            or row["actor_user_id"] != "system-migration"
+            or actor_roles != ["SYSTEM"]
+            or row["request_id"] != f"migration-20260803-08-{row['reference_id']}"
+            or row["reversed_transaction_id"] is not None
+            or row["version"] != 1
+            or str(row["created_at"]) != str(row["balance_created_at"])
+            or str(row["updated_at"]) != str(row["balance_updated_at"])
+            or str(row["completed_at"]) != str(row["balance_updated_at"])
+            or row["failed_at"] is not None
+        ):
+            return False
+    return True
+
+
+def _migration_ledger_entries_are_canonical() -> bool:
+    rows = op.get_bind().execute(
+        sa.text(
+            "SELECT e.*, b.tenant_id AS balance_tenant_id, b.warehouse_id AS balance_warehouse_id, "
+            "b.location_id AS balance_location_id, b.spare_part_id AS balance_spare_part_id, "
+            "b.lot_id AS balance_lot_id, b.on_hand_quantity, b.reserved_quantity, "
+            "b.damaged_quantity, b.quarantined_quantity, b.in_transit_quantity, "
+            "b.version AS balance_version, b.created_at AS balance_created_at, "
+            "b.updated_at AS balance_updated_at FROM inventory_ledger_entries e "
+            "JOIN inventory_balances b ON b.id = e.balance_id"
+        )
+    ).mappings()
+    for row in rows:
+        expected_after = {
+            column.removesuffix("_quantity"): _quantity_string(row[column])
+            for column in QUANTITY_COLUMNS
+        }
+        expected_before = {key: "0.0000" for key in expected_after}
+        try:
+            state_before = _decode_json(row["state_before_json"])
+            state_after = _decode_json(row["state_after_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if (
+            row["tenant_id"] != row["balance_tenant_id"]
+            or row["warehouse_id"] != row["balance_warehouse_id"]
+            or row["location_id"] != row["balance_location_id"]
+            or row["spare_part_id"] != row["balance_spare_part_id"]
+            or row["lot_id"] != row["balance_lot_id"]
+            or row["serial_item_id"] is not None
+            or _quantity_string(row["on_hand_delta"]) != expected_after["on_hand"]
+            or _quantity_string(row["reserved_delta"]) != expected_after["reserved"]
+            or _quantity_string(row["damaged_delta"]) != expected_after["damaged"]
+            or _quantity_string(row["quarantined_delta"]) != expected_after["quarantined"]
+            or _quantity_string(row["in_transit_delta"]) != expected_after["in_transit"]
+            or state_before != expected_before
+            or state_after != expected_after
+            or row["before_balance_version"] != 0
+            or row["resulting_balance_version"] != row["balance_version"]
+            or str(row["created_at"]) != str(row["balance_created_at"])
+            or str(row["updated_at"]) != str(row["balance_updated_at"])
+        ):
+            return False
+    return True
+
+
 def _has_non_lossless_facts() -> bool:
     bind = op.get_bind()
     queries = (
@@ -445,7 +578,7 @@ def _has_non_lossless_facts() -> bool:
         "WHERE p.tenant_id = b.tenant_id AND p.warehouse_id = b.warehouse_id "
         "AND p.spare_part_id = b.spare_part_id) LIMIT 1",
         "SELECT 1 FROM inventory_transactions WHERE operation_type <> 'MIGRATION_OPENING' "
-        "OR reference_type <> 'warehouse_inventories' LIMIT 1",
+        "OR reference_type IS NULL OR reference_type <> 'warehouse_inventories' LIMIT 1",
         "SELECT 1 FROM inventory_ledger_entries e JOIN inventory_transactions t ON t.id = e.transaction_id "
         "LEFT JOIN inventory_balances b ON b.id = e.balance_id "
         "WHERE t.operation_type <> 'MIGRATION_OPENING' OR b.id IS NULL OR e.serial_item_id IS NOT NULL "
@@ -458,7 +591,12 @@ def _has_non_lossless_facts() -> bool:
         "SELECT 1 WHERE (SELECT COUNT(*) FROM inventory_ledger_entries) <> (SELECT COUNT(*) FROM inventory_balances)",
         "SELECT 1 FROM inventory_balances b WHERE NOT EXISTS (SELECT 1 FROM inventory_ledger_entries e WHERE e.balance_id = b.id) LIMIT 1",
     )
-    return any(bind.execute(sa.text(query)).first() is not None for query in queries)
+    return (
+        any(bind.execute(sa.text(query)).first() is not None for query in queries)
+        or not _migration_locations_are_canonical()
+        or not _migration_transactions_are_canonical()
+        or not _migration_ledger_entries_are_canonical()
+    )
 
 
 def _create_legacy_inventory_table() -> None:
