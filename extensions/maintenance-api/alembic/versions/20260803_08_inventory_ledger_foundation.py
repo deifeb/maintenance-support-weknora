@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from decimal import Decimal
 
 import sqlalchemy as sa
@@ -41,6 +42,13 @@ SERIAL_ITEM_STATUSES = (
     "SCRAPPED",
     "FROZEN",
 )
+QUANTITY_COLUMNS = (
+    "on_hand_quantity",
+    "reserved_quantity",
+    "damaged_quantity",
+    "quarantined_quantity",
+    "in_transit_quantity",
+)
 
 
 def _timestamps() -> tuple[sa.Column, sa.Column]:
@@ -52,15 +60,60 @@ def _timestamps() -> tuple[sa.Column, sa.Column]:
 
 def _quantity_state(row: sa.RowMapping) -> dict[str, str]:
     return {
-        key: format(Decimal(str(row[key])).quantize(Decimal("0.0001")), ".4f")
-        for key in (
-            "on_hand_quantity",
-            "reserved_quantity",
-            "damaged_quantity",
-            "quarantined_quantity",
-            "in_transit_quantity",
+        key.removesuffix("_quantity"): format(
+            Decimal(str(row[key])).quantize(Decimal("0.0001")), ".4f"
         )
+        for key in QUANTITY_COLUMNS
     }
+
+
+def _migration_snapshot(row: sa.RowMapping) -> str:
+    last_counted_at = row["last_counted_at"]
+    if isinstance(last_counted_at, datetime):
+        last_counted = last_counted_at.isoformat()
+    elif last_counted_at is None:
+        last_counted = None
+    else:
+        last_counted = datetime.fromisoformat(str(last_counted_at)).isoformat()
+    return json.dumps({"legacy_last_counted_at": last_counted}, sort_keys=True)
+
+
+def _aggregate_quantities(query: str) -> dict[tuple[str, int, int], tuple[int, tuple[Decimal, ...]]]:
+    rows = op.get_bind().execute(sa.text(query)).mappings()
+    return {
+        (row["tenant_id"], row["warehouse_id"], row["spare_part_id"]): (
+            row["record_count"],
+            tuple(Decimal(str(row[column])) for column in QUANTITY_COLUMNS),
+        )
+        for row in rows
+    }
+
+
+def _assert_upgrade_conservation() -> None:
+    source = _aggregate_quantities(
+        "SELECT tenant_id, warehouse_id, spare_part_id, COUNT(*) AS record_count, "
+        + ", ".join(f"SUM({column}) AS {column}" for column in QUANTITY_COLUMNS)
+        + " FROM warehouse_inventories GROUP BY tenant_id, warehouse_id, spare_part_id"
+    )
+    balances = _aggregate_quantities(
+        "SELECT b.tenant_id, b.warehouse_id, b.spare_part_id, COUNT(*) AS record_count, "
+        + ", ".join(f"SUM(b.{column}) AS {column}" for column in QUANTITY_COLUMNS)
+        + " FROM inventory_balances b JOIN warehouse_locations l ON l.id = b.location_id "
+        "WHERE l.code = 'DEFAULT' AND b.lot_id IS NULL "
+        "GROUP BY b.tenant_id, b.warehouse_id, b.spare_part_id"
+    )
+    ledger = _aggregate_quantities(
+        "SELECT e.tenant_id, e.warehouse_id, e.spare_part_id, COUNT(*) AS record_count, "
+        + ", ".join(
+            f"SUM(e.{column.removesuffix('_quantity')}_delta) AS {column}"
+            for column in QUANTITY_COLUMNS
+        )
+        + " FROM inventory_ledger_entries e JOIN inventory_transactions t ON t.id = e.transaction_id "
+        "WHERE t.operation_type = 'MIGRATION_OPENING' "
+        "GROUP BY e.tenant_id, e.warehouse_id, e.spare_part_id"
+    )
+    if source != balances or source != ledger:
+        raise CommandError("inventory ledger migration conservation check failed")
 
 
 def _create_ledger_tables() -> None:
@@ -111,7 +164,7 @@ def _create_ledger_tables() -> None:
         "inventory_expiry_rules",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("tenant_id", sa.String(64), nullable=False),
-        sa.Column("scope_type", sa.Enum(*EXPIRY_RULE_SCOPE_TYPES, name="inventoryexpiryrulescopetype", native_enum=False, length=16), nullable=False),
+        sa.Column("scope_type", sa.Enum(*EXPIRY_RULE_SCOPE_TYPES, name="inventoryexpiryrulescopetype", native_enum=False, create_constraint=True, length=16), nullable=False),
         sa.Column("category", sa.String(100), nullable=True),
         sa.Column("spare_part_id", sa.Integer(), nullable=True),
         sa.Column("warning_days_json", sa.JSON(), nullable=False),
@@ -132,7 +185,7 @@ def _create_ledger_tables() -> None:
         sa.Column("manufacture_date", sa.Date(), nullable=True),
         sa.Column("received_date", sa.Date(), nullable=True),
         sa.Column("expiry_date", sa.Date(), nullable=True),
-        sa.Column("quality_status", sa.Enum(*LOT_QUALITY_STATUSES, name="inventorylotqualitystatus", native_enum=False, length=16), nullable=False),
+        sa.Column("quality_status", sa.Enum(*LOT_QUALITY_STATUSES, name="inventorylotqualitystatus", native_enum=False, create_constraint=True, length=16), nullable=False),
         sa.Column("is_frozen", sa.Boolean(), nullable=False),
         sa.Column("freeze_reason", sa.String(500), nullable=True),
         sa.Column("version", sa.Integer(), nullable=False),
@@ -152,7 +205,7 @@ def _create_ledger_tables() -> None:
         sa.Column("lot_id", sa.Integer(), nullable=True),
         sa.Column("warehouse_id", sa.Integer(), nullable=False),
         sa.Column("location_id", sa.Integer(), nullable=False),
-        sa.Column("status", sa.Enum(*SERIAL_ITEM_STATUSES, name="serializeditemstatus", native_enum=False, length=24), nullable=False),
+        sa.Column("status", sa.Enum(*SERIAL_ITEM_STATUSES, name="serializeditemstatus", native_enum=False, create_constraint=True, length=24), nullable=False),
         sa.Column("equipment_id", sa.Integer(), nullable=True),
         sa.Column("installation_position", sa.String(128), nullable=True),
         sa.Column("version", sa.Integer(), nullable=False),
@@ -209,7 +262,7 @@ def _create_ledger_tables() -> None:
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("tenant_id", sa.String(64), nullable=False),
         sa.Column("operation_type", sa.String(32), nullable=False),
-        sa.Column("status", sa.Enum(*TRANSACTION_STATUSES, name="inventorytransactionstatus", native_enum=False, length=24), nullable=False),
+        sa.Column("status", sa.Enum(*TRANSACTION_STATUSES, name="inventorytransactionstatus", native_enum=False, create_constraint=True, length=24), nullable=False),
         sa.Column("idempotency_key", sa.String(128), nullable=False),
         sa.Column("request_hash", sa.String(64), nullable=False),
         sa.Column("response_snapshot_json", sa.JSON(), nullable=True),
@@ -328,12 +381,13 @@ def _backfill_legacy_inventory() -> None:
             sa.text(
                 "INSERT INTO inventory_transactions "
                 "(tenant_id, operation_type, status, idempotency_key, request_hash, response_snapshot_json, reference_type, reference_id, reason, confirmation_token_hash, confirmation_expires_at, actor_user_id, actor_roles_json, request_id, reversed_transaction_id, version, created_at, updated_at, completed_at, failed_at) "
-                "VALUES (:tenant_id, 'MIGRATION_OPENING', 'COMPLETED', :idempotency_key, :request_hash, NULL, 'warehouse_inventories', :reference_id, 'legacy inventory migration opening balance', NULL, NULL, 'system-migration', :actor_roles_json, :request_id, NULL, 1, :created_at, :updated_at, :completed_at, NULL)"
+                "VALUES (:tenant_id, 'MIGRATION_OPENING', 'COMPLETED', :idempotency_key, :request_hash, :response_snapshot_json, 'warehouse_inventories', :reference_id, 'legacy inventory migration opening balance', NULL, NULL, 'system-migration', :actor_roles_json, :request_id, NULL, 1, :created_at, :updated_at, :completed_at, NULL)"
             ),
             {
                 "tenant_id": row["tenant_id"],
                 "idempotency_key": idempotency_key,
                 "request_hash": "0" * 64,
+                "response_snapshot_json": _migration_snapshot(row),
                 "reference_id": str(row["id"]),
                 "actor_roles_json": json.dumps(["SYSTEM"]),
                 "request_id": f"migration-20260803-08-{row['id']}",
@@ -370,16 +424,39 @@ def _backfill_legacy_inventory() -> None:
 def upgrade() -> None:
     _create_ledger_tables()
     _backfill_legacy_inventory()
+    _assert_upgrade_conservation()
     op.drop_table("warehouse_inventories")
 
 
-def _has_granular_facts() -> bool:
+def _has_non_lossless_facts() -> bool:
     bind = op.get_bind()
     queries = (
         "SELECT 1 FROM warehouse_locations WHERE code <> 'DEFAULT' LIMIT 1",
         "SELECT 1 FROM inventory_lots LIMIT 1",
         "SELECT 1 FROM serialized_items LIMIT 1",
         "SELECT 1 FROM inventory_balances WHERE lot_id IS NOT NULL LIMIT 1",
+        "SELECT 1 FROM inventory_expiry_rules LIMIT 1",
+        "SELECT 1 FROM inventory_policies p WHERE NOT EXISTS ("
+        "SELECT 1 FROM inventory_balances b JOIN warehouse_locations l ON l.id = b.location_id "
+        "WHERE b.tenant_id = p.tenant_id AND b.warehouse_id = p.warehouse_id "
+        "AND b.spare_part_id = p.spare_part_id AND b.lot_id IS NULL AND l.code = 'DEFAULT') LIMIT 1",
+        "SELECT 1 FROM inventory_balances b JOIN warehouse_locations l ON l.id = b.location_id "
+        "WHERE l.code <> 'DEFAULT' OR NOT EXISTS (SELECT 1 FROM inventory_policies p "
+        "WHERE p.tenant_id = b.tenant_id AND p.warehouse_id = b.warehouse_id "
+        "AND p.spare_part_id = b.spare_part_id) LIMIT 1",
+        "SELECT 1 FROM inventory_transactions WHERE operation_type <> 'MIGRATION_OPENING' "
+        "OR reference_type <> 'warehouse_inventories' LIMIT 1",
+        "SELECT 1 FROM inventory_ledger_entries e JOIN inventory_transactions t ON t.id = e.transaction_id "
+        "LEFT JOIN inventory_balances b ON b.id = e.balance_id "
+        "WHERE t.operation_type <> 'MIGRATION_OPENING' OR b.id IS NULL OR e.serial_item_id IS NOT NULL "
+        "OR e.lot_id IS NOT NULL OR e.tenant_id <> b.tenant_id OR e.warehouse_id <> b.warehouse_id "
+        "OR e.location_id <> b.location_id OR e.spare_part_id <> b.spare_part_id "
+        "OR e.on_hand_delta <> b.on_hand_quantity OR e.reserved_delta <> b.reserved_quantity "
+        "OR e.damaged_delta <> b.damaged_quantity OR e.quarantined_delta <> b.quarantined_quantity "
+        "OR e.in_transit_delta <> b.in_transit_quantity LIMIT 1",
+        "SELECT 1 WHERE (SELECT COUNT(*) FROM inventory_transactions) <> (SELECT COUNT(*) FROM inventory_balances)",
+        "SELECT 1 WHERE (SELECT COUNT(*) FROM inventory_ledger_entries) <> (SELECT COUNT(*) FROM inventory_balances)",
+        "SELECT 1 FROM inventory_balances b WHERE NOT EXISTS (SELECT 1 FROM inventory_ledger_entries e WHERE e.balance_id = b.id) LIMIT 1",
     )
     return any(bind.execute(sa.text(query)).first() is not None for query in queries)
 
@@ -428,21 +505,18 @@ def _backfill_legacy_from_balances() -> None:
     bind = op.get_bind()
     rows = bind.execute(
         sa.text(
-            "SELECT b.tenant_id, b.warehouse_id, b.spare_part_id, "
-            "SUM(b.on_hand_quantity) AS on_hand_quantity, "
-            "SUM(b.reserved_quantity) AS reserved_quantity, "
-            "SUM(b.damaged_quantity) AS damaged_quantity, "
-            "SUM(b.quarantined_quantity) AS quarantined_quantity, "
-            "SUM(b.in_transit_quantity) AS in_transit_quantity, "
-            "MAX(b.version) AS version, MAX(b.created_at) AS created_at, MAX(b.updated_at) AS updated_at, "
-            "MAX(p.safety_stock) AS safety_stock, MAX(p.reorder_point) AS reorder_point, "
-            "MAX(p.maximum_stock) AS maximum_stock, MAX(p.notes) AS notes "
+            "SELECT b.tenant_id, b.warehouse_id, b.spare_part_id, b.on_hand_quantity, "
+            "b.reserved_quantity, b.damaged_quantity, b.quarantined_quantity, b.in_transit_quantity, "
+            "b.version, b.created_at, b.updated_at, p.safety_stock, p.reorder_point, "
+            "p.maximum_stock, p.notes, t.response_snapshot_json "
             "FROM inventory_balances b "
             "JOIN warehouse_locations l ON l.id = b.location_id "
-            "LEFT JOIN inventory_policies p ON p.tenant_id = b.tenant_id "
+            "JOIN inventory_policies p ON p.tenant_id = b.tenant_id "
             "AND p.warehouse_id = b.warehouse_id AND p.spare_part_id = b.spare_part_id "
+            "JOIN inventory_ledger_entries e ON e.balance_id = b.id "
+            "JOIN inventory_transactions t ON t.id = e.transaction_id "
             "WHERE l.code = 'DEFAULT' AND b.lot_id IS NULL "
-            "GROUP BY b.tenant_id, b.warehouse_id, b.spare_part_id"
+            "AND t.operation_type = 'MIGRATION_OPENING'"
         )
     ).mappings()
     for row in rows:
@@ -450,14 +524,22 @@ def _backfill_legacy_from_balances() -> None:
             sa.text(
                 "INSERT INTO warehouse_inventories "
                 "(warehouse_id, spare_part_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, safety_stock, reorder_point, maximum_stock, last_counted_at, notes, tenant_id, version, created_at, updated_at) "
-                "VALUES (:warehouse_id, :spare_part_id, :on_hand_quantity, :reserved_quantity, :damaged_quantity, :quarantined_quantity, :in_transit_quantity, :safety_stock, :reorder_point, :maximum_stock, NULL, :notes, :tenant_id, :version, :created_at, :updated_at)"
+                "VALUES (:warehouse_id, :spare_part_id, :on_hand_quantity, :reserved_quantity, :damaged_quantity, :quarantined_quantity, :in_transit_quantity, :safety_stock, :reorder_point, :maximum_stock, :last_counted_at, :notes, :tenant_id, :version, :created_at, :updated_at)"
             ),
-            dict(row),
+            {**dict(row), "last_counted_at": _legacy_last_counted_at(row["response_snapshot_json"])},
         )
 
 
+def _legacy_last_counted_at(snapshot: object) -> datetime | None:
+    if snapshot is None:
+        return None
+    payload = snapshot if isinstance(snapshot, dict) else json.loads(str(snapshot))
+    value = payload.get("legacy_last_counted_at")
+    return datetime.fromisoformat(value) if value else None
+
+
 def downgrade() -> None:
-    if _has_granular_facts():
+    if _has_non_lossless_facts():
         raise CommandError("inventory ledger contains granular facts")
     _create_legacy_inventory_table()
     _backfill_legacy_from_balances()

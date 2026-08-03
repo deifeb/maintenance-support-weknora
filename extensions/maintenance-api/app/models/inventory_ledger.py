@@ -118,6 +118,7 @@ class InventoryExpiryRule(Base, TenantScopedMixin, VersionedMixin, TimestampMixi
             *EXPIRY_RULE_SCOPE_TYPES,
             name="inventoryexpiryrulescopetype",
             native_enum=False,
+            create_constraint=True,
             length=16,
         ),
         nullable=False,
@@ -144,7 +145,7 @@ class InventoryLot(Base, TenantScopedMixin, VersionedMixin, TimestampMixin):
     received_date: Mapped[date | None] = mapped_column(Date)
     expiry_date: Mapped[date | None] = mapped_column(Date)
     quality_status: Mapped[str] = mapped_column(
-        Enum(*LOT_QUALITY_STATUSES, name="inventorylotqualitystatus", native_enum=False, length=16),
+        Enum(*LOT_QUALITY_STATUSES, name="inventorylotqualitystatus", native_enum=False, create_constraint=True, length=16),
         nullable=False,
         default="AVAILABLE",
     )
@@ -171,7 +172,7 @@ class SerializedItem(Base, TenantScopedMixin, VersionedMixin, TimestampMixin):
         ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(
-        Enum(*SERIAL_ITEM_STATUSES, name="serializeditemstatus", native_enum=False, length=24),
+        Enum(*SERIAL_ITEM_STATUSES, name="serializeditemstatus", native_enum=False, create_constraint=True, length=24),
         nullable=False,
         default="IN_STOCK",
     )
@@ -249,7 +250,7 @@ class InventoryTransaction(Base, TimestampMixin):
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     operation_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(
-        Enum(*TRANSACTION_STATUSES, name="inventorytransactionstatus", native_enum=False, length=24),
+        Enum(*TRANSACTION_STATUSES, name="inventorytransactionstatus", native_enum=False, create_constraint=True, length=24),
         nullable=False,
     )
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
