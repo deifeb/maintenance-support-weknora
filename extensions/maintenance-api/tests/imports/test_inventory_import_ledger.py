@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from app.core.exceptions import BusinessValidationError, ConflictError
@@ -116,6 +117,22 @@ def _apply(session, actor_admin, *, task_id: str, content: bytes):
         content=content,
         filename="inventory.xlsx",
     )
+
+
+def _sync_apply(session, actor_admin, *, content: bytes):
+    return master_data_import_service.apply(
+        session,
+        actor=actor_admin,
+        content=content,
+        filename="inventory.xlsx",
+    )
+
+
+def _xlsx_byte_variant(content: bytes, marker: str) -> bytes:
+    stream = BytesIO(content)
+    with ZipFile(stream, "a", compression=ZIP_DEFLATED) as archive:
+        archive.writestr(f"custom/retry-{marker}.txt", marker)
+    return stream.getvalue()
 
 
 def test_inventory_create_writes_policy_default_opening_and_five_component_ledger(
@@ -281,6 +298,95 @@ def test_same_task_replay_is_zero_duplicate_and_changed_payload_conflicts(
             content=_inventory_workbook(on_hand="13.5000"),
         )
     assert raised.value.code == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_sync_logically_identical_byte_different_workbook_replays_same_receipt(
+    session,
+    actor_admin,
+):
+    _catalog(session)
+    original = _inventory_workbook()
+    byte_variant = _xlsx_byte_variant(original, "different-container-bytes")
+    assert original != byte_variant
+
+    _sync_apply(session, actor_admin, content=original)
+    session.commit()
+    _sync_apply(session, actor_admin, content=byte_variant)
+    session.commit()
+
+    assert session.scalar(select(func.count()).select_from(InventoryTargetReceipt)) == 1
+    assert session.scalar(select(func.count()).select_from(InventoryTransaction)) == 1
+    assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 1
+
+
+def test_sync_command_identity_is_canonical_but_row_order_sensitive():
+    assert hasattr(master_data_import_service, "_synchronous_task_id")
+    first = {
+        "08_库存": [
+            {"_row": 2, "operation": "UPDATE", "on_hand_quantity": Decimal("1")},
+            {"_row": 3, "operation": "UPDATE", "on_hand_quantity": Decimal("2")},
+        ]
+    }
+    logically_same = {
+        "08_库存": [
+            {"on_hand_quantity": Decimal("1.0000"), "operation": "UPDATE", "_row": 2},
+            {"on_hand_quantity": Decimal("2.0000"), "operation": "UPDATE", "_row": 3},
+        ]
+    }
+    changed_cell = {
+        "08_库存": [
+            {"_row": 2, "operation": "UPDATE", "on_hand_quantity": Decimal("9")},
+            {"_row": 3, "operation": "UPDATE", "on_hand_quantity": Decimal("2")},
+        ]
+    }
+    reordered = {"08_库存": list(reversed(first["08_库存"]))}
+    identity = master_data_import_service._synchronous_task_id(
+        normalized=first,
+        mapping={"08_库存": {"现存数量": "on_hand_quantity"}},
+        template_version="1.0",
+    )
+    assert identity == master_data_import_service._synchronous_task_id(
+        normalized=logically_same,
+        mapping={"08_库存": {"现存数量": "on_hand_quantity"}},
+        template_version="1.0",
+    )
+    assert identity != master_data_import_service._synchronous_task_id(
+        normalized=changed_cell,
+        mapping={"08_库存": {"现存数量": "on_hand_quantity"}},
+        template_version="1.0",
+    )
+    assert identity != master_data_import_service._synchronous_task_id(
+        normalized=reordered,
+        mapping={"08_库存": {"现存数量": "on_hand_quantity"}},
+        template_version="1.0",
+    )
+    assert identity != master_data_import_service._synchronous_task_id(
+        normalized=first,
+        mapping={"08_库存": {"现存数量": "on_hand_quantity"}},
+        template_version="2.0",
+    )
+
+
+def test_explicit_queued_task_uuid_remains_receipt_identity_across_zip_bytes(
+    session,
+    actor_admin,
+):
+    _catalog(session)
+    original = _inventory_workbook()
+    _apply(session, actor_admin, task_id="immutable-task-uuid", content=original)
+    session.commit()
+    _apply(
+        session,
+        actor_admin,
+        task_id="immutable-task-uuid",
+        content=_xlsx_byte_variant(original, "queued-retry"),
+    )
+    session.commit()
+
+    receipt = session.scalar(select(InventoryTargetReceipt))
+    assert receipt is not None
+    assert receipt.idempotency_key == "import:immutable-task-uuid:08_库存:2"
+    assert session.scalar(select(func.count()).select_from(InventoryTargetReceipt)) == 1
 
 
 def test_zero_quantity_row_still_records_source_receipt_and_rejects_reuse(

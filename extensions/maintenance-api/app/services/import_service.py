@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections import defaultdict
 from decimal import Decimal
 from typing import Any, Callable
@@ -11,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.exceptions import BusinessValidationError
+from app.importers.inspection import TEMPLATE_VERSION
 from app.importers.parser import (
     WorkbookParser,
     normalize_code,
@@ -55,6 +55,7 @@ from app.schemas.reliability import ReliabilityProfileCreate
 from app.schemas.supplier import SupplierCreate, SupplierOfferCreate
 from app.security.actor import ActorContext
 from app.services.inventory_target_adapter import inventory_target_adapter
+from app.services.snapshot_service import snapshot_service
 
 SHEET_EQUIPMENT = "01_装备型号"
 SHEET_CONFIGURATION = "02_构型版本"
@@ -845,6 +846,23 @@ class MasterDataImportService:
             mapping=mapping,
         )
         normalized = self._normalized_rows(parsed, errors)
+        return self._validate_normalized(
+            session,
+            tenant_id=tenant_id,
+            normalized=normalized,
+            errors=errors,
+            task_id=task_id,
+        )
+
+    def _validate_normalized(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        normalized: dict[str, list[dict[str, Any]]],
+        errors: list[ImportIssue],
+        task_id: str | None,
+    ) -> ImportValidationResult:
         self._duplicate_key_checks(normalized, errors)
         self._operation_checks(
             session,
@@ -883,6 +901,26 @@ class MasterDataImportService:
         )
 
     @staticmethod
+    def _synchronous_task_id(
+        *,
+        normalized: dict[str, list[dict[str, Any]]],
+        mapping: dict[str, dict[str, str]] | None,
+        template_version: str,
+    ) -> str:
+        command = {
+            "template_version": template_version,
+            "mapping": mapping or {},
+            "sheets": [
+                {
+                    "name": sheet_name,
+                    "rows": normalized.get(sheet_name, []),
+                }
+                for sheet_name in SHEET_SPECS
+            ],
+        }
+        return snapshot_service.canonical_hash(command)
+
+    @staticmethod
     def _apply(
         instance: Any,
         data: dict[str, Any],
@@ -903,13 +941,22 @@ class MasterDataImportService:
         task_id: str | None = None,
     ) -> ImportExecutionResult:
         tenant_id = actor.tenant_id
-        stable_task_id = task_id or hashlib.sha256(content).hexdigest()
-        validation = self.validate(
-            session,
-            tenant_id=tenant_id,
+        parsed, errors = self._parse(
             content=content,
             filename=filename,
             mapping=mapping,
+        )
+        normalized = self._normalized_rows(parsed, errors)
+        stable_task_id = task_id or self._synchronous_task_id(
+            normalized=normalized,
+            mapping=mapping,
+            template_version=TEMPLATE_VERSION,
+        )
+        validation = self._validate_normalized(
+            session,
+            tenant_id=tenant_id,
+            normalized=normalized,
+            errors=errors,
             task_id=stable_task_id,
         )
         if not validation.valid:
@@ -921,13 +968,6 @@ class MasterDataImportService:
                 ],
                 code="IMPORT_VALIDATION_FAILED",
             )
-
-        parsed, errors = self._parse(
-            content=content,
-            filename=filename,
-            mapping=mapping,
-        )
-        normalized = self._normalized_rows(parsed, errors)
         created: defaultdict[str, int] = defaultdict(int)
         updated: defaultdict[str, int] = defaultdict(int)
 
