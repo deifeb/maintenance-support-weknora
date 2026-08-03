@@ -1,10 +1,21 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from app.models.enums import WarehouseStatus
 from app.schemas.base import CodeModel, ORMModel, TimestampRead
+from app.schemas.inventory_ledger import (
+    InventoryQuantityDelta,
+    InventoryTransactionRead,
+)
 
 
 class WarehouseBase(CodeModel):
@@ -83,6 +94,9 @@ class WarehouseInventoryUpdate(BaseModel):
 
 
 class InventoryAdjustment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
     on_hand_delta: Decimal = Decimal("0")
     reserved_delta: Decimal = Decimal("0")
     damaged_delta: Decimal = Decimal("0")
@@ -90,9 +104,32 @@ class InventoryAdjustment(BaseModel):
     in_transit_delta: Decimal = Decimal("0")
     reason: str = Field(min_length=1, max_length=500)
 
+    @field_validator(
+        "on_hand_delta",
+        "reserved_delta",
+        "damaged_delta",
+        "quarantined_delta",
+        "in_transit_delta",
+        mode="before",
+    )
+    @classmethod
+    def validate_exact_delta(cls, value):
+        return InventoryQuantityDelta.validate_numeric_18_4(value)
+
+    def quantity_delta(self) -> InventoryQuantityDelta:
+        return InventoryQuantityDelta(
+            on_hand=self.on_hand_delta,
+            reserved=self.reserved_delta,
+            damaged=self.damaged_delta,
+            quarantined=self.quarantined_delta,
+            in_transit=self.in_transit_delta,
+        )
+
 
 class WarehouseInventoryRead(ORMModel):
     id: int
+    version: int
+    policy_version: int
     warehouse_id: int
     spare_part_id: int
     on_hand_quantity: Decimal
@@ -117,3 +154,8 @@ class WarehouseInventoryRead(ORMModel):
             - self.damaged_quantity
             - self.quarantined_quantity
         )
+
+
+class InventoryAdjustmentRead(BaseModel):
+    transaction: InventoryTransactionRead
+    summary: WarehouseInventoryRead

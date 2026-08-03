@@ -677,9 +677,11 @@ def test_custom_service_target_ids_are_tenant_scoped(
             actor,
             inventory_b.id,
             InventoryAdjustment(
+                expected_version=1,
                 on_hand_delta=Decimal("1"),
                 reason="foreign",
             ),
+            idempotency_key="foreign-inventory-adjust",
         )
 
     with pytest.raises(NotFoundError):
@@ -822,7 +824,9 @@ def test_inventory_adjust_rejects_foreign_spare_reference(
             actor,
             inventory.id,
             InventoryAdjustment(
+                expected_version=1,
                 on_hand_delta=Decimal("1"),
                 reason="foreign-spare",
             ),
+            idempotency_key="foreign-spare-inventory-adjust",
         )

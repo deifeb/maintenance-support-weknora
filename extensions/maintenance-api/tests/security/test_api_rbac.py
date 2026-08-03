@@ -42,6 +42,7 @@ MASTER_ROLE_BY_METHOD = {
 MASTER_ROLE_BY_FUNCTION = {
     "read_import_task": "require_contributor",
     "download_import_errors": "require_contributor",
+    "adjust_inventory": "require_admin",
 }
 DEMAND_ROLE_BY_FUNCTION = {
     "create_draft": "require_contributor",

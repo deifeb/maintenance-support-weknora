@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.v1.master_data.common import list_params
@@ -9,16 +9,22 @@ from app.db.session import get_db_session
 from app.schemas.common import MaintenanceSuccessResponse, PageData
 from app.schemas.inventory import (
     InventoryAdjustment,
+    InventoryAdjustmentRead,
     WarehouseInventoryCreate,
     WarehouseInventoryRead,
     WarehouseInventoryUpdate,
 )
 from app.security.actor import ActorContext
-from app.security.permissions import require_contributor, require_viewer
+from app.security.permissions import (
+    require_admin,
+    require_contributor,
+    require_viewer,
+)
 from app.services import inventory_service
 
 router = APIRouter(prefix="/inventories", tags=["master-data: inventories"])
 SessionDep = Annotated[Session, Depends(get_db_session)]
+AdminDep = Annotated[ActorContext, Depends(require_admin)]
 
 
 @router.post(
@@ -78,19 +84,34 @@ def update_inventory(
     )
 
 
-@router.post("/{identifier}/adjust", response_model=MaintenanceSuccessResponse[WarehouseInventoryRead])
+@router.post(
+    "/{identifier}/adjust",
+    response_model=MaintenanceSuccessResponse[InventoryAdjustmentRead],
+)
 def adjust_inventory(
     identifier: int,
     payload: InventoryAdjustment,
     session: SessionDep,
-    actor: Annotated[ActorContext, Depends(require_contributor)],
-):
-    item = inventory_service.adjust(session, actor, identifier, payload)
-    return success_response(
-        WarehouseInventoryRead.model_validate(
-            item
+    actor: AdminDep,
+    idempotency_key: Annotated[
+        str,
+        Header(
+            alias="Idempotency-Key",
+            min_length=1,
+            max_length=128,
         ),
+    ],
+):
+    item = inventory_service.adjust(
+        session,
+        actor,
+        identifier,
+        payload,
+        idempotency_key=idempotency_key,
+    )
+    return success_response(
+        item,
         "Inventory adjusted",
         actor=actor,
-        version=item.version,
+        version=item.summary.version,
     )

@@ -122,14 +122,30 @@ def test_inventory_adjustment_and_frozen_warehouse(session, actor_admin) -> None
         ),
     )
     adjusted = inventory_service.adjust(
-        session, actor_admin, inventory.id, InventoryAdjustment(on_hand_delta=5, reason="count")
+        session,
+        actor_admin,
+        inventory.id,
+        InventoryAdjustment(
+            expected_version=inventory.version,
+            on_hand_delta=5,
+            reason="count",
+        ),
+        idempotency_key="service-inventory-count",
     )
-    assert adjusted.on_hand_quantity == Decimal("15.0000")
+    assert adjusted.summary.on_hand_quantity == Decimal("5.0000")
     warehouse.status = WarehouseStatus.FROZEN
     session.commit()
     with pytest.raises(ConflictError):
         inventory_service.adjust(
-            session, actor_admin, inventory.id, InventoryAdjustment(on_hand_delta=1, reason="blocked")
+            session,
+            actor_admin,
+            inventory.id,
+            InventoryAdjustment(
+                expected_version=adjusted.summary.version,
+                on_hand_delta=1,
+                reason="blocked",
+            ),
+            idempotency_key="service-inventory-blocked",
         )
 
 
