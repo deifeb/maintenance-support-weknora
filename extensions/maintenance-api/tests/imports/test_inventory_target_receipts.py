@@ -26,6 +26,21 @@ from app.services.inventory_target_adapter import (
 )
 from app.services.snapshot_service import snapshot_service
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.schema import CreateTable
+
+
+def test_inventory_target_receipt_constraints_compile_for_postgresql():
+    ddl = str(
+        CreateTable(InventoryTargetReceipt.__table__).compile(
+            dialect=postgresql.dialect()
+        )
+    )
+
+    assert "CONSTRAINT uq_inventory_target_receipt_tenant_key UNIQUE" in ddl
+    assert "CONSTRAINT ck_inventory_target_receipt_status" in ddl
+    assert "CONSTRAINT ck_inventory_target_receipt_state" in ddl
+    assert "CONSTRAINT ck_inventory_target_receipt_source_hash" in ddl
 
 
 def _identity(session, *, code: str, quantity: str = "0"):
