@@ -9,6 +9,7 @@ from app.core.exceptions import (
     InsufficientMaintenanceRoleError,
     NotFoundError,
 )
+from app.db.session import SessionLocal
 from app.models import (
     InventoryBalance,
     InventoryLedgerEntry,
@@ -430,5 +431,195 @@ def test_caller_controls_outer_commit(session, actor_admin) -> None:
     persisted = session.get(InventoryBalance, balance_id)
     assert persisted.on_hand_quantity == Decimal("0.0000")
     assert persisted.version == 1
+    assert session.scalar(select(func.count()).select_from(InventoryTransaction)) == 0
+    assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 0
+
+
+def test_same_balance_race_rechecks_receipt_after_lock_and_replays(
+    session,
+    actor_admin,
+) -> None:
+    (
+        InventoryQuantityDelta,
+        InventoryTransactionRepository,
+        InventoryTransactionService,
+        service,
+    ) = _transaction_api()
+    balance = _seed_balance(session, suffix="RACE-SAME")
+    session.commit()
+    balance_id = balance.id
+    winner_session = SessionLocal()
+    loser_session = SessionLocal()
+
+    class FirstReadIsStaleRepository(InventoryTransactionRepository):
+        def __init__(self) -> None:
+            self.stale_reads = 1
+
+        def get_idempotent(self, *args, **kwargs):
+            if self.stale_reads:
+                self.stale_reads -= 1
+                return None
+            return super().get_idempotent(*args, **kwargs)
+
+    try:
+        winner = service.adjust(
+            winner_session,
+            actor_admin,
+            balance_id=balance_id,
+            expected_version=1,
+            deltas=InventoryQuantityDelta(on_hand=Decimal("3")),
+            reason="concurrent correction",
+            idempotency_key="race-same-balance",
+        )
+        winner_session.commit()
+        loser_service = InventoryTransactionService(
+            transaction_repository=FirstReadIsStaleRepository()
+        )
+
+        replay = loser_service.adjust(
+            loser_session,
+            actor_admin,
+            balance_id=balance_id,
+            expected_version=1,
+            deltas=InventoryQuantityDelta(on_hand=Decimal("3")),
+            reason="concurrent correction",
+            idempotency_key="race-same-balance",
+        )
+
+        assert replay == winner
+        assert loser_session.scalar(
+            select(func.count()).select_from(InventoryTransaction)
+        ) == 1
+        assert loser_session.scalar(
+            select(func.count()).select_from(InventoryLedgerEntry)
+        ) == 1
+    finally:
+        loser_session.rollback()
+        loser_session.close()
+        winner_session.close()
+
+
+def test_different_balance_race_recovers_unique_winner_as_domain_conflict(
+    session,
+    actor_admin,
+) -> None:
+    (
+        InventoryQuantityDelta,
+        InventoryTransactionRepository,
+        InventoryTransactionService,
+        service,
+    ) = _transaction_api()
+    winner_balance = _seed_balance(session, suffix="RACE-WINNER")
+    loser_balance = _seed_balance(session, suffix="RACE-LOSER")
+    session.commit()
+    winner_balance_id = winner_balance.id
+    loser_balance_id = loser_balance.id
+    winner_session = SessionLocal()
+    loser_session = SessionLocal()
+
+    class ReadsBeforeUniqueFlushAreStaleRepository(InventoryTransactionRepository):
+        def __init__(self) -> None:
+            self.stale_reads = 2
+
+        def get_idempotent(self, *args, **kwargs):
+            if self.stale_reads:
+                self.stale_reads -= 1
+                return None
+            return super().get_idempotent(*args, **kwargs)
+
+    try:
+        winner = service.adjust(
+            winner_session,
+            actor_admin,
+            balance_id=winner_balance_id,
+            expected_version=1,
+            deltas=InventoryQuantityDelta(on_hand=Decimal("1")),
+            reason="winner correction",
+            idempotency_key="race-different-balance",
+        )
+        winner_session.commit()
+        loser_service = InventoryTransactionService(
+            transaction_repository=ReadsBeforeUniqueFlushAreStaleRepository()
+        )
+
+        with pytest.raises(ConflictError) as exc_info:
+            loser_service.adjust(
+                loser_session,
+                actor_admin,
+                balance_id=loser_balance_id,
+                expected_version=1,
+                deltas=InventoryQuantityDelta(on_hand=Decimal("2")),
+                reason="loser correction",
+                idempotency_key="race-different-balance",
+            )
+
+        assert exc_info.value.code == "IDEMPOTENCY_KEY_REUSED"
+        assert loser_session.scalar(
+            select(func.count()).select_from(InventoryTransaction)
+        ) == 1
+        assert loser_session.scalar(
+            select(func.count()).select_from(InventoryLedgerEntry)
+        ) == 1
+        persisted_winner = loser_session.get(InventoryTransaction, winner.id)
+        assert persisted_winner.response_snapshot_json == winner.model_dump(mode="json")
+        persisted_loser = loser_session.get(InventoryBalance, loser_balance_id)
+        assert persisted_loser.on_hand_quantity == Decimal("0.0000")
+        assert persisted_loser.version == 1
+    finally:
+        loser_session.rollback()
+        loser_session.close()
+        winner_session.close()
+
+
+def test_idempotency_key_and_reason_accept_persistence_boundaries(
+    session,
+    actor_admin,
+) -> None:
+    InventoryQuantityDelta, _, _, service = _transaction_api()
+    balance = _seed_balance(session, suffix="TEXT-BOUNDARY")
+
+    result = service.adjust(
+        session,
+        actor_admin,
+        balance_id=balance.id,
+        expected_version=1,
+        deltas=InventoryQuantityDelta(on_hand=Decimal("1")),
+        reason="r" * 500,
+        idempotency_key="k" * 128,
+    )
+
+    assert result.idempotency_key == "k" * 128
+    assert result.reason == "r" * 500
+
+
+@pytest.mark.parametrize(
+    ("idempotency_key", "reason", "expected_code"),
+    [
+        ("k" * 129, "valid reason", "INVALID_IDEMPOTENCY_KEY"),
+        ("valid-key", "r" * 501, "INVENTORY_REASON_INVALID"),
+    ],
+)
+def test_idempotency_key_and_reason_reject_values_over_persistence_limits(
+    session,
+    actor_admin,
+    idempotency_key,
+    reason,
+    expected_code,
+) -> None:
+    InventoryQuantityDelta, _, _, service = _transaction_api()
+    balance = _seed_balance(session, suffix=expected_code)
+
+    with pytest.raises(BusinessValidationError) as exc_info:
+        service.adjust(
+            session,
+            actor_admin,
+            balance_id=balance.id,
+            expected_version=1,
+            deltas=InventoryQuantityDelta(on_hand=Decimal("1")),
+            reason=reason,
+            idempotency_key=idempotency_key,
+        )
+
+    assert exc_info.value.code == expected_code
     assert session.scalar(select(func.count()).select_from(InventoryTransaction)) == 0
     assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 0

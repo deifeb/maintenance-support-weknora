@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 from sqlalchemy import false, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
@@ -102,16 +103,8 @@ class InventoryTransactionService:
         reason: str,
         idempotency_key: str,
     ) -> InventoryTransactionRead:
-        clean_reason = self._required_text(
-            reason,
-            field="reason",
-            code="INVENTORY_REASON_REQUIRED",
-        )
-        clean_key = self._required_text(
-            idempotency_key,
-            field="idempotency_key",
-            code="IDEMPOTENCY_KEY_REQUIRED",
-        )
+        clean_reason = self._normalize_reason(reason)
+        clean_key = self._normalize_idempotency_key(idempotency_key)
         if all(value == 0 for value in self._delta_values(deltas)):
             raise BusinessValidationError(
                 "quantity operation requires a nonzero delta",
@@ -128,74 +121,101 @@ class InventoryTransactionService:
         )
 
         self._ensure_savepoint_parent_transaction(session)
-        with session.begin_nested():
-            existing = self.transaction_repository.get_idempotent(
+        try:
+            with session.begin_nested():
+                existing = self.transaction_repository.get_idempotent(
+                    session,
+                    actor.tenant_id,
+                    operation_type,
+                    clean_key,
+                )
+                if existing is not None:
+                    return self._replay(actor, existing, request_hash)
+
+                locked = self.ledger_repository.lock_balances(
+                    session,
+                    actor.tenant_id,
+                    [balance_id],
+                )
+                if not locked:
+                    raise NotFoundError("inventory_balance", balance_id)
+                balance = locked[0]
+                existing = self.transaction_repository.get_idempotent(
+                    session,
+                    actor.tenant_id,
+                    operation_type,
+                    clean_key,
+                )
+                if existing is not None:
+                    return self._replay(actor, existing, request_hash)
+                self._require_version(
+                    actor,
+                    balance,
+                    expected_version=expected_version,
+                )
+                before_version = balance.version
+                before_values = self._balance_values(balance)
+                after_values = tuple(
+                    current + delta
+                    for current, delta in zip(
+                        before_values,
+                        self._delta_values(deltas),
+                        strict=True,
+                    )
+                )
+                self._validate_result(after_values)
+                state_before = decimal_state_from_values(before_values)
+                state_after = decimal_state_from_values(after_values)
+
+                self._write_balance(balance, after_values)
+                balance.version = before_version + 1
+                transaction = self.transaction_repository.create_transaction(
+                    session,
+                    actor=actor,
+                    operation_type=operation_type,
+                    idempotency_key=clean_key,
+                    request_hash=request_hash,
+                    reason=clean_reason,
+                )
+                entry = self.transaction_repository.append_entry(
+                    session,
+                    transaction=transaction,
+                    balance=balance,
+                    deltas=deltas,
+                    state_before=state_before,
+                    state_after=state_after,
+                    before_balance_version=before_version,
+                    resulting_balance_version=balance.version,
+                )
+                completed_at = utc_now()
+                transaction.completed_at = completed_at
+                response = self._read_transaction(transaction, [entry])
+                snapshot = response.model_dump(mode="json")
+                self.transaction_repository.complete(
+                    session,
+                    transaction,
+                    completed_at=completed_at,
+                    response_snapshot=snapshot,
+                )
+                return response
+        except IntegrityError as exc:
+            winner = self.transaction_repository.get_idempotent(
                 session,
                 actor.tenant_id,
                 operation_type,
                 clean_key,
             )
-            if existing is not None:
-                return self._replay(actor, existing, request_hash)
-
-            locked = self.ledger_repository.lock_balances(
-                session,
-                actor.tenant_id,
-                [balance_id],
+            if winner is not None:
+                return self._replay(actor, winner, request_hash)
+            conflict = ConflictError(
+                "inventory transaction conflict",
+                details={
+                    "conflict_object": "inventory_transaction",
+                    "retryable": True,
+                },
             )
-            if not locked:
-                raise NotFoundError("inventory_balance", balance_id)
-            balance = locked[0]
-            self._require_version(
-                actor,
-                balance,
-                expected_version=expected_version,
-            )
-            before_version = balance.version
-            before_values = self._balance_values(balance)
-            after_values = tuple(
-                current + delta
-                for current, delta in zip(
-                    before_values,
-                    self._delta_values(deltas),
-                    strict=True,
-                )
-            )
-            self._validate_result(after_values)
-            state_before = decimal_state_from_values(before_values)
-            state_after = decimal_state_from_values(after_values)
-
-            self._write_balance(balance, after_values)
-            balance.version = before_version + 1
-            transaction = self.transaction_repository.create_transaction(
-                session,
-                actor=actor,
-                operation_type=operation_type,
-                idempotency_key=clean_key,
-                request_hash=request_hash,
-                reason=clean_reason,
-            )
-            entry = self.transaction_repository.append_entry(
-                session,
-                transaction=transaction,
-                balance=balance,
-                deltas=deltas,
-                state_before=state_before,
-                state_after=state_after,
-                before_balance_version=before_version,
-                resulting_balance_version=balance.version,
-            )
-            completed_at = utc_now()
-            transaction.completed_at = completed_at
-            response = self._read_transaction(transaction, [entry])
-            snapshot = response.model_dump(mode="json")
-            self.transaction_repository.complete(
-                session,
-                transaction,
-                completed_at=completed_at,
-                response_snapshot=snapshot,
-            )
-            return response
+            conflict.request_id = actor.request_id
+            raise conflict from exc
 
     @staticmethod
     def _ensure_savepoint_parent_transaction(session: Session) -> None:
@@ -344,14 +364,34 @@ class InventoryTransactionService:
             raise conflict
 
     @staticmethod
-    def _required_text(value: str, *, field: str, code: str) -> str:
-        clean_value = value.strip()
-        if not clean_value:
+    def _normalize_idempotency_key(idempotency_key: str) -> str:
+        clean_key = idempotency_key.strip()
+        if not clean_key:
             raise BusinessValidationError(
-                f"{field} must not be blank",
-                code=code,
+                "idempotency key is required",
+                code="IDEMPOTENCY_KEY_REQUIRED",
             )
-        return clean_value
+        if len(clean_key) > 128:
+            raise BusinessValidationError(
+                "idempotency key is invalid",
+                code="INVALID_IDEMPOTENCY_KEY",
+            )
+        return clean_key
+
+    @staticmethod
+    def _normalize_reason(reason: str) -> str:
+        clean_reason = reason.strip()
+        if not clean_reason:
+            raise BusinessValidationError(
+                "reason must not be blank",
+                code="INVENTORY_REASON_REQUIRED",
+            )
+        if len(clean_reason) > 500:
+            raise BusinessValidationError(
+                "reason is invalid",
+                code="INVENTORY_REASON_INVALID",
+            )
+        return clean_reason
 
     @staticmethod
     def _require_contributor(actor: ActorContext) -> None:
