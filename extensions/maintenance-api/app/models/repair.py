@@ -1,19 +1,40 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.enums import DataSourceType
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 
-class RepairProfile(Base, ActiveMixin, TimestampMixin):
+class RepairProfile(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "repair_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    profile_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    profile_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     profile_name: Mapped[str] = mapped_column(String(200), nullable=False)
     spare_part_id: Mapped[int] = mapped_column(
         ForeignKey("spare_parts.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -42,6 +63,12 @@ class RepairProfile(Base, ActiveMixin, TimestampMixin):
     notes: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
+        Index(
+            "uq_repair_profiles_tenant_profile_code",
+            "tenant_id",
+            "profile_code",
+            unique=True,
+        ),
         CheckConstraint(
             "repair_success_rate >= 0 AND repair_success_rate <= 1", name="ck_repair_success_rate"
         ),

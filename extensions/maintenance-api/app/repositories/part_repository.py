@@ -9,12 +9,20 @@ class PartRepository(BaseRepository[Part]):
     def __init__(self) -> None:
         super().__init__(Part)
 
-    def count_references(self, session: Session, identifier: int) -> int:
+    def count_references(
+        self,
+        session: Session,
+        tenant_id: str,
+        identifier: int,
+    ) -> int:
         return int(
             session.scalar(
                 select(func.count())
                 .select_from(ConfigurationItem)
-                .where(ConfigurationItem.part_id == identifier)
+                .where(
+                    ConfigurationItem.tenant_id == tenant_id,
+                    ConfigurationItem.part_id == identifier,
+                )
             )
             or 0
         )

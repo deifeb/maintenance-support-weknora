@@ -5,9 +5,14 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, NotFoundError, ResourceInUseError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    ResourceInUseError,
+)
 from app.repositories.base import BaseRepository
 from app.schemas.common import PageData
+from app.security.actor import ActorContext
 
 ModelT = TypeVar("ModelT")
 ReadT = TypeVar("ReadT", bound=BaseModel)
@@ -35,19 +40,33 @@ class CrudService(Generic[ModelT, ReadT]):
         except IntegrityError as exc:
             session.rollback()
             raise ConflictError(
-                f"{self.resource_name} conflicts with an existing record",
+                f"{self.resource_name} conflicts with "
+                "an existing record",
                 details={"resource": self.resource_name},
             ) from exc
 
-    def get(self, session: Session, identifier: int) -> ModelT:
-        instance = self.repository.get_by_id(session, identifier)
+    def get(
+        self,
+        session: Session,
+        actor: ActorContext,
+        identifier: int,
+    ) -> ModelT:
+        instance = self.repository.get_by_id(
+            session,
+            actor.tenant_id,
+            identifier,
+        )
         if instance is None:
-            raise NotFoundError(self.resource_name, identifier)
+            raise NotFoundError(
+                self.resource_name,
+                identifier,
+            )
         return instance
 
     def list(
         self,
         session: Session,
+        actor: ActorContext,
         *,
         page: int,
         page_size: int,
@@ -59,6 +78,7 @@ class CrudService(Generic[ModelT, ReadT]):
     ) -> PageData[ReadT]:
         items, total = self.repository.list_page(
             session,
+            actor.tenant_id,
             page=page,
             page_size=page_size,
             keyword=keyword,
@@ -69,21 +89,48 @@ class CrudService(Generic[ModelT, ReadT]):
             filters=filters,
         )
         return PageData[ReadT](
-            items=[self.read_schema.model_validate(item) for item in items],
+            items=[
+                self.read_schema.model_validate(item)
+                for item in items
+            ],
             page=page,
             page_size=page_size,
             total=total,
             pages=ceil(total / page_size) if total else 0,
         )
 
-    def create(self, session: Session, payload: BaseModel, *, commit: bool = True) -> ModelT:
-        code = getattr(payload, self.code_field, None)
-        if code is not None and self.repository.get_by_code(session, code, self.code_field):
+    def create(
+        self,
+        session: Session,
+        actor: ActorContext,
+        payload: BaseModel,
+        *,
+        commit: bool = True,
+    ) -> ModelT:
+        code = getattr(
+            payload,
+            self.code_field,
+            None,
+        )
+        if (
+            code is not None
+            and self.repository.get_by_code(
+                session,
+                actor.tenant_id,
+                code,
+                self.code_field,
+            )
+        ):
             raise ConflictError(
                 f"{self.resource_name} code already exists",
                 details={self.code_field: code},
             )
-        instance = self.repository.create(session, payload.model_dump())
+
+        instance = self.repository.create(
+            session,
+            actor.tenant_id,
+            payload.model_dump(),
+        )
         if commit:
             self._commit(session)
             session.refresh(instance)
@@ -92,33 +139,100 @@ class CrudService(Generic[ModelT, ReadT]):
     def update(
         self,
         session: Session,
+        actor: ActorContext,
         identifier: int,
         payload: BaseModel,
         *,
         commit: bool = True,
     ) -> ModelT:
-        instance = self.get(session, identifier)
+        instance = self.get(
+            session,
+            actor,
+            identifier,
+        )
         data = payload.model_dump(exclude_unset=True)
-        self.repository.update(session, instance, data)
+        self.repository.update(
+            session,
+            actor.tenant_id,
+            instance,
+            data,
+        )
         if commit:
             self._commit(session)
             session.refresh(instance)
         return instance
 
-    def set_active(self, session: Session, identifier: int, is_active: bool) -> ModelT:
-        instance = self.get(session, identifier)
-        self.repository.update(session, instance, {"is_active": is_active})
+    def set_active(
+        self,
+        session: Session,
+        actor: ActorContext,
+        identifier: int,
+        is_active: bool,
+    ) -> ModelT:
+        instance = self.get(
+            session,
+            actor,
+            identifier,
+        )
+        self.repository.update(
+            session,
+            actor.tenant_id,
+            instance,
+            {"is_active": is_active},
+        )
         self._commit(session)
         session.refresh(instance)
         return instance
 
-    def count_references(self, session: Session, identifier: int) -> int:
-        counter = getattr(self.repository, "count_references", None)
-        return int(counter(session, identifier)) if counter else 0
+    def count_references(
+        self,
+        session: Session,
+        actor: ActorContext,
+        identifier: int,
+    ) -> int:
+        counter = getattr(
+            self.repository,
+            "count_references",
+            None,
+        )
+        return (
+            int(
+                counter(
+                    session,
+                    actor.tenant_id,
+                    identifier,
+                )
+            )
+            if counter
+            else 0
+        )
 
-    def delete(self, session: Session, identifier: int) -> None:
-        instance = self.get(session, identifier)
-        if self.count_references(session, identifier) > 0:
-            raise ResourceInUseError(self.resource_name, identifier)
-        self.repository.delete(session, instance)
+    def delete(
+        self,
+        session: Session,
+        actor: ActorContext,
+        identifier: int,
+    ) -> None:
+        instance = self.get(
+            session,
+            actor,
+            identifier,
+        )
+        if (
+            self.count_references(
+                session,
+                actor,
+                identifier,
+            )
+            > 0
+        ):
+            raise ResourceInUseError(
+                self.resource_name,
+                identifier,
+            )
+        self.repository.delete(
+            session,
+            actor.tenant_id,
+            instance,
+        )
         self._commit(session)

@@ -1,13 +1,24 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import (
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATABASE_PATH = (SERVICE_ROOT / "data" / "maintenance.db").as_posix()
 DEFAULT_AI_CONFIG_DIR = SERVICE_ROOT / "config"
 DEFAULT_AI_REPORT_EXPORT_DIR = SERVICE_ROOT / "exports" / "ai-reports"
+DEFAULT_MASTER_DATA_IMPORT_DIR = (
+    SERVICE_ROOT / "exports" / "master-data-imports"
+)
+EXAMPLE_INTERNAL_JWT_SECRET = (
+    "replace-with-at-least-32-random-bytes"
+)
 
 
 class Settings(BaseSettings):
@@ -16,6 +27,19 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_debug: bool = True
     api_v1_prefix: str = "/api/v1"
+    internal_jwt_secret: SecretStr
+    internal_jwt_issuer: str = "weknora"
+    internal_jwt_audience: str = "maintenance-api"
+    internal_jwt_max_lifetime_seconds: int = Field(
+        default=180,
+        ge=1,
+        le=180,
+    )
+    internal_jwt_clock_skew_seconds: int = Field(
+        default=5,
+        ge=0,
+        le=30,
+    )
     database_url: str = Field(
         default=f"sqlite:///{DEFAULT_DATABASE_PATH}",
         description="SQLAlchemy database URL",
@@ -23,6 +47,27 @@ class Settings(BaseSettings):
     database_echo: bool = False
     max_import_size_mb: int = 10
     max_import_rows_per_sheet: int = 10_000
+    master_data_import_dir: Path = DEFAULT_MASTER_DATA_IMPORT_DIR
+    master_data_import_task_ttl_seconds: int = Field(
+        default=1800,
+        ge=300,
+        le=86_400,
+    )
+    master_data_import_worker_count: int = Field(
+        default=1,
+        ge=1,
+        le=4,
+    )
+    master_data_import_max_pending_tasks: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+    )
+    master_data_export_max_rows: int = Field(
+        default=100_000,
+        ge=1_000,
+        le=1_000_000,
+    )
     demand_worker_count: int = 2
     demand_sync_timeout_seconds: int = 5
     demand_max_pending_tasks: int = 20
@@ -32,12 +77,24 @@ class Settings(BaseSettings):
     demand_max_demand_items: int = 5_000
     demand_result_export_max_rows: int = 100_000
 
-    ai_models_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-models.yaml"
-    ai_routes_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-routes.yaml"
-    ai_tools_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-tools.yaml"
-    ai_prompts_config_path: Path = DEFAULT_AI_CONFIG_DIR / "ai-prompts.yaml"
-    ai_review_rules_path: Path = DEFAULT_AI_CONFIG_DIR / "review-rules.yaml"
-    ai_report_templates_path: Path = DEFAULT_AI_CONFIG_DIR / "report-templates.yaml"
+    ai_models_config_path: Path = (
+        DEFAULT_AI_CONFIG_DIR / "ai-models.yaml"
+    )
+    ai_routes_config_path: Path = (
+        DEFAULT_AI_CONFIG_DIR / "ai-routes.yaml"
+    )
+    ai_tools_config_path: Path = (
+        DEFAULT_AI_CONFIG_DIR / "ai-tools.yaml"
+    )
+    ai_prompts_config_path: Path = (
+        DEFAULT_AI_CONFIG_DIR / "ai-prompts.yaml"
+    )
+    ai_review_rules_path: Path = (
+        DEFAULT_AI_CONFIG_DIR / "review-rules.yaml"
+    )
+    ai_report_templates_path: Path = (
+        DEFAULT_AI_CONFIG_DIR / "report-templates.yaml"
+    )
     ai_remote_enabled: bool = False
     ai_default_sensitivity: str = "INTERNAL"
     ai_sse_poll_interval_seconds: float = 0.25
@@ -58,11 +115,55 @@ class Settings(BaseSettings):
     weknora_evidence_url: str | None = None
     weknora_api_key: str | None = None
 
+    @field_validator("internal_jwt_secret")
+    @classmethod
+    def validate_internal_jwt_secret(
+        cls,
+        value: SecretStr,
+    ) -> SecretStr:
+        if len(value.get_secret_value().encode("utf-8")) < 32:
+            raise ValueError(
+                "internal JWT secret must contain "
+                "at least 32 UTF-8 bytes"
+            )
+        return value
+
+    @field_validator(
+        "internal_jwt_issuer",
+        "internal_jwt_audience",
+    )
+    @classmethod
+    def validate_internal_jwt_name(
+        cls,
+        value: str,
+    ) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError(
+                "internal JWT issuer and audience "
+                "must not be blank"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        if (
+            self.app_env.strip().lower() == "production"
+            and self.internal_jwt_secret.get_secret_value()
+            == EXAMPLE_INTERNAL_JWT_SECRET
+        ):
+            raise ValueError(
+                "INTERNAL_JWT_SECRET must be replaced "
+                "in production"
+            )
+        return self
+
     model_config = SettingsConfigDict(
         env_file=SERVICE_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 

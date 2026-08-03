@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, extname, resolve } from 'node:path'
+import { dirname, extname, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -51,15 +51,38 @@ const publicDocumentationRoots = [
   'mcp-server',
 ]
 const documentationExtensions = new Set(['.go', '.json', '.md', '.yaml', '.yml'])
+const excludedDocumentationDirectories = new Set(['docs/superpowers'])
+
+function isSameOrDescendant(path: string, root: string): boolean {
+  const relation = relative(root, path)
+  return relation === '' || (!relation.startsWith('..') && !relation.includes(':'))
+}
 
 function collectDocumentationFiles(path: string): string[] {
   const entries = readdirSync(path, { withFileTypes: true })
   return entries.flatMap((entry) => {
     const child = resolve(path, entry.name)
-    if (entry.isDirectory()) return collectDocumentationFiles(child)
+    const repositoryRelativePath = child.slice(repositoryRoot.length + 1).replace(/\\/g, '/')
+    if (entry.isDirectory()) {
+      return excludedDocumentationDirectories.has(repositoryRelativePath)
+        ? []
+        : collectDocumentationFiles(child)
+    }
     return documentationExtensions.has(extname(entry.name)) ? [child] : []
   })
 }
+
+test('documentation scanner excludes superpowers artifacts but keeps public API docs', () => {
+  const documentationRoot = resolve(repositoryRoot, 'docs')
+  const superpowersRoot = resolve(documentationRoot, 'superpowers')
+  const apiRoot = resolve(documentationRoot, 'api')
+  const documentationFiles = collectDocumentationFiles(documentationRoot)
+
+  assert.equal(documentationFiles.some((file) => isSameOrDescendant(file, superpowersRoot)), false)
+  assert.equal(documentationFiles.some((file) => isSameOrDescendant(file, apiRoot)), true)
+  assert.equal(isSameOrDescendant(`${superpowersRoot}-sibling\\guide.md`, superpowersRoot), false)
+  assert.equal(isSameOrDescendant(`${apiRoot}-sibling\\guide.md`, apiRoot), false)
+})
 
 test('user-facing locale values use workspace terminology', () => {
   for (const check of localeChecks) {

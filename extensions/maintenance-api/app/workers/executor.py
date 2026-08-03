@@ -13,30 +13,44 @@ class DemandTaskExecutor:
     def _pool(self) -> ThreadPoolExecutor:
         if self._executor is None:
             self._executor = ThreadPoolExecutor(
-                max_workers=get_settings().demand_worker_count, thread_name_prefix="demand-calc"
+                max_workers=get_settings().demand_worker_count,
+                thread_name_prefix="demand-calc",
             )
         return self._executor
 
-    def submit(self, calculation_id: int) -> bool:
-        if not registry.register(calculation_id):
+    def submit(self, tenant_id: str, calculation_id: int) -> bool:
+        key = (tenant_id, calculation_id)
+        if not registry.register(key):
             return False
-        self._pool().submit(self._run, calculation_id)
+        try:
+            self._pool().submit(self._run, tenant_id, calculation_id)
+        except Exception:
+            registry.unregister(key)
+            raise
         return True
 
     @staticmethod
-    def _run(calculation_id: int) -> None:
+    def _run(tenant_id: str, calculation_id: int) -> None:
+        key = (tenant_id, calculation_id)
         session = SessionLocal()
         try:
-            calculation_service.run(session, calculation_id)
+            calculation_service.run_internal(
+                session,
+                tenant_id=tenant_id,
+                calculation_id=calculation_id,
+            )
         except Exception:
             pass
         finally:
             session.close()
-            registry.unregister(calculation_id)
+            registry.unregister(key)
 
     def shutdown(self, wait: bool = False) -> None:
         if self._executor is not None:
-            self._executor.shutdown(wait=wait, cancel_futures=False)
+            self._executor.shutdown(
+                wait=wait,
+                cancel_futures=False,
+            )
             self._executor = None
 
 

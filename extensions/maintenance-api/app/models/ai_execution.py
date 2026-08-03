@@ -1,7 +1,17 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,10 +22,15 @@ from app.models.enums import (
     AIPlanStepStatus,
     AIToolCallStatus,
 )
-from app.models.mixins import TimestampMixin
+from app.models.mixins import TenantScopedMixin, TimestampMixin, VersionedMixin
 
 
-class AIExecutionPlan(Base, TimestampMixin):
+class AIExecutionPlan(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_execution_plans"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(
@@ -35,7 +50,11 @@ class AIExecutionPlan(Base, TimestampMixin):
     )
 
 
-class AIPlanStep(Base, TimestampMixin):
+class AIPlanStep(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_plan_steps"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     plan_id: Mapped[int] = mapped_column(
@@ -62,7 +81,11 @@ class AIPlanStep(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("plan_id", "step_code", name="uq_ai_plan_step_code"),)
 
 
-class AIToolCall(Base, TimestampMixin):
+class AIToolCall(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_tool_calls"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(
@@ -77,7 +100,7 @@ class AIToolCall(Base, TimestampMixin):
     input_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     permission_level: Mapped[str | None] = mapped_column(String(64))
     confirmation_id: Mapped[int | None] = mapped_column(Integer)
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True)
     status: Mapped[AIToolCallStatus] = mapped_column(
         Enum(AIToolCallStatus, native_enum=False, length=20),
         nullable=False,
@@ -90,8 +113,21 @@ class AIToolCall(Base, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
 
+    __table_args__ = (
+        Index(
+            "uq_ai_tool_calls_tenant_idempotency",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
 
-class AIConfirmationRequest(Base, TimestampMixin):
+
+class AIConfirmationRequest(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_confirmation_requests"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(

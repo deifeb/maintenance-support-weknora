@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Protocol
 
 from demand_engine import DemandCalculationEngine
 from demand_engine.enums import AgeDistributionType as EngineAgeDistributionType
@@ -12,6 +13,7 @@ from demand_engine.enums import ExecutionMode as EngineExecutionMode
 from demand_engine.enums import FailureProcessMode as EngineFailureProcessMode
 from demand_engine.enums import ReliabilityModelType as EngineReliabilityModelType
 from demand_engine.enums import ShockApplicationMode as EngineShockApplicationMode
+from demand_engine.exceptions import CalculationCancelledError
 from demand_engine.models import (
     AgeGroupInput,
     CalculationInput,
@@ -23,22 +25,16 @@ from demand_engine.models import (
     SimulationConfig,
     StageInput,
 )
-from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.exceptions import BusinessValidationError, ConflictError, NotFoundError
 from app.models import (
-    ConfigurationItem,
     DemandCalculation,
-    DemandCalculationRun,
-    DemandRunContribution,
-    DemandRunItemResult,
     DemandScenarioVersion,
     ReliabilityProfile,
     RepairProfile,
     SparePart,
-    WarehouseInventory,
 )
 from app.models.enums import (
     CalculationExecutionType,
@@ -47,15 +43,28 @@ from app.models.enums import (
     FailureProcessMode,
     ItemCalculationStatus,
     MissingParameterPolicy,
+    ReliabilityModelType,
     RerunMode,
     ScenarioVersionStatus,
     ShortageRiskLevel,
+)
+from app.repositories import (
+    ConfigurationItemRepository,
+    DemandCalculationRepository,
+    DemandCalculationRunRepository,
+    DemandRunContributionRepository,
+    DemandRunItemResultRepository,
+    InventoryRepository,
+    ReliabilityRepository,
+    RepairRepository,
+    SparePartRepository,
 )
 from app.schemas.demand_calculation import (
     CalculationCreateRequest,
     CalculationPreviewRead,
     CalculationPreviewRequest,
 )
+from app.security.actor import ActorContext
 from app.services.inventory_gap_service import inventory_gap_service
 from app.services.scenario_service import scenario_service
 from app.services.snapshot_service import snapshot_service
@@ -70,11 +79,77 @@ _SOURCE_PRIORITY = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateExecutionSpec:
+    candidate_key: str
+    reliability_model: ReliabilityModelType
+    execution_mode: DemandExecutionMode
+    random_seed: int
+
+
+class DemandExecutionObserver(Protocol):
+    def started(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+    ) -> None: ...
+
+    def progress(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+        percent: Decimal,
+    ) -> None: ...
+
+    def completed(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+    ) -> None: ...
+
+    def failed(
+        self,
+        session: Session,
+        calculation: DemandCalculation,
+        error: Exception,
+    ) -> None: ...
+
+
 class DemandCalculationService:
+    def __init__(self) -> None:
+        self.calculation_repository = (
+            DemandCalculationRepository()
+        )
+        self.run_repository = (
+            DemandCalculationRunRepository()
+        )
+        self.item_result_repository = (
+            DemandRunItemResultRepository()
+        )
+        self.contribution_repository = (
+            DemandRunContributionRepository()
+        )
+        self.configuration_item_repository = (
+            ConfigurationItemRepository()
+        )
+        self.inventory_repository = InventoryRepository()
+        self.spare_part_repository = SparePartRepository()
+        self.reliability_repository = (
+            ReliabilityRepository()
+        )
+        self.repair_repository = RepairRepository()
+
     def preview(
-        self, session: Session, payload: CalculationPreviewRequest
+        self,
+        session: Session,
+        actor: ActorContext,
+        payload: CalculationPreviewRequest,
     ) -> CalculationPreviewRead:
-        snapshot, warnings = self.build_snapshot(session, payload)
+        snapshot, warnings = self.build_snapshot(
+            session,
+            actor,
+            payload,
+        )
         stage_count = len(snapshot.get("stages", []))
         item_count = len(snapshot.get("items", []))
         fleet_count = len(snapshot.get("fleet_groups", []))
@@ -117,22 +192,118 @@ class DemandCalculationService:
         )
 
     def build_snapshot(
-        self, session: Session, payload: CalculationPreviewRequest
+        self,
+        session: Session,
+        actor: ActorContext,
+        payload: CalculationPreviewRequest,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if payload.temporary_scenario is not None:
-            snapshot = dict(payload.temporary_scenario)
-            snapshot.setdefault("calculation_code", "TEMP")
-            snapshot.setdefault("simulation", {})
-            snapshot.setdefault("fleet_groups", [])
-            self._validate_snapshot_shape(snapshot)
+            snapshot = self._validated_temporary_snapshot(
+                session,
+                actor,
+                payload.temporary_scenario,
+            )
             return snapshot_service.normalize(snapshot), []
+
         assert payload.scenario_version_id is not None
-        version = scenario_service.get_version(session, payload.scenario_version_id, full=True)
+        version = scenario_service.get_version(
+            session,
+            actor,
+            payload.scenario_version_id,
+            full=True,
+        )
         if version.status is not ScenarioVersionStatus.PUBLISHED:
             raise BusinessValidationError(
-                "scenario version must be published", code="SCENARIO_NOT_PUBLISHED"
+                "scenario version must be published",
+                code="SCENARIO_NOT_PUBLISHED",
             )
-        return self._snapshot_from_version(session, version)
+        return self._snapshot_from_version(
+            session,
+            actor,
+            version,
+        )
+
+    @classmethod
+    def _strip_untrusted_tenant_fields(
+        cls,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: cls._strip_untrusted_tenant_fields(item)
+                for key, item in value.items()
+                if key != "tenant_id"
+            }
+        if isinstance(value, list):
+            return [
+                cls._strip_untrusted_tenant_fields(item)
+                for item in value
+            ]
+        return value
+
+    def _validated_temporary_snapshot(
+        self,
+        session: Session,
+        actor: ActorContext,
+        source: dict[str, Any],
+    ) -> dict[str, Any]:
+        snapshot = self._strip_untrusted_tenant_fields(
+            dict(source)
+        )
+        snapshot.setdefault("calculation_code", "TEMP")
+        snapshot.setdefault("simulation", {})
+        snapshot.setdefault("fleet_groups", [])
+        self._validate_snapshot_shape(snapshot)
+
+        trusted_items: list[dict[str, Any]] = []
+        for source_item in snapshot.get("items", []):
+            item = dict(source_item)
+            spare_id = int(item["spare_part_id"])
+            spare = self.spare_part_repository.get_by_id(
+                session,
+                actor.tenant_id,
+                spare_id,
+            )
+            if spare is None:
+                raise NotFoundError("spare_part", spare_id)
+
+            item["spare_part_code"] = spare.code
+            item["spare_part_name"] = spare.name
+            item.pop(
+                "selected_reliability_profile_id",
+                None,
+            )
+            item.pop(
+                "selected_repair_profile_id",
+                None,
+            )
+
+            trusted_contributions = []
+            for source_contribution in (
+                item.get("contributions") or []
+            ):
+                contribution = dict(
+                    source_contribution
+                )
+                for key in (
+                    "stage_id",
+                    "fleet_group_id",
+                    "configuration_version_id",
+                    "configuration_item_id",
+                ):
+                    contribution.pop(key, None)
+                trusted_contributions.append(
+                    contribution
+                )
+            if "contributions" in item:
+                item["contributions"] = (
+                    trusted_contributions
+                )
+
+            trusted_items.append(item)
+
+        snapshot["items"] = trusted_items
+        return snapshot
 
     @staticmethod
     def _validate_snapshot_shape(snapshot: dict[str, Any]) -> None:
@@ -146,7 +317,10 @@ class DemandCalculationService:
             )
 
     def _snapshot_from_version(
-        self, session: Session, version: DemandScenarioVersion
+        self,
+        session: Session,
+        actor: ActorContext,
+        version: DemandScenarioVersion,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         warnings: list[dict[str, Any]] = []
         stages = [
@@ -204,17 +378,24 @@ class DemandCalculationService:
                     ],
                 }
             )
-            items = list(
-                session.scalars(
-                    select(ConfigurationItem).where(
-                        ConfigurationItem.configuration_version_id
-                        == fleet.configuration_version_id,
-                        ConfigurationItem.spare_part_id.is_not(None),
+            items = [
+                item
+                for item in (
+                    self.configuration_item_repository
+                    .list_for_version(
+                        session,
+                        actor.tenant_id,
+                        fleet.configuration_version_id,
                     )
-                ).all()
-            )
+                )
+                if item.spare_part_id is not None
+            ]
             for config_item in items:
-                spare = session.get(SparePart, config_item.spare_part_id)
+                spare = self.spare_part_repository.get_by_id(
+                    session,
+                    actor.tenant_id,
+                    config_item.spare_part_id,
+                )
                 if spare is None or not spare.is_active:
                     continue
                 row = aggregate.setdefault(
@@ -260,7 +441,11 @@ class DemandCalculationService:
         for spare_id, row in aggregate.items():
             spare: SparePart = row["spare"]
             reliability = self._select_reliability(
-                session, spare_id, row["configuration_version_id"], today
+                session,
+                actor,
+                spare_id,
+                row["configuration_version_id"],
+                today,
             )
             if reliability is None:
                 if version.missing_parameter_policy is MissingParameterPolicy.STRICT:
@@ -289,14 +474,23 @@ class DemandCalculationService:
                 reliability_data = self._reliability_snapshot(reliability)
                 reliability_id = reliability.id
             repair = (
-                self._select_repair(session, spare_id, row["configuration_version_id"], None, today)
+                self._select_repair(
+                    session,
+                    actor,
+                    spare_id,
+                    row["configuration_version_id"],
+                    None,
+                    today,
+                )
                 if spare.is_repairable
                 else None
             )
-            inventories = list(
-                session.scalars(
-                    select(WarehouseInventory).where(WarehouseInventory.spare_part_id == spare_id)
-                ).all()
+            inventories = (
+                self.inventory_repository.list_for_spare(
+                    session,
+                    actor.tenant_id,
+                    spare_id,
+                )
             )
             available = sum(
                 (inventory.available_quantity for inventory in inventories), Decimal("0")
@@ -357,25 +551,22 @@ class DemandCalculationService:
         }
         return snapshot_service.normalize(snapshot), warnings
 
-    @staticmethod
     def _select_reliability(
-        session: Session, spare_part_id: int, configuration_version_id: int, valid_at: date
+        self,
+        session: Session,
+        actor: ActorContext,
+        spare_part_id: int,
+        configuration_version_id: int,
+        valid_at: date,
     ) -> ReliabilityProfile | None:
-        candidates = list(
-            session.scalars(
-                select(ReliabilityProfile).where(
-                    ReliabilityProfile.spare_part_id == spare_part_id,
-                    ReliabilityProfile.is_active.is_(True),
-                    or_(
-                        ReliabilityProfile.valid_from.is_(None),
-                        ReliabilityProfile.valid_from <= valid_at,
-                    ),
-                    or_(
-                        ReliabilityProfile.valid_to.is_(None),
-                        ReliabilityProfile.valid_to > valid_at,
-                    ),
-                )
-            ).all()
+        candidates = (
+            self.reliability_repository
+            .list_active_for_selection(
+                session,
+                actor.tenant_id,
+                spare_part_id,
+                valid_at,
+            )
         )
         candidates.sort(
             key=lambda row: (
@@ -389,23 +580,23 @@ class DemandCalculationService:
         )
         return candidates[0] if candidates else None
 
-    @staticmethod
     def _select_repair(
+        self,
         session: Session,
+        actor: ActorContext,
         spare_part_id: int,
         configuration_version_id: int,
         maintenance_level: str | None,
         valid_at: date,
     ) -> RepairProfile | None:
-        candidates = list(
-            session.scalars(
-                select(RepairProfile).where(
-                    RepairProfile.spare_part_id == spare_part_id,
-                    RepairProfile.is_active.is_(True),
-                    or_(RepairProfile.valid_from.is_(None), RepairProfile.valid_from <= valid_at),
-                    or_(RepairProfile.valid_to.is_(None), RepairProfile.valid_to > valid_at),
-                )
-            ).all()
+        candidates = (
+            self.repair_repository
+            .list_active_for_selection(
+                session,
+                actor.tenant_id,
+                spare_part_id,
+                valid_at,
+            )
         )
         candidates.sort(
             key=lambda row: (
@@ -442,33 +633,271 @@ class DemandCalculationService:
             result["reference_duration_hours"] = str(extension["reference_duration_hours"])
         return result
 
+    @staticmethod
+    def _validate_candidate_parameters(
+        snapshot: dict[str, Any],
+        spec: CandidateExecutionSpec,
+    ) -> None:
+        items = list(snapshot.get("items") or [])
+        missing_by_item: list[dict[str, Any]] = []
+        for index, item in enumerate(items):
+            reliability = item.get("reliability")
+            reliability = (
+                reliability
+                if isinstance(reliability, dict)
+                else {}
+            )
+            missing = []
+            if (
+                spec.reliability_model
+                is ReliabilityModelType.EXPONENTIAL
+            ):
+                if (
+                    reliability.get("failure_rate") is None
+                    and reliability.get("mtbf_hours") is None
+                ):
+                    missing.append("failure_rate_or_mtbf")
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.WEIBULL
+            ):
+                for name in (
+                    "weibull_shape",
+                    "weibull_scale",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.BINOMIAL
+            ):
+                for name in (
+                    "binomial_trials",
+                    "binomial_probability",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.NEGATIVE_BINOMIAL
+            ):
+                for name in (
+                    "negative_binomial_r",
+                    "negative_binomial_p",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            elif (
+                spec.reliability_model
+                is ReliabilityModelType.EMPIRICAL
+            ):
+                for name in (
+                    "empirical_mean",
+                    "empirical_variance",
+                ):
+                    if reliability.get(name) is None:
+                        missing.append(name)
+            if missing:
+                missing_by_item.append(
+                    {
+                        "item_index": index,
+                        "missing_requirements": missing,
+                    }
+                )
+        if not items:
+            missing_by_item.append(
+                {
+                    "item_index": None,
+                    "missing_requirements": [
+                        "demand_items",
+                    ],
+                }
+            )
+        if missing_by_item:
+            raise BusinessValidationError(
+                "candidate reliability parameters are missing",
+                code="CANDIDATE_PARAMETERS_MISSING",
+                details={
+                    "candidate_key": spec.candidate_key,
+                    "items": missing_by_item,
+                },
+            )
+
+    def submit_candidate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        scenario_version_id: int,
+        spec: CandidateExecutionSpec,
+        idempotency_key: str,
+    ) -> DemandCalculation:
+        existing = (
+            self.calculation_repository
+            .get_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                idempotency_key,
+            )
+        )
+        if existing is not None:
+            return existing
+
+        trusted_snapshot, warnings = self.build_snapshot(
+            session,
+            actor,
+            CalculationPreviewRequest(
+                scenario_version_id=scenario_version_id,
+            ),
+        )
+        snapshot = deepcopy(trusted_snapshot)
+        self._validate_candidate_parameters(snapshot, spec)
+        for item in snapshot["items"]:
+            item["reliability"]["model_type"] = (
+                spec.reliability_model.value
+            )
+        snapshot["candidate_key"] = spec.candidate_key
+        snapshot["requested_mode"] = (
+            spec.execution_mode.value
+        )
+        snapshot["random_seed"] = spec.random_seed
+        now = datetime.now(timezone.utc)
+        calculation = self.calculation_repository.create(
+            session,
+            actor.tenant_id,
+            {
+                "calculation_code": (
+                    "DC-"
+                    f"{now:%Y%m%d%H%M%S}"
+                    f"-{uuid.uuid4().hex[:8].upper()}"
+                ),
+                "calculation_name": (
+                    "Candidate "
+                    f"{spec.candidate_key}"
+                ),
+                "scenario_version_id": scenario_version_id,
+                "rerun_mode": RerunMode.NEW,
+                "execution_type": (
+                    CalculationExecutionType.ASYNCHRONOUS
+                ),
+                "requested_mode": spec.execution_mode,
+                "status": CalculationStatus.PENDING,
+                "input_snapshot_json": snapshot,
+                "input_snapshot_hash": (
+                    snapshot_service.canonical_hash(snapshot)
+                ),
+                "inventory_snapshot_at": now,
+                "warnings_json": warnings,
+                "submitted_at": now,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        return calculation
+
+    def retry_candidate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        source: DemandCalculation,
+        idempotency_key: str,
+    ) -> DemandCalculation:
+        existing = (
+            self.calculation_repository
+            .get_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                idempotency_key,
+            )
+        )
+        if existing is not None:
+            return existing
+        now = datetime.now(timezone.utc)
+        return self.calculation_repository.create(
+            session,
+            actor.tenant_id,
+            {
+                "calculation_code": (
+                    "DC-"
+                    f"{now:%Y%m%d%H%M%S}"
+                    f"-{uuid.uuid4().hex[:8].upper()}"
+                ),
+                "calculation_name": source.calculation_name,
+                "scenario_version_id": (
+                    source.scenario_version_id
+                ),
+                "rerun_mode": RerunMode.REPLAY_SNAPSHOT,
+                "source_calculation_id": source.id,
+                "execution_type": (
+                    CalculationExecutionType.ASYNCHRONOUS
+                ),
+                "requested_mode": source.requested_mode,
+                "status": CalculationStatus.PENDING,
+                "input_snapshot_json": deepcopy(
+                    source.input_snapshot_json
+                ),
+                "input_snapshot_hash": (
+                    source.input_snapshot_hash
+                ),
+                "inventory_snapshot_at": (
+                    source.inventory_snapshot_at
+                ),
+                "warnings_json": deepcopy(
+                    source.warnings_json
+                ),
+                "submitted_at": now,
+                "idempotency_key": idempotency_key,
+            },
+        )
+
     def submit(
         self,
         session: Session,
+        actor: ActorContext,
         payload: CalculationCreateRequest,
         *,
         idempotency_key: str | None = None,
         force_async: bool | None = None,
     ) -> DemandCalculation:
-        if idempotency_key:
-            existing = session.scalar(
-                select(DemandCalculation).where(
-                    DemandCalculation.idempotency_key == idempotency_key
-                )
+        existing = (
+            self.calculation_repository
+            .get_by_idempotency_key(
+                session,
+                actor.tenant_id,
+                idempotency_key,
             )
-            if existing:
-                return existing
-        preview = self.preview(session, payload)
+            if idempotency_key
+            else None
+        )
+        if existing is not None:
+            return existing
+
+        preview = self.preview(
+            session,
+            actor,
+            payload,
+        )
         if (
             payload.execution_preference == "SYNC"
-            and preview.recommended_execution_type == "ASYNCHRONOUS"
+            and preview.recommended_execution_type
+            == "ASYNCHRONOUS"
         ):
             raise BusinessValidationError(
-                "calculation is too complex for synchronous execution",
+                "calculation is too complex for "
+                "synchronous execution",
                 code="SYNC_COMPLEXITY_EXCEEDED",
             )
-        snapshot, warnings = self.build_snapshot(session, payload)
-        code = f"DC-{datetime.now(timezone.utc):%Y%m%d%H%M%S}-{uuid.uuid4().hex[:8].upper()}"
+
+        snapshot, warnings = self.build_snapshot(
+            session,
+            actor,
+            payload,
+        )
+        code = (
+            "DC-"
+            f"{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+            f"-{uuid.uuid4().hex[:8].upper()}"
+        )
         execution = (
             CalculationExecutionType.ASYNCHRONOUS
             if (
@@ -476,100 +905,265 @@ class DemandCalculationService:
                 or payload.execution_preference == "ASYNC"
                 or (
                     payload.execution_preference == "AUTO"
-                    and preview.recommended_execution_type == "ASYNCHRONOUS"
+                    and preview.recommended_execution_type
+                    == "ASYNCHRONOUS"
                 )
             )
             else CalculationExecutionType.SYNCHRONOUS
         )
-        mode = payload.requested_mode
-        calculation = DemandCalculation(
-            calculation_code=code,
-            calculation_name=payload.calculation_name,
-            scenario_version_id=payload.scenario_version_id,
-            rerun_mode=RerunMode.NEW,
-            execution_type=execution,
-            requested_mode=mode,
-            status=CalculationStatus.PENDING,
-            input_snapshot_json=snapshot,
-            input_snapshot_hash=snapshot_service.canonical_hash(snapshot),
-            inventory_snapshot_at=datetime.now(timezone.utc),
-            warnings_json=warnings,
-            submitted_at=datetime.now(timezone.utc),
-            idempotency_key=idempotency_key,
+        calculation = (
+            self.calculation_repository.create(
+                session,
+                actor.tenant_id,
+                {
+                    "calculation_code": code,
+                    "calculation_name": (
+                        payload.calculation_name
+                    ),
+                    "scenario_version_id": (
+                        payload.scenario_version_id
+                    ),
+                    "rerun_mode": RerunMode.NEW,
+                    "execution_type": execution,
+                    "requested_mode": (
+                        payload.requested_mode
+                    ),
+                    "status": CalculationStatus.PENDING,
+                    "input_snapshot_json": snapshot,
+                    "input_snapshot_hash": (
+                        snapshot_service.canonical_hash(
+                            snapshot
+                        )
+                    ),
+                    "inventory_snapshot_at": (
+                        datetime.now(timezone.utc)
+                    ),
+                    "warnings_json": warnings,
+                    "submitted_at": datetime.now(
+                        timezone.utc
+                    ),
+                    "idempotency_key": idempotency_key,
+                },
+            )
         )
-        session.add(calculation)
         session.commit()
         session.refresh(calculation)
-        if execution is CalculationExecutionType.SYNCHRONOUS:
-            self.run(session, calculation.id, random_seed=payload.random_seed)
+
+        if (
+            execution
+            is CalculationExecutionType.SYNCHRONOUS
+        ):
+            self.run(
+                session,
+                actor,
+                calculation.id,
+                random_seed=payload.random_seed,
+            )
             session.refresh(calculation)
+
         return calculation
 
     def run(
-        self, session: Session, calculation_id: int, *, random_seed: int | None = None
+        self,
+        session: Session,
+        actor: ActorContext,
+        calculation_id: int,
+        *,
+        random_seed: int | None = None,
     ) -> DemandCalculation:
-        calculation = session.get(DemandCalculation, calculation_id)
+        return self._run_for_tenant(
+            session,
+            actor.tenant_id,
+            calculation_id,
+            random_seed=random_seed,
+        )
+
+    def run_internal(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        calculation_id: int,
+        random_seed: int | None = None,
+        observer: DemandExecutionObserver | None = None,
+    ) -> DemandCalculation:
+        return self._run_for_tenant(
+            session,
+            tenant_id,
+            calculation_id,
+            random_seed=random_seed,
+            observer=observer,
+        )
+
+    def _run_for_tenant(
+        self,
+        session: Session,
+        tenant_id: str,
+        calculation_id: int,
+        *,
+        random_seed: int | None = None,
+        observer: DemandExecutionObserver | None = None,
+    ) -> DemandCalculation:
+        calculation = (
+            self.calculation_repository.get_by_id(
+                session,
+                tenant_id,
+                calculation_id,
+            )
+        )
         if calculation is None:
-            raise NotFoundError("demand_calculation", calculation_id)
+            raise NotFoundError(
+                "demand_calculation",
+                calculation_id,
+            )
         if calculation.status not in {
             CalculationStatus.PENDING,
             CalculationStatus.FAILED,
             CalculationStatus.INTERRUPTED,
         }:
-            raise ConflictError("calculation is not runnable", code="CALCULATION_ALREADY_RUNNING")
+            raise ConflictError(
+                "calculation is not runnable",
+                code="CALCULATION_ALREADY_RUNNING",
+            )
+
         calculation.status = CalculationStatus.RUNNING
         calculation.progress_percent = Decimal("1")
-        calculation.started_at = datetime.now(timezone.utc)
+        calculation.started_at = datetime.now(
+            timezone.utc
+        )
+        if observer is not None:
+            session.flush()
+            observer.started(session, calculation)
         session.commit()
+
         try:
             engine_input = self._to_engine_input(
-                calculation.input_snapshot_json, calculation.requested_mode, random_seed or 20260723
+                calculation.input_snapshot_json,
+                calculation.requested_mode,
+                random_seed or 20260723,
             )
             engine = DemandCalculationEngine()
             result = engine.calculate(
                 engine_input,
-                progress_callback=lambda done, maximum, _: self._update_progress(
-                    session, calculation, done, maximum
+                progress_callback=(
+                    lambda done, maximum, _:
+                    self._update_progress(
+                        session,
+                        calculation,
+                        done,
+                        maximum,
+                        observer,
+                    )
                 ),
-                cancel_check=lambda: self._cancel_requested(session, calculation.id),
+                cancel_check=lambda: (
+                    self._cancel_requested(
+                        session,
+                        tenant_id,
+                        calculation.id,
+                    )
+                ),
             )
-            self._persist_result(session, calculation, result)
+            self._persist_result(
+                session,
+                tenant_id,
+                calculation,
+                result,
+            )
             calculation.status = (
                 CalculationStatus.PARTIAL_SUCCESS
                 if calculation.warnings_json
                 else CalculationStatus.SUCCEEDED
             )
-            calculation.progress_percent = Decimal("100")
-            calculation.completed_at = datetime.now(timezone.utc)
+            calculation.progress_percent = Decimal(
+                "100"
+            )
+            calculation.completed_at = datetime.now(
+                timezone.utc
+            )
             calculation.result_summary_json = {
                 "runs": len(result.runs),
-                "items": sum(len(run.items) for run in result.runs),
-                "comparison": asdict(result.comparison) if result.comparison else None,
+                "items": sum(
+                    len(run.items)
+                    for run in result.runs
+                ),
+                "comparison": (
+                    asdict(result.comparison)
+                    if result.comparison
+                    else None
+                ),
             }
+            if observer is not None:
+                session.flush()
+                observer.completed(session, calculation)
             session.commit()
             session.refresh(calculation)
             return calculation
         except Exception as exc:
             session.rollback()
-            calculation = session.get(DemandCalculation, calculation_id)
-            calculation.status = CalculationStatus.FAILED
-            calculation.error_code = getattr(exc, "code", type(exc).__name__.upper())
-            calculation.error_message = str(exc)[:2000]
-            calculation.completed_at = datetime.now(timezone.utc)
-            session.commit()
+            failed = (
+                self.calculation_repository.get_by_id(
+                    session,
+                    tenant_id,
+                    calculation_id,
+                )
+            )
+            if failed is not None:
+                failed.status = (
+                    CalculationStatus.CANCELLED
+                    if isinstance(
+                        exc,
+                        CalculationCancelledError,
+                    )
+                    else CalculationStatus.FAILED
+                )
+                failed.error_code = getattr(
+                    exc,
+                    "code",
+                    type(exc).__name__.upper(),
+                )
+                failed.error_message = str(exc)[:2000]
+                failed.completed_at = datetime.now(
+                    timezone.utc
+                )
+                if observer is not None:
+                    session.flush()
+                    observer.failed(
+                        session,
+                        failed,
+                        exc,
+                    )
+                session.commit()
             raise
 
     @staticmethod
     def _update_progress(
-        session: Session, calculation: DemandCalculation, done: int, maximum: int
+        session: Session,
+        calculation: DemandCalculation,
+        done: int,
+        maximum: int,
+        observer: DemandExecutionObserver | None = None,
     ) -> None:
         calculation.progress_percent = Decimal(str(min(99, max(1, done * 100 / maximum))))
+        if observer is not None:
+            observer.progress(
+                session,
+                calculation,
+                calculation.progress_percent,
+            )
         session.commit()
 
-    @staticmethod
-    def _cancel_requested(session: Session, calculation_id: int) -> bool:
+    def _cancel_requested(
+        self,
+        session: Session,
+        tenant_id: str,
+        calculation_id: int,
+    ) -> bool:
         session.expire_all()
-        row = session.get(DemandCalculation, calculation_id)
+        row = self.calculation_repository.get_by_id(
+            session,
+            tenant_id,
+            calculation_id,
+        )
         return bool(row and row.cancel_requested)
 
     def _to_engine_input(
@@ -697,153 +1291,376 @@ class DemandCalculationService:
             random_seed=random_seed,
         )
 
-    def _persist_result(self, session: Session, calculation: DemandCalculation, result) -> None:
+    def _persist_result(
+        self,
+        session: Session,
+        tenant_id: str,
+        calculation: DemandCalculation,
+        result,
+    ) -> None:
         snapshot_by_part = {
             int(row["spare_part_id"]): row
-            for row in calculation.input_snapshot_json.get("items", [])
+            for row in (
+                calculation.input_snapshot_json.get(
+                    "items",
+                    [],
+                )
+            )
         }
         for run_result in result.runs:
-            run = DemandCalculationRun(
-                calculation_id=calculation.id,
-                run_mode=DemandExecutionMode(run_result.mode.value),
-                status=CalculationStatus.SUCCEEDED,
-                attempt_number=self._next_attempt(session, calculation.id, run_result.mode.value),
-                is_current_attempt=True,
-                progress_percent=100,
-                engine_version=result.engine_version,
-                formula_version=result.formula_version,
-                random_seed=calculation.input_snapshot_json.get("random_seed"),
-                simulation_config_json=calculation.input_snapshot_json.get("simulation"),
-                actual_simulation_runs=run_result.actual_simulation_runs,
-                converged=run_result.converged,
-                stop_reason=run_result.stop_reason,
-                warnings_json=list(run_result.warnings),
-                started_at=calculation.started_at,
-                completed_at=datetime.now(timezone.utc),
+            run_mode = DemandExecutionMode(
+                run_result.mode.value
             )
-            session.add(run)
-            session.flush()
-            for item in run_result.items:
-                source = snapshot_by_part.get(item.spare_part_id, {})
-                gap = inventory_gap_service.calculate(
-                    recommended_spare_quantity=item.recommended_spare_quantity,
-                    available_quantity=source.get("inventory", {}).get("available_quantity", 0),
-                    in_transit_quantity=source.get("inventory", {}).get("in_transit_quantity", 0),
-                    safety_stock_reserved=source.get("inventory", {}).get("safety_stock", 0),
-                )
-                row = DemandRunItemResult(
-                    calculation_run_id=run.id,
-                    spare_part_id=item.spare_part_id,
-                    spare_part_code_snapshot=item.spare_part_code,
-                    spare_part_name_snapshot=item.spare_part_name,
-                    criticality_level=source.get("criticality_level"),
-                    calculation_status=ItemCalculationStatus.CALCULATED,
-                    selected_model_type=item.selected_model_type.value,
-                    failure_process_mode=FailureProcessMode(item.failure_process_mode.value),
-                    selected_reliability_profile_id=source.get("selected_reliability_profile_id"),
-                    selected_repair_profile_id=source.get("selected_repair_profile_id"),
-                    selection_reason_json={"reason": source.get("selection_reason")},
-                    parameter_snapshot_json={
-                        "reliability": source.get("reliability"),
-                        "repair": source.get("repair"),
-                    },
-                    is_manually_overridden=bool(source.get("manual_override", False)),
-                    target_service_level=Decimal(str(item.target_service_level)),
-                    expected_demand=Decimal(str(item.expected_demand)),
-                    variance=Decimal(str(item.variance)),
-                    standard_deviation=Decimal(str(item.standard_deviation)),
-                    p50=Decimal(str(item.p50)),
-                    p80=Decimal(str(item.p80)),
-                    p90=Decimal(str(item.p90)),
-                    p95=Decimal(str(item.p95)),
-                    p99=Decimal(str(item.p99)),
-                    target_quantile_demand=Decimal(str(item.target_quantile_demand)),
-                    gross_replacement_demand=Decimal(str(item.gross_replacement_demand)),
-                    repair_pipeline_demand=Decimal(str(item.repair_pipeline_demand)),
-                    repair_pipeline_peak=Decimal(str(item.repair_pipeline_peak)),
-                    net_consumption_demand=Decimal(str(item.net_consumption_demand)),
-                    recommended_spare_quantity=Decimal(str(item.recommended_spare_quantity)),
-                    on_hand_quantity=Decimal(
-                        str(source.get("inventory", {}).get("on_hand_quantity", 0))
-                    ),
-                    available_quantity=Decimal(
-                        str(source.get("inventory", {}).get("available_quantity", 0))
-                    ),
-                    in_transit_quantity=Decimal(
-                        str(source.get("inventory", {}).get("in_transit_quantity", 0))
-                    ),
-                    safety_stock_reserved=Decimal(
-                        str(source.get("inventory", {}).get("safety_stock", 0))
-                    ),
-                    usable_inventory=gap.usable_inventory,
-                    net_demand_gap=gap.net_demand_gap,
-                    inventory_coverage_rate=Decimal(str(gap.inventory_coverage_rate)),
-                    shortage_risk_level=ShortageRiskLevel(gap.shortage_risk_level),
-                    minimum_inventory_point=-gap.net_demand_gap,
-                    maximum_simultaneous_gap=gap.net_demand_gap,
-                    common_shock_demand=0,
-                    warning_codes_json=list(item.warnings),
-                )
-                session.add(row)
-                session.flush()
-                contributions = source.get("contributions") or [{}]
-                share = Decimal(str(item.expected_demand)) / Decimal(len(contributions))
-                for contribution in contributions:
-                    session.add(
-                        DemandRunContribution(
-                            calculation_run_id=run.id,
-                            spare_part_id=item.spare_part_id,
-                            fleet_group_code_snapshot=contribution.get("fleet_group_code"),
-                            configuration_version_id=contribution.get("configuration_version_id"),
-                            configuration_item_id=contribution.get("configuration_item_id"),
-                            item_code_snapshot=contribution.get("item_code"),
-                            install_quantity_snapshot=Decimal(
-                                str(contribution.get("install_quantity", 0))
-                            ),
-                            equipment_quantity_snapshot=Decimal(
-                                str(contribution.get("equipment_quantity", 0))
-                            ),
-                            replacement_ratio_snapshot=Decimal(
-                                str(contribution.get("replacement_ratio", 1))
-                            ),
-                            expected_failure_contribution=share,
-                            gross_replacement_contribution=share,
-                            net_consumption_contribution=share,
-                            repair_pipeline_contribution=0,
-                            common_shock_contribution=0,
-                            reliability_parameter_snapshot_json=source.get("reliability"),
-                            repair_parameter_snapshot_json=source.get("repair"),
-                            selection_reason_json={"reason": source.get("selection_reason")},
+            run = self.run_repository.create(
+                session,
+                tenant_id,
+                {
+                    "calculation_id": calculation.id,
+                    "run_mode": run_mode,
+                    "status": CalculationStatus.SUCCEEDED,
+                    "attempt_number": (
+                        self.run_repository.next_attempt(
+                            session,
+                            tenant_id,
+                            calculation.id,
+                            run_mode,
                         )
+                    ),
+                    "is_current_attempt": True,
+                    "progress_percent": Decimal("100"),
+                    "engine_version": result.engine_version,
+                    "formula_version": result.formula_version,
+                    "random_seed": (
+                        calculation.input_snapshot_json
+                        .get("random_seed")
+                    ),
+                    "simulation_config_json": (
+                        calculation.input_snapshot_json
+                        .get("simulation")
+                    ),
+                    "actual_simulation_runs": (
+                        run_result.actual_simulation_runs
+                    ),
+                    "converged": run_result.converged,
+                    "stop_reason": run_result.stop_reason,
+                    "warnings_json": list(
+                        run_result.warnings
+                    ),
+                    "started_at": calculation.started_at,
+                    "completed_at": datetime.now(
+                        timezone.utc
+                    ),
+                },
+            )
+
+            for item in run_result.items:
+                source = snapshot_by_part.get(
+                    item.spare_part_id,
+                    {},
+                )
+                inventory = source.get("inventory", {})
+                gap = inventory_gap_service.calculate(
+                    recommended_spare_quantity=(
+                        item.recommended_spare_quantity
+                    ),
+                    available_quantity=inventory.get(
+                        "available_quantity",
+                        0,
+                    ),
+                    in_transit_quantity=inventory.get(
+                        "in_transit_quantity",
+                        0,
+                    ),
+                    safety_stock_reserved=inventory.get(
+                        "safety_stock",
+                        0,
+                    ),
+                )
+                self.item_result_repository.create(
+                    session,
+                    tenant_id,
+                    {
+                        "calculation_run_id": run.id,
+                        "spare_part_id": item.spare_part_id,
+                        "spare_part_code_snapshot": (
+                            item.spare_part_code
+                        ),
+                        "spare_part_name_snapshot": (
+                            item.spare_part_name
+                        ),
+                        "criticality_level": source.get(
+                            "criticality_level"
+                        ),
+                        "calculation_status": (
+                            ItemCalculationStatus.CALCULATED
+                        ),
+                        "selected_model_type": (
+                            item.selected_model_type.value
+                        ),
+                        "failure_process_mode": (
+                            FailureProcessMode(
+                                item.failure_process_mode.value
+                            )
+                        ),
+                        "selected_reliability_profile_id": (
+                            source.get(
+                                "selected_reliability_profile_id"
+                            )
+                        ),
+                        "selected_repair_profile_id": (
+                            source.get(
+                                "selected_repair_profile_id"
+                            )
+                        ),
+                        "selection_reason_json": {
+                            "reason": source.get(
+                                "selection_reason"
+                            )
+                        },
+                        "parameter_snapshot_json": {
+                            "reliability": source.get(
+                                "reliability"
+                            ),
+                            "repair": source.get("repair"),
+                        },
+                        "is_manually_overridden": bool(
+                            source.get(
+                                "manual_override",
+                                False,
+                            )
+                        ),
+                        "target_service_level": Decimal(
+                            str(item.target_service_level)
+                        ),
+                        "expected_demand": Decimal(
+                            str(item.expected_demand)
+                        ),
+                        "variance": Decimal(
+                            str(item.variance)
+                        ),
+                        "standard_deviation": Decimal(
+                            str(item.standard_deviation)
+                        ),
+                        "p50": Decimal(str(item.p50)),
+                        "p80": Decimal(str(item.p80)),
+                        "p90": Decimal(str(item.p90)),
+                        "p95": Decimal(str(item.p95)),
+                        "p99": Decimal(str(item.p99)),
+                        "target_quantile_demand": Decimal(
+                            str(item.target_quantile_demand)
+                        ),
+                        "gross_replacement_demand": Decimal(
+                            str(item.gross_replacement_demand)
+                        ),
+                        "repair_pipeline_demand": Decimal(
+                            str(item.repair_pipeline_demand)
+                        ),
+                        "repair_pipeline_peak": Decimal(
+                            str(item.repair_pipeline_peak)
+                        ),
+                        "net_consumption_demand": Decimal(
+                            str(item.net_consumption_demand)
+                        ),
+                        "recommended_spare_quantity": (
+                            Decimal(
+                                str(
+                                    item.recommended_spare_quantity
+                                )
+                            )
+                        ),
+                        "on_hand_quantity": Decimal(
+                            str(
+                                inventory.get(
+                                    "on_hand_quantity",
+                                    0,
+                                )
+                            )
+                        ),
+                        "available_quantity": Decimal(
+                            str(
+                                inventory.get(
+                                    "available_quantity",
+                                    0,
+                                )
+                            )
+                        ),
+                        "in_transit_quantity": Decimal(
+                            str(
+                                inventory.get(
+                                    "in_transit_quantity",
+                                    0,
+                                )
+                            )
+                        ),
+                        "safety_stock_reserved": Decimal(
+                            str(
+                                inventory.get(
+                                    "safety_stock",
+                                    0,
+                                )
+                            )
+                        ),
+                        "usable_inventory": (
+                            gap.usable_inventory
+                        ),
+                        "net_demand_gap": gap.net_demand_gap,
+                        "inventory_coverage_rate": Decimal(
+                            str(gap.inventory_coverage_rate)
+                        ),
+                        "shortage_risk_level": (
+                            ShortageRiskLevel(
+                                gap.shortage_risk_level
+                            )
+                        ),
+                        "minimum_inventory_point": (
+                            -gap.net_demand_gap
+                        ),
+                        "maximum_simultaneous_gap": (
+                            gap.net_demand_gap
+                        ),
+                        "common_shock_demand": Decimal("0"),
+                        "warning_codes_json": list(
+                            item.warnings
+                        ),
+                    },
+                )
+
+                contributions = (
+                    source.get("contributions") or [{}]
+                )
+                share = (
+                    Decimal(str(item.expected_demand))
+                    / Decimal(len(contributions))
+                )
+                for contribution in contributions:
+                    self.contribution_repository.create(
+                        session,
+                        tenant_id,
+                        {
+                            "calculation_run_id": run.id,
+                            "spare_part_id": item.spare_part_id,
+                            "fleet_group_code_snapshot": (
+                                contribution.get(
+                                    "fleet_group_code"
+                                )
+                            ),
+                            "configuration_version_id": (
+                                contribution.get(
+                                    "configuration_version_id"
+                                )
+                            ),
+                            "configuration_item_id": (
+                                contribution.get(
+                                    "configuration_item_id"
+                                )
+                            ),
+                            "item_code_snapshot": (
+                                contribution.get("item_code")
+                            ),
+                            "install_quantity_snapshot": (
+                                Decimal(
+                                    str(
+                                        contribution.get(
+                                            "install_quantity",
+                                            0,
+                                        )
+                                    )
+                                )
+                            ),
+                            "equipment_quantity_snapshot": (
+                                Decimal(
+                                    str(
+                                        contribution.get(
+                                            "equipment_quantity",
+                                            0,
+                                        )
+                                    )
+                                )
+                            ),
+                            "replacement_ratio_snapshot": (
+                                Decimal(
+                                    str(
+                                        contribution.get(
+                                            "replacement_ratio",
+                                            1,
+                                        )
+                                    )
+                                )
+                            ),
+                            "expected_failure_contribution": (
+                                share
+                            ),
+                            "gross_replacement_contribution": (
+                                share
+                            ),
+                            "net_consumption_contribution": (
+                                share
+                            ),
+                            "repair_pipeline_contribution": (
+                                Decimal("0")
+                            ),
+                            "common_shock_contribution": (
+                                Decimal("0")
+                            ),
+                            "reliability_parameter_snapshot_json": (
+                                source.get("reliability")
+                            ),
+                            "repair_parameter_snapshot_json": (
+                                source.get("repair")
+                            ),
+                            "selection_reason_json": {
+                                "reason": source.get(
+                                    "selection_reason"
+                                )
+                            },
+                        },
                     )
+
         session.flush()
 
-    @staticmethod
-    def _next_attempt(session: Session, calculation_id: int, mode: str) -> int:
-        rows = list(
-            session.scalars(
-                select(DemandCalculationRun).where(
-                    DemandCalculationRun.calculation_id == calculation_id,
-                    DemandCalculationRun.run_mode == mode,
-                )
-            ).all()
-        )
-        return max((row.attempt_number for row in rows), default=0) + 1
 
-    def get(self, session: Session, calculation_id: int) -> DemandCalculation:
-        row = session.get(DemandCalculation, calculation_id)
+    def get(
+        self,
+        session: Session,
+        actor: ActorContext,
+        calculation_id: int,
+    ) -> DemandCalculation:
+        row = self.calculation_repository.get_by_id(
+            session,
+            actor.tenant_id,
+            calculation_id,
+        )
         if row is None:
-            raise NotFoundError("demand_calculation", calculation_id)
+            raise NotFoundError(
+                "demand_calculation",
+                calculation_id,
+            )
         return row
 
-    def cancel(self, session: Session, calculation_id: int) -> DemandCalculation:
-        row = self.get(session, calculation_id)
-        if row.status not in {CalculationStatus.PENDING, CalculationStatus.RUNNING}:
-            raise ConflictError("calculation is not cancellable")
+    def cancel(
+        self,
+        session: Session,
+        actor: ActorContext,
+        calculation_id: int,
+    ) -> DemandCalculation:
+        row = self.get(
+            session,
+            actor,
+            calculation_id,
+        )
+        if row.status not in {
+            CalculationStatus.PENDING,
+            CalculationStatus.RUNNING,
+        }:
+            raise ConflictError(
+                "calculation is not cancellable"
+            )
         row.cancel_requested = True
         if row.status is CalculationStatus.PENDING:
             row.status = CalculationStatus.CANCELLED
-            row.completed_at = datetime.now(timezone.utc)
+            row.completed_at = datetime.now(
+                timezone.utc
+            )
         session.commit()
         session.refresh(row)
         return row

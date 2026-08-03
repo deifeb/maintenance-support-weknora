@@ -2,6 +2,7 @@ import { reactive, ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import i18n from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
+import { maintenanceMenuChildren } from '@/stores/maintenance/menu-definition'
 
 type MenuChild = Record<string, any>
 
@@ -29,6 +30,14 @@ export const useMenuStore = defineStore('menuStore', () => {
     { title: '', titleKey: 'menu.knowledgeBase', icon: 'zhishiku', path: 'knowledge-bases' },
     { title: '', titleKey: 'menu.agents', icon: 'agent', path: 'agents' },
     { title: '', titleKey: 'menu.organizations', icon: 'organization', path: 'organizations' },
+    {
+      title: '',
+      titleKey: 'menu.maintenance',
+      icon: 'maintenance',
+      path: 'maintenance',
+      childrenPath: 'maintenance',
+      children: maintenanceMenuChildren.map((item) => ({ ...item }))
+    },
     { title: '', titleKey: 'menu.settings', icon: 'setting', path: 'settings' },
     { title: '', titleKey: 'menu.logout', icon: 'logout', path: 'logout' }
   ])
@@ -46,6 +55,11 @@ export const useMenuStore = defineStore('menuStore', () => {
       if (item.titleKey) {
         item.title = i18n.global.t(item.titleKey)
       }
+      item.children?.forEach((child) => {
+        if (child.titleKey) {
+          child.title = i18n.global.t(child.titleKey)
+        }
+      })
     })
   }
 

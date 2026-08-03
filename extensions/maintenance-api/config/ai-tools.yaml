@@ -78,7 +78,7 @@ tools:
     - PUBLIC
     - RESTRICTED
     confirmation_level: IMPLICIT
-    description: 创建场景草稿
+    description: 创建版本化场景草稿并交接向导
     idempotent: true
     permission_level: SCENARIO_DRAFT
     retryable: false
@@ -232,7 +232,7 @@ tools:
     - PUBLIC
     - RESTRICTED
     confirmation_level: NONE
-    description: 预览场景
+    description: 预览场景草稿但不执行落库
     idempotent: true
     permission_level: READ
     retryable: true
@@ -428,7 +428,7 @@ tools:
     - PUBLIC
     - RESTRICTED
     confirmation_level: IMPLICIT
-    description: 更新场景草稿
+    description: 更新版本化场景草稿并交接向导
     idempotent: true
     permission_level: SCENARIO_DRAFT
     retryable: false
@@ -442,7 +442,7 @@ tools:
     - PUBLIC
     - RESTRICTED
     confirmation_level: NONE
-    description: 校验场景
+    description: 校验场景草稿但不执行落库
     idempotent: true
     permission_level: READ
     retryable: true

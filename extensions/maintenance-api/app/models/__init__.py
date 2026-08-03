@@ -1,5 +1,13 @@
-from app.models.ai_evidence import AIEvidenceItem, AIEvidencePackage
-from app.models.ai_execution import AIConfirmationRequest, AIExecutionPlan, AIPlanStep, AIToolCall
+from app.models.ai_evidence import (
+    AIEvidenceItem,
+    AIEvidencePackage,
+)
+from app.models.ai_execution import (
+    AIConfirmationRequest,
+    AIExecutionPlan,
+    AIPlanStep,
+    AIToolCall,
+)
 from app.models.ai_report import (
     AIReportCitation,
     AIReportExport,
@@ -9,13 +17,30 @@ from app.models.ai_report import (
     AIReportVersion,
 )
 from app.models.ai_review import AIReviewFinding, AIReviewRun
-from app.models.ai_session import AIEvent, AIMessage, AIModelCall, AISession, AISessionSnapshot
+from app.models.ai_session import (
+    AIEvent,
+    AIMessage,
+    AIModelCall,
+    AISession,
+    AISessionSnapshot,
+)
+from app.models.calculation_group import (
+    CalculationGroup,
+    CalculationGroupChild,
+    CalculationGroupEvent,
+    CalculationItemDecision,
+)
 from app.models.catalog import Part, SparePart
 from app.models.demand_calculation import (
     DemandCalculation,
     DemandCalculationRun,
     DemandRunContribution,
     DemandRunItemResult,
+)
+from app.models.demand_list import (
+    DemandList,
+    DemandListEvent,
+    DemandListItem,
 )
 from app.models.demand_scenario import (
     DemandAgeGroup,
@@ -27,13 +52,25 @@ from app.models.demand_scenario import (
     DemandScenarioVersion,
     DemandStageFleetUsage,
 )
-from app.models.equipment import ConfigurationItem, ConfigurationVersion, EquipmentModel
+from app.models.equipment import (
+    ConfigurationItem,
+    ConfigurationVersion,
+    EquipmentModel,
+)
+from app.models.import_task import (
+    ImportTask,
+    ImportTaskStatus,
+    MasterDataImportTask,
+)
 from app.models.inventory import Warehouse, WarehouseInventory
+from app.models.mixins import TenantScopedMixin, VersionedMixin
 from app.models.reliability import ReliabilityProfile
 from app.models.repair import RepairProfile
 from app.models.supplier import Supplier, SupplierOffer
 
 __all__ = [
+    "VersionedMixin",
+    "TenantScopedMixin",
     "EquipmentModel",
     "ConfigurationVersion",
     "ConfigurationItem",
@@ -45,6 +82,13 @@ __all__ = [
     "Supplier",
     "SupplierOffer",
     "RepairProfile",
+    "CalculationGroup",
+    "CalculationGroupChild",
+    "CalculationGroupEvent",
+    "CalculationItemDecision",
+    "DemandList",
+    "DemandListItem",
+    "DemandListEvent",
     "DemandScenarioTemplate",
     "DemandScenarioVersion",
     "DemandScenarioStage",
@@ -76,4 +120,7 @@ __all__ = [
     "AIReportSection",
     "AIReportValidationFinding",
     "AIReportVersion",
+    "ImportTask",
+    "ImportTaskStatus",
+    "MasterDataImportTask",
 ]

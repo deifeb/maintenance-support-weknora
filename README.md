@@ -261,6 +261,18 @@ Detailed API documentation is available at: [API Docs](./docs/api/README.md)
 
 Product plans and upcoming features: [Roadmap](./docs/ROADMAP.md)
 
+### Maintenance scenario draft workflow (Plan 05-3A)
+
+The maintenance workspace now supports a six-step scenario wizard with manual and AI-assisted entry. Both entry modes produce the same tenant-scoped, versioned draft envelope; AI may suggest whitelisted fields, but cannot materialize or publish a scenario.
+
+- Draft lifecycle: `POST /v1/demand/scenario-drafts`, `GET/PUT /v1/demand/scenario-drafts/{session_id}`, and `POST /v1/demand/scenario-drafts/{session_id}/validate`.
+- Materialization: contributors may call `POST /v1/demand/scenario-drafts/{session_id}/materialize` with an `Idempotency-Key`. The result is always an editable `DRAFT`.
+- Scenario register: `GET /v1/demand/scenarios`, `GET /v1/demand/scenarios/{scenario_id}/versions`, and `GET /v1/demand/scenario-versions/{version_id}/full`.
+- Version lifecycle: contributors can edit `DRAFT` metadata; only administrators with high-risk confirmation permission can publish or retire a version.
+- Concurrency: autosave sends `expected_version`. A `409` keeps local changes intact and exposes the latest server copy for an explicit reload or discard decision.
+
+Only `PUBLISHED` versions are eligible for calculation execution in Plan 05-3B. `DRAFT` versions remain reviewable and editable but cannot enter that execution path.
+
 ## 🧭 Developer Guide
 
 ### ⚡ Fast Development Mode (Recommended)

@@ -1,7 +1,17 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,13 +22,18 @@ from app.models.enums import (
     AIReportVersionStatus,
     AISeverity,
 )
-from app.models.mixins import TimestampMixin
+from app.models.mixins import TenantScopedMixin, TimestampMixin, VersionedMixin
 
 
-class AIReportJob(Base, TimestampMixin):
+class AIReportJob(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_report_jobs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    report_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    report_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     session_id: Mapped[int | None] = mapped_column(
         ForeignKey("ai_sessions.id", ondelete="SET NULL"), index=True
     )
@@ -35,8 +50,21 @@ class AIReportJob(Base, TimestampMixin):
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
 
+    __table_args__ = (
+        Index(
+            "uq_ai_report_jobs_tenant_code",
+            "tenant_id",
+            "report_code",
+            unique=True,
+        ),
+    )
 
-class AIReportVersion(Base, TimestampMixin):
+
+class AIReportVersion(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_report_versions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     report_job_id: Mapped[int] = mapped_column(
@@ -70,7 +98,11 @@ class AIReportVersion(Base, TimestampMixin):
     )
 
 
-class AIReportSection(Base, TimestampMixin):
+class AIReportSection(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_report_sections"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     report_version_id: Mapped[int] = mapped_column(
@@ -89,7 +121,11 @@ class AIReportSection(Base, TimestampMixin):
     )
 
 
-class AIReportCitation(Base, TimestampMixin):
+class AIReportCitation(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_report_citations"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     report_version_id: Mapped[int] = mapped_column(
@@ -108,7 +144,11 @@ class AIReportCitation(Base, TimestampMixin):
     )
 
 
-class AIReportValidationFinding(Base, TimestampMixin):
+class AIReportValidationFinding(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_report_validation_findings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     report_version_id: Mapped[int] = mapped_column(
@@ -123,7 +163,11 @@ class AIReportValidationFinding(Base, TimestampMixin):
     resolved: Mapped[bool] = mapped_column(nullable=False, default=False)
 
 
-class AIReportExport(Base, TimestampMixin):
+class AIReportExport(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_report_exports"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     report_version_id: Mapped[int] = mapped_column(

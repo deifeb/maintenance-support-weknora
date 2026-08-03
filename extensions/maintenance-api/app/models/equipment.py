@@ -20,18 +20,29 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.enums import ConfigurationStatus, CriticalityLevel
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 if TYPE_CHECKING:
     from app.models.catalog import Part, SparePart
     from app.models.reliability import ReliabilityProfile
 
 
-class EquipmentModel(Base, ActiveMixin, TimestampMixin):
+class EquipmentModel(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "equipment_models"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str | None] = mapped_column(String(100))
     manufacturer: Mapped[str | None] = mapped_column(String(200))
@@ -44,6 +55,12 @@ class EquipmentModel(Base, ActiveMixin, TimestampMixin):
     )
 
     __table_args__ = (
+        Index(
+            "uq_equipment_models_tenant_code",
+            "tenant_id",
+            "code",
+            unique=True,
+        ),
         CheckConstraint(
             "service_life_years IS NULL OR service_life_years >= 0",
             name="ck_equipment_service_life_nonnegative",
@@ -51,7 +68,13 @@ class EquipmentModel(Base, ActiveMixin, TimestampMixin):
     )
 
 
-class ConfigurationVersion(Base, ActiveMixin, TimestampMixin):
+class ConfigurationVersion(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "configuration_versions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -104,7 +127,12 @@ class ConfigurationVersion(Base, ActiveMixin, TimestampMixin):
     )
 
 
-class ConfigurationItem(Base, TimestampMixin):
+class ConfigurationItem(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "configuration_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

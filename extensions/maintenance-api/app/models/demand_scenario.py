@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -26,13 +27,24 @@ from app.models.enums import (
     ScenarioVersionStatus,
     ShockApplicationMode,
 )
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 
-class DemandScenarioTemplate(Base, ActiveMixin, TimestampMixin):
+class DemandScenarioTemplate(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_scenario_templates"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str | None] = mapped_column(Text)
@@ -41,8 +53,22 @@ class DemandScenarioTemplate(Base, ActiveMixin, TimestampMixin):
         back_populates="template", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (
+        Index(
+            "uq_demand_scenario_templates_tenant_code",
+            "tenant_id",
+            "code",
+            unique=True,
+        ),
+    )
 
-class DemandScenarioVersion(Base, TimestampMixin):
+
+class DemandScenarioVersion(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_scenario_versions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scenario_template_id: Mapped[int] = mapped_column(
@@ -117,7 +143,11 @@ class DemandScenarioVersion(Base, TimestampMixin):
     )
 
 
-class DemandScenarioStage(Base, TimestampMixin):
+class DemandScenarioStage(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_scenario_stages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scenario_version_id: Mapped[int] = mapped_column(
@@ -156,7 +186,11 @@ class DemandScenarioStage(Base, TimestampMixin):
     )
 
 
-class DemandFleetGroup(Base, TimestampMixin):
+class DemandFleetGroup(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_fleet_groups"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scenario_version_id: Mapped[int] = mapped_column(
@@ -187,7 +221,11 @@ class DemandFleetGroup(Base, TimestampMixin):
     )
 
 
-class DemandAgeGroup(Base, TimestampMixin):
+class DemandAgeGroup(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_age_groups"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     fleet_group_id: Mapped[int] = mapped_column(
@@ -214,7 +252,12 @@ class DemandAgeGroup(Base, TimestampMixin):
     )
 
 
-class DemandStageFleetUsage(Base, ActiveMixin, TimestampMixin):
+class DemandStageFleetUsage(
+    Base,
+    TenantScopedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_stage_fleet_usages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stage_id: Mapped[int] = mapped_column(
@@ -238,7 +281,11 @@ class DemandStageFleetUsage(Base, ActiveMixin, TimestampMixin):
     )
 
 
-class DemandParameterOverride(Base, TimestampMixin):
+class DemandParameterOverride(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_parameter_overrides"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     scenario_version_id: Mapped[int] = mapped_column(
@@ -287,7 +334,11 @@ class DemandParameterOverride(Base, TimestampMixin):
     )
 
 
-class DemandCommonShockRule(Base, TimestampMixin):
+class DemandCommonShockRule(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_common_shock_rules"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     stage_id: Mapped[int] = mapped_column(

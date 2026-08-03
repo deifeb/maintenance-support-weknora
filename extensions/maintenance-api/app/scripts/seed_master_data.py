@@ -1,3 +1,4 @@
+import argparse
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -24,24 +25,59 @@ from app.models.enums import (
 )
 
 
-def get_or_create(session, model, lookup: dict, defaults: dict):
-    instance = session.scalar(select(model).filter_by(**lookup))
+def _normalize_tenant_id(tenant_id: str) -> str:
+    normalized = tenant_id.strip()
+    if not normalized:
+        raise ValueError("tenant_id must not be blank")
+    return normalized
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--tenant-id",
+        required=True,
+        help="Tenant that owns all seeded master data",
+    )
+    return parser.parse_args()
+
+
+def get_or_create(
+    session,
+    model,
+    *,
+    tenant_id: str,
+    lookup: dict,
+    defaults: dict,
+):
+    scoped_lookup = {
+        "tenant_id": tenant_id,
+        **lookup,
+    }
+    instance = session.scalar(
+        select(model).filter_by(**scoped_lookup)
+    )
     if instance is None:
-        instance = model(**lookup, **defaults)
+        instance = model(
+            **scoped_lookup,
+            **defaults,
+        )
         session.add(instance)
         session.flush()
     return instance
 
 
-def seed() -> dict[str, int]:
+def seed(*, tenant_id: str) -> dict[str, int]:
+    tenant_id = _normalize_tenant_id(tenant_id)
     session = SessionLocal()
     try:
         equipment = [
             get_or_create(
                 session,
                 EquipmentModel,
-                {"code": f"EQ-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={"code": f"EQ-{index:03d}"},
+                defaults={
                     "name": f"示例装备{index}",
                     "category": "示例装备",
                     "manufacturer": "示例制造单位",
@@ -55,8 +91,9 @@ def seed() -> dict[str, int]:
             get_or_create(
                 session,
                 Part,
-                {"code": f"PT-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={"code": f"PT-{index:03d}"},
+                defaults={
                     "name": f"示例部件{index}",
                     "part_type": "可更换单元" if index % 2 else "组件",
                     "unit": "件",
@@ -69,8 +106,9 @@ def seed() -> dict[str, int]:
             get_or_create(
                 session,
                 SparePart,
-                {"code": f"SP-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={"code": f"SP-{index:03d}"},
+                defaults={
                     "name": f"示例维修器材{index}",
                     "category": "关键件" if index <= 5 else "一般件",
                     "unit": "件",
@@ -86,8 +124,9 @@ def seed() -> dict[str, int]:
             get_or_create(
                 session,
                 Warehouse,
-                {"code": f"WH-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={"code": f"WH-{index:03d}"},
+                defaults={
                     "name": f"示例库房{index}",
                     "warehouse_type": "中心库" if index == 1 else "保障点",
                     "status": WarehouseStatus.NORMAL,
@@ -100,8 +139,9 @@ def seed() -> dict[str, int]:
             get_or_create(
                 session,
                 Supplier,
-                {"code": f"SUP-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={"code": f"SUP-{index:03d}"},
+                defaults={
                     "name": f"示例供应商{index}",
                     "supplier_type": "制造商" if index <= 2 else "经销商",
                     "rating": Decimal(str(90 - index)),
@@ -117,11 +157,12 @@ def seed() -> dict[str, int]:
                 version = get_or_create(
                     session,
                     ConfigurationVersion,
-                    {
+                    tenant_id=tenant_id,
+                    lookup={
                         "equipment_model_id": eq.id,
                         "version_code": f"V{version_index}",
                     },
-                    {
+                    defaults={
                         "version_name": f"示例构型{version_index}",
                         "status": ConfigurationStatus.DRAFT,
                         "is_default": version_index == 1,
@@ -131,26 +172,37 @@ def seed() -> dict[str, int]:
                 versions.append(version)
                 for local_index in range(1, 9):
                     global_index = (
-                        (eq_index - 1) * 15 + (version_index - 1) * 8 + local_index - 1
+                        (eq_index - 1) * 15
+                        + (version_index - 1) * 8
+                        + local_index
+                        - 1
                     ) % 15
                     spare_index = (
-                        (eq_index - 1) * 15 + (version_index - 1) * 8 + local_index - 1
+                        (eq_index - 1) * 15
+                        + (version_index - 1) * 8
+                        + local_index
+                        - 1
                     ) % 20
                     item_code = f"N{local_index:02d}"
                     item = session.scalar(
                         select(ConfigurationItem).where(
-                            ConfigurationItem.configuration_version_id == version.id,
+                            ConfigurationItem.tenant_id == tenant_id,
+                            ConfigurationItem.configuration_version_id
+                            == version.id,
                             ConfigurationItem.item_code == item_code,
                         )
                     )
                     if item is None:
                         item = ConfigurationItem(
+                            tenant_id=tenant_id,
                             configuration_version_id=version.id,
                             item_code=item_code,
                             parent_item_id=None,
                             part_id=parts[global_index].id,
                             spare_part_id=spares[spare_index].id,
-                            install_quantity=Decimal(str((local_index % 3) + 1)),
+                            install_quantity=Decimal(
+                                str((local_index % 3) + 1)
+                            ),
                             criticality_level=(
                                 CriticalityLevel.CRITICAL
                                 if local_index <= 2
@@ -164,43 +216,73 @@ def seed() -> dict[str, int]:
                     if local_index > 1 and item.parent_item_id is None:
                         parent = session.scalar(
                             select(ConfigurationItem).where(
-                                ConfigurationItem.configuration_version_id == version.id,
+                                ConfigurationItem.tenant_id == tenant_id,
+                                ConfigurationItem.configuration_version_id
+                                == version.id,
                                 ConfigurationItem.item_code == "N01",
                             )
                         )
+                        if parent is None:
+                            raise RuntimeError(
+                                "Seeded configuration parent N01 "
+                                "was not found"
+                            )
                         item.parent_item_id = parent.id
                 if version_index == 1:
                     version.status = ConfigurationStatus.PUBLISHED
 
         model_payloads = [
-            (ReliabilityModelType.EXPONENTIAL, {"failure_rate": Decimal("0.0001")}),
+            (
+                ReliabilityModelType.EXPONENTIAL,
+                {"failure_rate": Decimal("0.0001")},
+            ),
             (
                 ReliabilityModelType.WEIBULL,
-                {"weibull_shape": Decimal("1.5"), "weibull_scale": Decimal("5000")},
+                {
+                    "weibull_shape": Decimal("1.5"),
+                    "weibull_scale": Decimal("5000"),
+                },
             ),
             (
                 ReliabilityModelType.BINOMIAL,
-                {"binomial_trials": 10, "binomial_probability": Decimal("0.2")},
+                {
+                    "binomial_trials": 10,
+                    "binomial_probability": Decimal("0.2"),
+                },
             ),
             (
                 ReliabilityModelType.NEGATIVE_BINOMIAL,
-                {"negative_binomial_r": Decimal("3"), "negative_binomial_p": Decimal("0.4")},
+                {
+                    "negative_binomial_r": Decimal("3"),
+                    "negative_binomial_p": Decimal("0.4"),
+                },
             ),
             (
                 ReliabilityModelType.EMPIRICAL,
-                {"empirical_mean": Decimal("2"), "empirical_variance": Decimal("1")},
+                {
+                    "empirical_mean": Decimal("2"),
+                    "empirical_variance": Decimal("1"),
+                },
             ),
         ]
-        for index, (model_type, parameters) in enumerate(model_payloads, start=1):
+        for index, (model_type, parameters) in enumerate(
+            model_payloads,
+            start=1,
+        ):
             get_or_create(
                 session,
                 ReliabilityProfile,
-                {"profile_code": f"RP-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={
+                    "profile_code": f"RP-{index:03d}",
+                },
+                defaults={
                     "spare_part_id": spares[index - 1].id,
                     "configuration_version_id": versions[0].id,
                     "model_type": model_type,
-                    "data_source_type": DataSourceType.DESIGN_PARAMETER,
+                    "data_source_type": (
+                        DataSourceType.DESIGN_PARAMETER
+                    ),
                     "confidence_level": Decimal("0.95"),
                     "is_active": True,
                     **parameters,
@@ -212,8 +294,12 @@ def seed() -> dict[str, int]:
                 get_or_create(
                     session,
                     WarehouseInventory,
-                    {"warehouse_id": warehouse.id, "spare_part_id": spare.id},
-                    {
+                    tenant_id=tenant_id,
+                    lookup={
+                        "warehouse_id": warehouse.id,
+                        "spare_part_id": spare.id,
+                    },
+                    defaults={
                         "on_hand_quantity": Decimal(str(50 + spare.id)),
                         "reserved_quantity": Decimal("2"),
                         "damaged_quantity": Decimal("0"),
@@ -230,8 +316,11 @@ def seed() -> dict[str, int]:
             get_or_create(
                 session,
                 SupplierOffer,
-                {"offer_code": f"OF-{index:03d}"},
-                {
+                tenant_id=tenant_id,
+                lookup={
+                    "offer_code": f"OF-{index:03d}",
+                },
+                defaults={
                     "supplier_id": supplier.id,
                     "spare_part_id": spare.id,
                     "unit_price": Decimal(str(100 + index * 10)),
@@ -243,6 +332,7 @@ def seed() -> dict[str, int]:
                     "is_active": True,
                 },
             )
+
         session.commit()
         models = [
             EquipmentModel,
@@ -256,7 +346,16 @@ def seed() -> dict[str, int]:
             Supplier,
             SupplierOffer,
         ]
-        return {model.__tablename__: len(session.scalars(select(model)).all()) for model in models}
+        return {
+            model.__tablename__: len(
+                session.scalars(
+                    select(model).where(
+                        model.tenant_id == tenant_id,
+                    )
+                ).all()
+            )
+            for model in models
+        }
     except Exception:
         session.rollback()
         raise
@@ -265,7 +364,8 @@ def seed() -> dict[str, int]:
 
 
 def main() -> None:
-    counts = seed()
+    args = _parse_args()
+    counts = seed(tenant_id=args.tenant_id)
     for table, count in counts.items():
         print(f"{table}: {count}")
 

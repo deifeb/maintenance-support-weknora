@@ -76,7 +76,7 @@
                     </div>
                 </t-tooltip>
             </div>
-            <div class="menu_box" :class="{ 'menu_box--sticky': item.children && !uiStore.sidebarCollapsed }"
+            <div class="menu_box" :class="{ 'menu_box--sticky': item.path === 'creatChat' && item.children && !uiStore.sidebarCollapsed }"
                 v-for="(item, index) in topMenuItems" :key="index">
                 <t-tooltip :content="item.title" placement="right" :disabled="!uiStore.sidebarCollapsed">
                     <div @click="handleMenuClick(item.path)" @mouseenter="mouseenteMenu(item.path)"
@@ -85,7 +85,7 @@
                         <div class="menu_item-box">
                             <div class="menu_icon">
                                 <img class="icon"
-                                    :src="getImgSrc(item.icon == 'zhishiku' ? knowledgeIcon : item.icon == 'agent' ? agentIcon : item.icon == 'organization' ? organizationIcon : item.icon == 'logout' ? logoutIcon : item.icon == 'setting' ? settingIcon : prefixIcon)"
+                                    :src="getImgSrc(item.icon == 'zhishiku' ? knowledgeIcon : item.icon == 'agent' ? agentIcon : item.icon == 'organization' ? organizationIcon : item.icon == 'logout' ? logoutIcon : item.icon == 'setting' ? settingIcon : item.icon == 'maintenance' ? 'maintenance.svg' : prefixIcon)"
                                     alt="">
                             </div>
                             <template v-if="!uiStore.sidebarCollapsed">
@@ -98,6 +98,13 @@
                         </div>
                     </div>
                 </t-tooltip>
+                <div v-if="shouldShowMaintenanceChildren(item)" class="maintenance-submenu">
+                    <button v-for="child in item.children" :key="child.path" type="button"
+                        :class="['maintenance-submenu__item', { 'maintenance-submenu__item--active': isMaintenanceChildActive(child.path) }]"
+                        @click="handleMaintenanceChildClick(child.path)">
+                        {{ child.title }}
+                    </button>
+                </div>
             </div>
 
             <!-- 历史会话：按来源筛选后统一按日期分组展示 -->
@@ -405,6 +412,8 @@ const isMenuItemActive = (itemPath: string): boolean => {
             return currentRoute === 'agentList';
         case 'organizations':
             return currentRoute === 'organizationList';
+        case 'maintenance':
+            return route.path.startsWith('/platform/maintenance');
         case 'creatChat':
             return currentRoute === 'kbCreatChat' || currentRoute === 'globalCreatChat';
         case 'settings':
@@ -433,18 +442,36 @@ const getIconActiveState = (itemPath: string) => {
 // 分离上下两部分菜单（使用 visibleMenuArr 以便 lite 模式过滤 logout）
 const topMenuItems = computed<MenuItem[]>(() => {
     return (visibleMenuArr.value as unknown as MenuItem[]).filter((item: MenuItem) =>
-        item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'organizations' || item.path === 'creatChat'
+        item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'organizations' || item.path === 'maintenance' || item.path === 'creatChat'
     );
 });
 
 const bottomMenuItems = computed<MenuItem[]>(() => {
     return (visibleMenuArr.value as unknown as MenuItem[]).filter((item: MenuItem) => {
-        if (item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'organizations' || item.path === 'creatChat') {
+        if (item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'organizations' || item.path === 'maintenance' || item.path === 'creatChat') {
             return false;
         }
         return true;
     });
 });
+
+const shouldShowMaintenanceChildren = (item: MenuItem): boolean => {
+    return (
+        item.path === 'maintenance'
+        && !uiStore.sidebarCollapsed
+        && route.path.startsWith('/platform/maintenance')
+        && Array.isArray(item.children)
+        && item.children.length > 0
+    );
+};
+
+const isMaintenanceChildActive = (path: string): boolean => {
+    return route.path === `/platform/${path}`;
+};
+
+const handleMaintenanceChildClick = (path: string) => {
+    router.push(`/platform/${path}`);
+};
 
 // 当前知识库信息
 const currentKbName = ref<string>('')
@@ -1074,6 +1101,8 @@ const handleMenuClick = async (path: string) => {
     } else if (path === 'organizations') {
         // 组织菜单项：跳转到组织列表
         router.push('/platform/organizations')
+    } else if (path === 'maintenance') {
+        router.push('/platform/maintenance/dashboard')
     } else if (path === 'settings') {
         // 设置菜单项：打开设置弹窗并跳转路由
         uiStore.openSettings()
@@ -1885,6 +1914,40 @@ const onDragHandleMouseDown = (e: MouseEvent) => {
 .menu_box {
     position: relative;
 }
+
+.maintenance-submenu {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 2px 8px 8px;
+    padding-left: var(--sidebar-text-inset);
+}
+
+.maintenance-submenu__item {
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--td-text-color-secondary);
+    font: inherit;
+    line-height: 20px;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.maintenance-submenu__item:hover {
+    background: var(--td-bg-color-container-hover);
+    color: var(--td-text-color-primary);
+}
+
+.maintenance-submenu__item--active {
+    background: var(--td-brand-color-light);
+    color: var(--td-brand-color);
+    font-weight: 600;
+}
+
 </style>
 <style lang="less">
 // Dark mode: invert dark logo to light

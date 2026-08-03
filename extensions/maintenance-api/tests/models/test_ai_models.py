@@ -32,6 +32,7 @@ def test_all_ai_tables_are_registered():
 
 def test_session_and_event_constraints(session):
     row = AISession(
+        tenant_id="tenant-a",
         session_code="AI-001",
         title="测试会话",
         status=AISessionStatus.CREATED,
@@ -42,6 +43,7 @@ def test_session_and_event_constraints(session):
     session.add(row)
     session.commit()
     event = AIEvent(
+        tenant_id="tenant-a",
         session_id=row.id,
         sequence=1,
         event_type="SESSION_STARTED",

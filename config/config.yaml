@@ -111,3 +111,12 @@ extract:
 tenant:
   # Enable cross-tenant access (can be enabled for intranet environments)
   enable_cross_tenant_access: false
+
+# Maintenance support integration (secret is supplied through the environment)
+maintenance:
+  enabled: false
+  base_url: http://127.0.0.1:8100
+  issuer: weknora
+  audience: maintenance-api
+  token_ttl: 3m
+  request_timeout: 30s

@@ -1,11 +1,24 @@
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 if TYPE_CHECKING:
     from app.models.equipment import ConfigurationItem
@@ -14,11 +27,17 @@ if TYPE_CHECKING:
     from app.models.supplier import SupplierOffer
 
 
-class Part(Base, ActiveMixin, TimestampMixin):
+class Part(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "parts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     part_type: Mapped[str | None] = mapped_column(String(100))
     specification: Mapped[str | None] = mapped_column(String(500))
@@ -30,12 +49,27 @@ class Part(Base, ActiveMixin, TimestampMixin):
 
     configuration_items: Mapped[list["ConfigurationItem"]] = relationship(back_populates="part")
 
+    __table_args__ = (
+        Index(
+            "uq_parts_tenant_code",
+            "tenant_id",
+            "code",
+            unique=True,
+        ),
+    )
 
-class SparePart(Base, ActiveMixin, TimestampMixin):
+
+class SparePart(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "spare_parts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     specification: Mapped[str | None] = mapped_column(String(500))
     category: Mapped[str | None] = mapped_column(String(100))
@@ -60,6 +94,12 @@ class SparePart(Base, ActiveMixin, TimestampMixin):
     supplier_offers: Mapped[list["SupplierOffer"]] = relationship(back_populates="spare_part")
 
     __table_args__ = (
+        Index(
+            "uq_spare_parts_tenant_code",
+            "tenant_id",
+            "code",
+            unique=True,
+        ),
         CheckConstraint(
             "shelf_life_months IS NULL OR shelf_life_months >= 0",
             name="ck_spare_shelf_life_nonnegative",
