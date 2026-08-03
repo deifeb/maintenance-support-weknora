@@ -16,6 +16,19 @@ from app.security.actor import ActorContext
 
 
 class InventoryTransactionRepository:
+    def get_transaction(
+        self,
+        session: Session,
+        tenant_id: str,
+        transaction_id: int,
+    ) -> InventoryTransaction | None:
+        return session.scalar(
+            select(InventoryTransaction).where(
+                InventoryTransaction.tenant_id == tenant_id,
+                InventoryTransaction.id == transaction_id,
+            )
+        )
+
     def get_idempotent(
         self,
         session: Session,

@@ -15,7 +15,6 @@ import sqlalchemy as sa
 from alembic import op
 from alembic.util.exc import CommandError
 
-
 revision: str = "20260803_08"
 down_revision: str | None = "20260731_07"
 branch_labels: str | Sequence[str] | None = None
@@ -76,6 +75,41 @@ def _migration_snapshot(row: sa.RowMapping) -> str:
     else:
         last_counted = datetime.fromisoformat(str(last_counted_at)).isoformat()
     return json.dumps({"legacy_last_counted_at": last_counted}, sort_keys=True)
+
+
+def _sync_primary_key_sequence(table_name: str) -> None:
+    bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        # SQLite and the supported test dialect derive the next integer key
+        # from the largest explicit ROWID. MySQL-style auto increment also
+        # advances when a larger explicit key is inserted.
+        return
+    table = sa.Table(
+        table_name,
+        sa.MetaData(),
+        autoload_with=bind,
+    )
+    maximum_id = bind.scalar(sa.select(sa.func.max(table.c.id)))
+    sequence_name = bind.scalar(
+        sa.text(
+            "SELECT pg_get_serial_sequence(:table_name, 'id')"
+        ),
+        {"table_name": table_name},
+    )
+    if sequence_name is None:
+        return
+    bind.execute(
+        sa.text(
+            "SELECT setval("
+            "CAST(:sequence_name AS regclass), "
+            ":sequence_value, :is_called)"
+        ),
+        {
+            "sequence_name": sequence_name,
+            "sequence_value": maximum_id or 1,
+            "is_called": maximum_id is not None,
+        },
+    )
 
 
 def _aggregate_quantities(query: str) -> dict[tuple[str, int, int], tuple[int, tuple[Decimal, ...]]]:
@@ -361,8 +395,8 @@ def _backfill_legacy_inventory() -> None:
         bind.execute(
             sa.text(
                 "INSERT INTO inventory_balances "
-                "(tenant_id, warehouse_id, location_id, spare_part_id, lot_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, version, created_at, updated_at) "
-                "VALUES (:tenant_id, :warehouse_id, :location_id, :spare_part_id, NULL, :on_hand_quantity, :reserved_quantity, :damaged_quantity, :quarantined_quantity, :in_transit_quantity, :version, :created_at, :updated_at)"
+                "(id, tenant_id, warehouse_id, location_id, spare_part_id, lot_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, version, created_at, updated_at) "
+                "VALUES (:id, :tenant_id, :warehouse_id, :location_id, :spare_part_id, NULL, :on_hand_quantity, :reserved_quantity, :damaged_quantity, :quarantined_quantity, :in_transit_quantity, :version, :created_at, :updated_at)"
             ),
             {**dict(row), "location_id": location_id},
         )
@@ -419,6 +453,7 @@ def _backfill_legacy_inventory() -> None:
                 "resulting_balance_version": row["version"],
             },
         )
+    _sync_primary_key_sequence("inventory_balances")
 
 
 def upgrade() -> None:
@@ -639,7 +674,7 @@ def _backfill_legacy_from_balances() -> None:
     bind = op.get_bind()
     rows = bind.execute(
         sa.text(
-            "SELECT b.tenant_id, b.warehouse_id, b.spare_part_id, b.on_hand_quantity, "
+            "SELECT b.id, b.tenant_id, b.warehouse_id, b.spare_part_id, b.on_hand_quantity, "
             "b.reserved_quantity, b.damaged_quantity, b.quarantined_quantity, b.in_transit_quantity, "
             "b.version, b.created_at, b.updated_at, p.safety_stock, p.reorder_point, "
             "p.maximum_stock, p.notes, t.response_snapshot_json "
@@ -657,11 +692,12 @@ def _backfill_legacy_from_balances() -> None:
         bind.execute(
             sa.text(
                 "INSERT INTO warehouse_inventories "
-                "(warehouse_id, spare_part_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, safety_stock, reorder_point, maximum_stock, last_counted_at, notes, tenant_id, version, created_at, updated_at) "
-                "VALUES (:warehouse_id, :spare_part_id, :on_hand_quantity, :reserved_quantity, :damaged_quantity, :quarantined_quantity, :in_transit_quantity, :safety_stock, :reorder_point, :maximum_stock, :last_counted_at, :notes, :tenant_id, :version, :created_at, :updated_at)"
+                "(id, warehouse_id, spare_part_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, safety_stock, reorder_point, maximum_stock, last_counted_at, notes, tenant_id, version, created_at, updated_at) "
+                "VALUES (:id, :warehouse_id, :spare_part_id, :on_hand_quantity, :reserved_quantity, :damaged_quantity, :quarantined_quantity, :in_transit_quantity, :safety_stock, :reorder_point, :maximum_stock, :last_counted_at, :notes, :tenant_id, :version, :created_at, :updated_at)"
             ),
             {**dict(row), "last_counted_at": _legacy_last_counted_at(row["response_snapshot_json"])},
         )
+    _sync_primary_key_sequence("warehouse_inventories")
 
 
 def _legacy_last_counted_at(snapshot: object) -> datetime | None:

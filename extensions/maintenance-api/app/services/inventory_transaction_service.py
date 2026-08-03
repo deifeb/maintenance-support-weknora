@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
 from decimal import Decimal
 from typing import Literal
 
@@ -31,6 +33,7 @@ from app.security.actor import ActorContext, MaintenanceRole
 from app.services.snapshot_service import snapshot_service
 
 OperationType = Literal["OPENING", "ADJUST"]
+NewCommandValidator = Callable[[InventoryBalance], None]
 _IDEMPOTENCY_CONSTRAINT = "uq_inventory_tx_tenant_operation_idempotency"
 _SQLITE_IDEMPOTENCY_UNIQUE_ERROR = (
     "UNIQUE constraint failed: inventory_transactions.tenant_id, "
@@ -83,6 +86,7 @@ class InventoryTransactionService:
         deltas: InventoryQuantityDelta,
         reason: str,
         idempotency_key: str,
+        validate_new_command: NewCommandValidator | None = None,
     ) -> InventoryTransactionRead:
         self._require_admin(actor)
         return self._apply_quantity_operation(
@@ -94,6 +98,7 @@ class InventoryTransactionService:
             deltas=deltas,
             reason=reason,
             idempotency_key=idempotency_key,
+            validate_new_command=validate_new_command,
         )
 
     def _apply_quantity_operation(
@@ -107,6 +112,7 @@ class InventoryTransactionService:
         deltas: InventoryQuantityDelta,
         reason: str,
         idempotency_key: str,
+        validate_new_command: NewCommandValidator | None = None,
     ) -> InventoryTransactionRead:
         clean_reason = self._normalize_reason(reason)
         clean_key = self._normalize_idempotency_key(idempotency_key)
@@ -153,6 +159,8 @@ class InventoryTransactionService:
                 )
                 if existing is not None:
                     return self._replay(actor, existing, request_hash)
+                if validate_new_command is not None:
+                    validate_new_command(balance)
                 self._require_version(
                     actor,
                     balance,
@@ -223,6 +231,70 @@ class InventoryTransactionService:
             )
             conflict.request_id = actor.request_id
             raise conflict from exc
+
+    def response_extension(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        transaction_id: int,
+        name: str,
+    ) -> dict | None:
+        transaction = self.transaction_repository.get_transaction(
+            session,
+            actor.tenant_id,
+            transaction_id,
+        )
+        if transaction is None:
+            raise NotFoundError(
+                "inventory_transaction",
+                transaction_id,
+            )
+        snapshot = transaction.response_snapshot_json
+        if not isinstance(snapshot, dict):
+            return None
+        extensions = snapshot.get("_extensions")
+        if not isinstance(extensions, dict):
+            return None
+        value = extensions.get(name)
+        return deepcopy(value) if isinstance(value, dict) else None
+
+    def store_response_extension(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        transaction_id: int,
+        name: str,
+        value: dict,
+    ) -> None:
+        transaction = self.transaction_repository.get_transaction(
+            session,
+            actor.tenant_id,
+            transaction_id,
+        )
+        if transaction is None:
+            raise NotFoundError(
+                "inventory_transaction",
+                transaction_id,
+            )
+        snapshot = deepcopy(transaction.response_snapshot_json)
+        if not isinstance(snapshot, dict):
+            raise ConflictError(
+                "idempotent response is unavailable",
+                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={
+                    "conflict_object": "inventory_transaction",
+                    "retryable": False,
+                },
+            )
+        extensions = snapshot.get("_extensions")
+        if not isinstance(extensions, dict):
+            extensions = {}
+        extensions[name] = deepcopy(value)
+        snapshot["_extensions"] = extensions
+        transaction.response_snapshot_json = snapshot
+        session.flush()
 
     @staticmethod
     def _is_idempotency_constraint_violation(exc: IntegrityError) -> bool:

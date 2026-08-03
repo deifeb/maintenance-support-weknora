@@ -17,7 +17,6 @@ from app.schemas.inventory import (
 from app.security.actor import ActorContext
 from app.security.permissions import (
     require_admin,
-    require_contributor,
     require_viewer,
 )
 from app.services import inventory_service
@@ -33,7 +32,7 @@ AdminDep = Annotated[ActorContext, Depends(require_admin)]
 def create_inventory(
     payload: WarehouseInventoryCreate,
     session: SessionDep,
-    actor: Annotated[ActorContext, Depends(require_contributor)],
+    actor: AdminDep,
 ):
     item = inventory_service.create_inventory(session, actor, payload)
     return success_response(WarehouseInventoryRead.model_validate(item), "Inventory created", actor=actor, version=item.version)
@@ -71,7 +70,7 @@ def update_inventory(
     identifier: int,
     payload: WarehouseInventoryUpdate,
     session: SessionDep,
-    actor: Annotated[ActorContext, Depends(require_contributor)],
+    actor: AdminDep,
 ):
     item = inventory_service.update_inventory(session, actor, identifier, payload)
     return success_response(

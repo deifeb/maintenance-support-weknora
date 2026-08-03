@@ -46,7 +46,7 @@ from app.schemas.supplier import (
     SupplierOfferCreate,
     SupplierOfferUpdate,
 )
-from app.security.actor import ActorContext
+from app.security.actor import ActorContext, MaintenanceRole
 from app.services import (
     configuration_service,
     inventory_service,
@@ -364,7 +364,6 @@ def test_services_reject_foreign_reference_ids(
             WarehouseInventoryCreate(
                 warehouse_id=warehouse_b.id,
                 spare_part_id=spare_b.id,
-                on_hand_quantity=Decimal("1"),
             ),
         )
 
@@ -600,7 +599,10 @@ def test_custom_service_target_ids_are_tenant_scoped(
     session: Session,
     actor_context: Callable[..., ActorContext],
 ) -> None:
-    actor = actor_context(tenant_id="tenant-a")
+    actor = actor_context(
+        tenant_id="tenant-a",
+        role=MaintenanceRole.ADMIN,
+    )
     equipment_b = add_equipment(
         session,
         "tenant-b",
@@ -666,9 +668,7 @@ def test_custom_service_target_ids_are_tenant_scoped(
             session,
             actor,
             inventory_b.id,
-            WarehouseInventoryUpdate(
-                on_hand_quantity=Decimal("9")
-            ),
+            WarehouseInventoryUpdate(safety_stock=Decimal("9")),
         )
 
     with pytest.raises(NotFoundError):
@@ -789,9 +789,7 @@ def test_inventory_update_rejects_foreign_spare_reference(
             session,
             actor,
             inventory.id,
-            WarehouseInventoryUpdate(
-                on_hand_quantity=Decimal("9")
-            ),
+            WarehouseInventoryUpdate(safety_stock=Decimal("9")),
         )
 
 
@@ -799,7 +797,10 @@ def test_inventory_adjust_rejects_foreign_spare_reference(
     session: Session,
     actor_context: Callable[..., ActorContext],
 ) -> None:
-    actor = actor_context(tenant_id="tenant-a")
+    actor = actor_context(
+        tenant_id="tenant-a",
+        role=MaintenanceRole.ADMIN,
+    )
     warehouse = add_warehouse(
         session,
         "tenant-a",

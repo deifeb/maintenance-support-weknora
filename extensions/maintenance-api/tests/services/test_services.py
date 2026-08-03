@@ -116,7 +116,6 @@ def test_inventory_adjustment_and_frozen_warehouse(session, actor_admin) -> None
         WarehouseInventoryCreate(
             warehouse_id=warehouse.id,
             spare_part_id=spare.id,
-            on_hand_quantity=10,
             safety_stock=2,
             reorder_point=3,
         ),

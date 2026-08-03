@@ -14,7 +14,6 @@ from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
-
 REVISION = "20260803_08"
 PREVIOUS_REVISION = "20260731_07"
 
@@ -53,6 +52,44 @@ def _seed_legacy_inventory(engine) -> None:
                 "VALUES (1, 1, '12.5000', '2.0000', '1.0000', '0.5000', '3.0000', '4.0000', '5.0000', '9.0000', :last_counted_at, 'legacy', 'tenant-a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
             ),
             {"last_counted_at": last_counted_at},
+        )
+
+
+def _seed_legacy_inventory_with_id_gaps(engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO warehouses "
+                "(id, code, name, status, is_active, tenant_id, version, created_at, updated_at) "
+                "VALUES (1, 'WH-GAP', 'Warehouse gap', 'NORMAL', 1, 'tenant-a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO spare_parts "
+                "(id, code, name, unit, is_serialized, is_repairable, is_critical, is_active, tenant_id, version, created_at, updated_at) "
+                "VALUES (:id, :code, :name, 'EA', 0, 0, 0, 1, 'tenant-a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            [
+                {"id": identifier, "code": f"SP-GAP-{identifier}", "name": f"Spare {identifier}"}
+                for identifier in (1, 3, 4)
+            ],
+        )
+        connection.execute(
+            text(
+                "INSERT INTO warehouse_inventories "
+                "(id, warehouse_id, spare_part_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, safety_stock, reorder_point, maximum_stock, last_counted_at, notes, tenant_id, version, created_at, updated_at) "
+                "VALUES (:id, 1, :spare_part_id, :on_hand, 0, 0, 0, 0, 0, 0, NULL, NULL, :notes, 'tenant-a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ),
+            [
+                {
+                    "id": identifier,
+                    "spare_part_id": identifier,
+                    "on_hand": str(identifier),
+                    "notes": f"legacy-{identifier}",
+                }
+                for identifier in (1, 3, 4)
+            ],
         )
 
 
@@ -160,6 +197,74 @@ def test_downgrade_round_trips_lossless_default_aggregate(tmp_path: Path, monkey
 
     command.upgrade(config, REVISION)
     assert _decimal_string(_one(engine, "inventory_balances")["reserved_quantity"]) == "2.0000"
+    engine.dispose()
+    get_settings.cache_clear()
+
+
+def test_legacy_inventory_ids_survive_upgrade_downgrade_reupgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config, url = _config(
+        tmp_path / "inventory-ledger-id-gaps.db",
+        monkeypatch,
+    )
+    command.upgrade(config, PREVIOUS_REVISION)
+    engine = create_engine(url)
+    _seed_legacy_inventory_with_id_gaps(engine)
+
+    def compatibility_mappings() -> list[tuple[int, int]]:
+        with engine.connect() as connection:
+            return [
+                (balance_id, int(reference_id))
+                for balance_id, reference_id in connection.execute(
+                    text(
+                        "SELECT b.id, t.reference_id "
+                        "FROM inventory_balances b "
+                        "JOIN inventory_ledger_entries e ON e.balance_id = b.id "
+                        "JOIN inventory_transactions t ON t.id = e.transaction_id "
+                        "ORDER BY b.id"
+                    )
+                )
+            ]
+
+    command.upgrade(config, REVISION)
+    assert compatibility_mappings() == [(1, 1), (3, 3), (4, 4)]
+
+    command.downgrade(config, PREVIOUS_REVISION)
+    with engine.connect() as connection:
+        legacy_ids = list(
+            connection.scalars(
+                text("SELECT id FROM warehouse_inventories ORDER BY id")
+            )
+        )
+    assert legacy_ids == [1, 3, 4]
+
+    command.upgrade(config, REVISION)
+    assert compatibility_mappings() == [(1, 1), (3, 3), (4, 4)]
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO spare_parts "
+                "(id, code, name, unit, is_serialized, is_repairable, is_critical, is_active, tenant_id, version, created_at, updated_at) "
+                "VALUES (5, 'SP-GAP-5', 'Spare 5', 'EA', 0, 0, 0, 1, 'tenant-a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO inventory_balances "
+                "(tenant_id, warehouse_id, location_id, spare_part_id, lot_id, on_hand_quantity, reserved_quantity, damaged_quantity, quarantined_quantity, in_transit_quantity, version, created_at, updated_at) "
+                "SELECT 'tenant-a', 1, id, 5, NULL, 0, 0, 0, 0, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP "
+                "FROM warehouse_locations WHERE warehouse_id = 1 AND code = 'DEFAULT'"
+            )
+        )
+        next_balance_id = connection.scalar(
+            text(
+                "SELECT id FROM inventory_balances "
+                "WHERE spare_part_id = 5"
+            )
+        )
+    assert next_balance_id == 5
     engine.dispose()
     get_settings.cache_clear()
 

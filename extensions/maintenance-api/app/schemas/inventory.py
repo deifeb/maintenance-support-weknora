@@ -73,23 +73,34 @@ class InventoryQuantities(BaseModel):
         return self
 
 
-class WarehouseInventoryCreate(InventoryQuantities):
+class InventoryPolicyQuantities(BaseModel):
+    safety_stock: Decimal = Field(default=Decimal("0"), ge=0)
+    reorder_point: Decimal = Field(default=Decimal("0"), ge=0)
+    maximum_stock: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_policy_quantities(self):
+        if self.reorder_point < self.safety_stock:
+            raise ValueError("reorder_point must be at least safety_stock")
+        if self.maximum_stock is not None and self.maximum_stock < self.reorder_point:
+            raise ValueError("maximum_stock must be at least reorder_point")
+        return self
+
+
+class WarehouseInventoryCreate(InventoryPolicyQuantities):
+    model_config = ConfigDict(extra="forbid")
+
     warehouse_id: int
     spare_part_id: int
-    last_counted_at: datetime | None = None
     notes: str | None = None
 
 
 class WarehouseInventoryUpdate(BaseModel):
-    on_hand_quantity: Decimal | None = Field(default=None, ge=0)
-    reserved_quantity: Decimal | None = Field(default=None, ge=0)
-    damaged_quantity: Decimal | None = Field(default=None, ge=0)
-    quarantined_quantity: Decimal | None = Field(default=None, ge=0)
-    in_transit_quantity: Decimal | None = Field(default=None, ge=0)
+    model_config = ConfigDict(extra="forbid")
+
     safety_stock: Decimal | None = Field(default=None, ge=0)
     reorder_point: Decimal | None = Field(default=None, ge=0)
     maximum_stock: Decimal | None = Field(default=None, ge=0)
-    last_counted_at: datetime | None = None
     notes: str | None = None
 
 

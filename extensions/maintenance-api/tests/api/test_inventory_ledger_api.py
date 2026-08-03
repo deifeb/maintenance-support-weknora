@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from decimal import Decimal
 
+import pytest
+from app.core.exceptions import ConflictError
 from app.models import (
     InventoryBalance,
     InventoryLedgerEntry,
@@ -13,9 +15,12 @@ from app.models import (
     WarehouseInventory,
     WarehouseLocation,
 )
+from app.models.enums import WarehouseStatus
+from app.schemas.inventory import InventoryAdjustment
 from app.security.actor import MaintenanceRole
+from app.services.inventory_service import inventory_service
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 
@@ -170,7 +175,7 @@ def test_list_and_get_inventory_use_ledger_summary_and_tenant_balance_id(
     assert hidden.status_code == 404
 
 
-def test_create_and_update_only_manage_policy_and_default_identity(
+def test_create_update_reject_physical_fields_and_preserve_state(
     client: TestClient,
     session: Session,
     internal_auth_headers: Callable[..., dict[str, str]],
@@ -187,12 +192,9 @@ def test_create_and_update_only_manage_policy_and_default_identity(
     )
     session.add_all([warehouse, spare])
     session.commit()
-    headers = _headers(
-        internal_auth_headers,
-        role=MaintenanceRole.CONTRIBUTOR,
-    )
+    headers = _headers(internal_auth_headers)
 
-    created = client.post(
+    rejected_create = client.post(
         "/api/v1/master-data/inventories",
         headers=headers,
         json={
@@ -200,13 +202,36 @@ def test_create_and_update_only_manage_policy_and_default_identity(
             "spare_part_id": spare.id,
             "on_hand_quantity": "9",
             "reserved_quantity": "2",
+            "damaged_quantity": "1",
+            "quarantined_quantity": "1",
+            "in_transit_quantity": "3",
+            "safety_stock": "1",
+            "reorder_point": "3",
+        },
+    )
+    assert rejected_create.status_code == 422
+    assert session.scalar(
+        select(func.count()).select_from(InventoryBalance)
+    ) == 0
+    assert session.scalar(
+        select(func.count()).select_from(InventoryPolicy)
+    ) == 0
+    assert session.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    ) == 0
+
+    created = client.post(
+        "/api/v1/master-data/inventories",
+        headers=headers,
+        json={
+            "warehouse_id": warehouse.id,
+            "spare_part_id": spare.id,
             "safety_stock": "1",
             "reorder_point": "3",
             "maximum_stock": "12",
             "notes": "created policy",
         },
     )
-
     assert created.status_code == 201, created.text
     created_data = created.json()["data"]
     assert created_data["on_hand_quantity"] == "0.0000"
@@ -223,17 +248,50 @@ def test_create_and_update_only_manage_policy_and_default_identity(
         )
     ) is not None
 
-    updated = client.put(
+    before_quantities = (
+        default_balance.on_hand_quantity,
+        default_balance.reserved_quantity,
+        default_balance.damaged_quantity,
+        default_balance.quarantined_quantity,
+        default_balance.in_transit_quantity,
+        default_balance.version,
+    )
+    rejected_update = client.put(
         f"/api/v1/master-data/inventories/{created_data['id']}",
         headers=headers,
         json={
             "on_hand_quantity": "99",
+            "reserved_quantity": "3",
+            "damaged_quantity": "2",
+            "quarantined_quantity": "1",
+            "in_transit_quantity": "4",
+        },
+    )
+    assert rejected_update.status_code == 422
+    session.expire_all()
+    default_balance = session.get(InventoryBalance, created_data["id"])
+    assert default_balance is not None
+    assert (
+        default_balance.on_hand_quantity,
+        default_balance.reserved_quantity,
+        default_balance.damaged_quantity,
+        default_balance.quarantined_quantity,
+        default_balance.in_transit_quantity,
+        default_balance.version,
+    ) == before_quantities
+    assert session.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    ) == 0
+
+    updated = client.put(
+        f"/api/v1/master-data/inventories/{created_data['id']}",
+        headers=headers,
+        json={
             "safety_stock": "2",
             "reorder_point": "4",
             "notes": "updated policy",
         },
     )
-
     assert updated.status_code == 200, updated.text
     updated_data = updated.json()["data"]
     assert updated_data["on_hand_quantity"] == "0.0000"
@@ -242,6 +300,69 @@ def test_create_and_update_only_manage_policy_and_default_identity(
     assert updated_data["notes"] == "updated policy"
     session.refresh(default_balance)
     assert default_balance.on_hand_quantity == Decimal("0.0000")
+
+
+def test_create_and_update_inventory_policy_require_admin(
+    client: TestClient,
+    session: Session,
+    internal_auth_headers: Callable[..., dict[str, str]],
+) -> None:
+    warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code="WH-ADMIN-POLICY",
+        name="Admin policy warehouse",
+    )
+    spare = SparePart(
+        tenant_id="tenant-a",
+        code="SP-ADMIN-POLICY",
+        name="Admin policy spare",
+    )
+    session.add_all([warehouse, spare])
+    session.commit()
+    contributor_headers = _headers(
+        internal_auth_headers,
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    admin_headers = _headers(internal_auth_headers)
+    create_payload = {
+        "warehouse_id": warehouse.id,
+        "spare_part_id": spare.id,
+        "safety_stock": "1",
+        "reorder_point": "3",
+        "maximum_stock": "12",
+        "notes": "admin policy",
+    }
+
+    denied_create = client.post(
+        "/api/v1/master-data/inventories",
+        headers=contributor_headers,
+        json=create_payload,
+    )
+    assert denied_create.status_code == 403
+
+    created = client.post(
+        "/api/v1/master-data/inventories",
+        headers=admin_headers,
+        json=create_payload,
+    )
+    assert created.status_code == 201, created.text
+    identifier = created.json()["data"]["id"]
+
+    denied_update = client.put(
+        f"/api/v1/master-data/inventories/{identifier}",
+        headers=contributor_headers,
+        json={"safety_stock": "2", "reorder_point": "4"},
+    )
+    assert denied_update.status_code == 403
+
+    updated = client.put(
+        f"/api/v1/master-data/inventories/{identifier}",
+        headers=admin_headers,
+        json={"safety_stock": "2", "reorder_point": "4"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["safety_stock"] == "2.0000"
+    assert updated.json()["data"]["reorder_point"] == "4.0000"
 
 
 def test_adjust_requires_admin_idempotency_and_expected_version(
@@ -351,3 +472,91 @@ def test_adjust_hides_cross_tenant_balance(
     )
 
     assert response.status_code == 404
+
+
+def test_inventory_service_replays_before_mutable_warehouse_validation(
+    session: Session,
+    actor_admin,
+) -> None:
+    balance, _ = _seed_inventory(session)
+    payload = InventoryAdjustment(
+        expected_version=balance.version,
+        on_hand_delta="2",
+        reason="stable wrapper replay",
+    )
+    first = inventory_service.adjust(
+        session,
+        actor_admin,
+        balance.id,
+        payload,
+        idempotency_key="inventory-wrapper-replay",
+    )
+    warehouse = session.get(Warehouse, balance.warehouse_id)
+    assert warehouse is not None
+    warehouse.status = WarehouseStatus.FROZEN
+    balance.version += 5
+    session.commit()
+
+    replay = inventory_service.adjust(
+        session,
+        actor_admin,
+        balance.id,
+        payload,
+        idempotency_key="inventory-wrapper-replay",
+    )
+    assert replay == first
+
+    with pytest.raises(ConflictError) as exc_info:
+        inventory_service.adjust(
+            session,
+            actor_admin,
+            balance.id,
+            payload.model_copy(
+                update={"reason": "different wrapper request"}
+            ),
+            idempotency_key="inventory-wrapper-replay",
+        )
+    assert exc_info.value.code == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_adjust_api_replays_exact_response_after_warehouse_and_version_change(
+    client: TestClient,
+    session: Session,
+    internal_auth_headers: Callable[..., dict[str, str]],
+) -> None:
+    balance, _ = _seed_inventory(session)
+    route = f"/api/v1/master-data/inventories/{balance.id}/adjust"
+    headers = {
+        **_headers(internal_auth_headers),
+        "Idempotency-Key": "inventory-api-stable-replay",
+    }
+    payload = {
+        "expected_version": balance.version,
+        "on_hand_delta": "2",
+        "reserved_delta": "0",
+        "damaged_delta": "0",
+        "quarantined_delta": "0",
+        "in_transit_delta": "0",
+        "reason": "stable API replay",
+    }
+    first = client.post(route, headers=headers, json=payload)
+    assert first.status_code == 200, first.text
+    warehouse = session.get(Warehouse, balance.warehouse_id)
+    assert warehouse is not None
+    warehouse.status = WarehouseStatus.FROZEN
+    balance.version += 5
+    session.commit()
+
+    replay = client.post(route, headers=headers, json=payload)
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == first.json()
+
+    different = client.post(
+        route,
+        headers=headers,
+        json={**payload, "reason": "different API request"},
+    )
+    assert different.status_code == 409
+    assert different.json()["error"]["code"] == (
+        "IDEMPOTENCY_KEY_REUSED"
+    )

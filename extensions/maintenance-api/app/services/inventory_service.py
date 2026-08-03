@@ -30,6 +30,8 @@ from app.services.inventory_transaction_service import (
     inventory_transaction_service,
 )
 
+_ADJUSTMENT_RESPONSE_EXTENSION = "inventory_adjustment_response"
+
 
 class InventoryService:
     def __init__(
@@ -301,20 +303,15 @@ class InventoryService:
         *,
         idempotency_key: str,
     ) -> InventoryAdjustmentRead:
-        balance = self.inventory_repository.get_balance(
-            session,
-            actor.tenant_id,
-            identifier,
-        )
-        if balance is None:
-            raise NotFoundError("inventory_balance", identifier)
-        warehouse = self._validate_references(
-            session,
-            actor,
-            balance.warehouse_id,
-            balance.spare_part_id,
-        )
-        self._validate_state(warehouse)
+        def validate_new_command(balance: InventoryBalance) -> None:
+            warehouse = self._validate_references(
+                session,
+                actor,
+                balance.warehouse_id,
+                balance.spare_part_id,
+            )
+            self._validate_state(warehouse)
+
         transaction = self.transaction_service.adjust(
             session,
             actor,
@@ -323,12 +320,29 @@ class InventoryService:
             deltas=payload.quantity_delta(),
             reason=payload.reason,
             idempotency_key=idempotency_key,
+            validate_new_command=validate_new_command,
         )
-        self._commit(session)
-        return InventoryAdjustmentRead(
+        cached = self.transaction_service.response_extension(
+            session,
+            actor,
+            transaction_id=transaction.id,
+            name=_ADJUSTMENT_RESPONSE_EXTENSION,
+        )
+        if cached is not None:
+            return InventoryAdjustmentRead.model_validate(cached)
+        result = InventoryAdjustmentRead(
             transaction=transaction,
             summary=self.get(session, actor, identifier),
         )
+        self.transaction_service.store_response_extension(
+            session,
+            actor,
+            transaction_id=transaction.id,
+            name=_ADJUSTMENT_RESPONSE_EXTENSION,
+            value=result.model_dump(mode="json"),
+        )
+        self._commit(session)
+        return result
 
     def _summary_read(
         self,

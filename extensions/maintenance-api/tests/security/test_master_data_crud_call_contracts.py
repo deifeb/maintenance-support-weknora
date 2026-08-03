@@ -178,6 +178,14 @@ HTTP_ROLE_DEPENDENCIES = {
 MASTER_ROUTE_ROLE_OVERRIDES = {
     (
         "inventories.py",
+        "create_inventory",
+    ): "require_admin",
+    (
+        "inventories.py",
+        "update_inventory",
+    ): "require_admin",
+    (
+        "inventories.py",
         "adjust_inventory",
     ): "require_admin",
     (

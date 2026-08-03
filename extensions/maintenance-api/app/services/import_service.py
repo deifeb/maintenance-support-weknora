@@ -48,7 +48,7 @@ from app.schemas.equipment import (
     EquipmentModelCreate,
 )
 from app.schemas.import_data import ImportExecutionResult, ImportIssue, ImportValidationResult
-from app.schemas.inventory import WarehouseCreate, WarehouseInventoryCreate
+from app.schemas.inventory import InventoryQuantities, WarehouseCreate
 from app.schemas.reliability import ReliabilityProfileCreate
 from app.schemas.supplier import SupplierCreate, SupplierOfferCreate
 
@@ -276,9 +276,7 @@ class MasterDataImportService:
         )
 
     def _inventory(self, row: dict[str, Any]) -> dict[str, Any]:
-        payload = WarehouseInventoryCreate(
-            warehouse_id=1,
-            spare_part_id=1,
+        payload = InventoryQuantities(
             on_hand_quantity=parse_decimal(row.get("on_hand_quantity")),
             reserved_quantity=parse_decimal(row.get("reserved_quantity"), Decimal("0")),
             damaged_quantity=parse_decimal(row.get("damaged_quantity"), Decimal("0")),
@@ -287,15 +285,13 @@ class MasterDataImportService:
             safety_stock=parse_decimal(row.get("safety_stock"), Decimal("0")),
             reorder_point=parse_decimal(row.get("reorder_point"), Decimal("0")),
             maximum_stock=parse_decimal(row.get("maximum_stock")),
-            last_counted_at=parse_datetime(row.get("last_counted_at")),
-            notes=row.get("notes"),
         ).model_dump()
-        payload.pop("warehouse_id")
-        payload.pop("spare_part_id")
         payload.update(
             {
                 "warehouse_code": normalize_code(row.get("warehouse_code")),
                 "spare_part_code": normalize_code(row.get("spare_part_code")),
+                "last_counted_at": parse_datetime(row.get("last_counted_at")),
+                "notes": row.get("notes"),
             }
         )
         return payload
