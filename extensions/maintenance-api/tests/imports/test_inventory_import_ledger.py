@@ -4,12 +4,13 @@ from decimal import Decimal
 from io import BytesIO
 
 import pytest
-from app.core.exceptions import ConflictError
+from app.core.exceptions import BusinessValidationError, ConflictError
 from app.db.base import Base
 from app.models import (
     InventoryBalance,
     InventoryLedgerEntry,
     InventoryPolicy,
+    InventoryTargetReceipt,
     InventoryTransaction,
     SparePart,
     Warehouse,
@@ -297,9 +298,17 @@ def test_zero_quantity_row_still_records_source_receipt_and_rejects_reuse(
     _apply(session, actor_admin, task_id="task-zero", content=zero)
     session.commit()
 
-    receipt = session.scalar(select(InventoryTransaction))
-    assert receipt is not None
-    assert receipt.idempotency_key == "import:task-zero:08_库存:2"
+    receipt_table = Base.metadata.tables.get("inventory_target_receipts")
+    assert receipt_table is not None
+    receipt = session.execute(select(receipt_table)).mappings().one()
+    assert receipt["idempotency_key"] == "import:task-zero:08_库存:2"
+    assert receipt["status"] == "COMPLETED"
+    assert receipt["result_json"] == {
+        "created_identity": True,
+        "operation_type": None,
+        "transaction_id": None,
+    }
+    assert session.scalar(select(func.count()).select_from(InventoryTransaction)) == 0
     assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 0
 
     with pytest.raises(ConflictError) as raised:
@@ -403,8 +412,119 @@ def test_inventory_import_failure_rolls_back_identity_policy_and_ledger(
         InventoryBalance,
         InventoryTransaction,
         InventoryLedgerEntry,
+        InventoryTargetReceipt,
     ):
         assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "target"),
+    [
+        ("on_hand", "9"),
+        ("reserved", "1"),
+        ("damaged", "1"),
+        ("quarantined", "1"),
+        ("in_transit", "1"),
+    ],
+)
+def test_inventory_target_below_non_default_floor_is_rejected_before_mutation(
+    session,
+    actor_admin,
+    field,
+    target,
+):
+    warehouse, spare = _catalog(session)
+    default = WarehouseLocation(
+        tenant_id=actor_admin.tenant_id,
+        warehouse_id=warehouse.id,
+        code="DEFAULT",
+        name="Default location",
+        location_type="DEFAULT",
+    )
+    shelf = WarehouseLocation(
+        tenant_id=actor_admin.tenant_id,
+        warehouse_id=warehouse.id,
+        code="SHELF",
+        name="Shelf",
+        location_type="STORAGE",
+    )
+    session.add_all([default, shelf])
+    session.flush()
+    policy = InventoryPolicy(
+        tenant_id=actor_admin.tenant_id,
+        warehouse_id=warehouse.id,
+        spare_part_id=spare.id,
+        safety_stock=Decimal("1"),
+        reorder_point=Decimal("2"),
+        maximum_stock=Decimal("30"),
+        notes="unchanged",
+    )
+    session.add_all(
+        [
+            policy,
+            InventoryBalance(
+                tenant_id=actor_admin.tenant_id,
+                warehouse_id=warehouse.id,
+                location_id=default.id,
+                spare_part_id=spare.id,
+                on_hand_quantity=Decimal("3"),
+            ),
+            InventoryBalance(
+                tenant_id=actor_admin.tenant_id,
+                warehouse_id=warehouse.id,
+                location_id=shelf.id,
+                spare_part_id=spare.id,
+                on_hand_quantity=Decimal("10"),
+                reserved_quantity=Decimal("2"),
+                damaged_quantity=Decimal("2"),
+                quarantined_quantity=Decimal("2"),
+                in_transit_quantity=Decimal("2"),
+            ),
+        ]
+    )
+    session.commit()
+    targets = {
+        "on_hand": "13",
+        "reserved": "2",
+        "damaged": "2",
+        "quarantined": "2",
+        "in_transit": "2",
+    }
+    targets[field] = target
+
+    with pytest.raises(BusinessValidationError) as raised:
+        _apply(
+            session,
+            actor_admin,
+            task_id=f"task-unreachable-{field}",
+            content=_inventory_workbook(
+                operation="UPDATE",
+                on_hand=targets["on_hand"],
+                reserved=targets["reserved"],
+                damaged=targets["damaged"],
+                quarantined=targets["quarantined"],
+                in_transit=targets["in_transit"],
+                safety_stock="4",
+                reorder_point="6",
+                maximum_stock="40",
+            ),
+        )
+    assert raised.value.code == "INVENTORY_TARGET_UNREACHABLE"
+    assert raised.value.details == {
+        "unreachable_components": [field],
+        "retryable": False,
+    }
+    session.rollback()
+    session.refresh(policy)
+    assert (policy.safety_stock, policy.reorder_point, policy.maximum_stock, policy.notes) == (
+        Decimal("1"),
+        Decimal("2"),
+        Decimal("30"),
+        "unchanged",
+    )
+    assert session.scalar(select(func.count()).select_from(InventoryTargetReceipt)) == 0
+    assert session.scalar(select(func.count()).select_from(InventoryTransaction)) == 0
+    assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 0
 
 
 def test_inventory_sync_execute_requires_admin_and_admin_writes_ledger(

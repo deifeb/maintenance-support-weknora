@@ -27,7 +27,7 @@ from app.models import (
     ConfigurationVersion,
     EquipmentModel,
     InventoryPolicy,
-    InventoryTransaction,
+    InventoryTargetReceipt,
     Part,
     ReliabilityProfile,
     SparePart,
@@ -540,12 +540,9 @@ class MasterDataImportService:
                 row["_row"]
                 for row in normalized[SHEET_INVENTORY]
                 if session.scalar(
-                    select(InventoryTransaction.id).where(
-                        InventoryTransaction.tenant_id == tenant_id,
-                        InventoryTransaction.operation_type.in_(
-                            ("OPENING", "ADJUST", "TARGET")
-                        ),
-                        InventoryTransaction.idempotency_key
+                    select(InventoryTargetReceipt.id).where(
+                        InventoryTargetReceipt.tenant_id == tenant_id,
+                        InventoryTargetReceipt.idempotency_key
                         == f"import:{task_id}:{SHEET_INVENTORY}:{row['_row']}",
                     )
                 )

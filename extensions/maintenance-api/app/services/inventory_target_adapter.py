@@ -4,18 +4,31 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Mapping
 
-from sqlalchemy import select
+from pydantic import ValidationError
+from sqlalchemy import false, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError
-from app.models import InventoryTransaction, Warehouse
+from app.core.exceptions import (
+    BusinessValidationError,
+    ConflictError,
+    InsufficientMaintenanceRoleError,
+    NotFoundError,
+)
+from app.models import (
+    InventoryBalance,
+    InventoryTargetReceipt,
+    InventoryTargetReceiptStatus,
+    Warehouse,
+)
 from app.models.mixins import utc_now
 from app.repositories.inventory_repository import InventoryRepository
-from app.repositories.inventory_transaction_repository import (
-    InventoryTransactionRepository,
+from app.repositories.inventory_target_receipt_repository import (
+    InventoryTargetReceiptRepository,
 )
 from app.schemas.inventory import InventoryQuantities
 from app.schemas.inventory_ledger import InventoryQuantityDelta
+from app.schemas.inventory_target import InventoryTargetReceiptResult
 from app.security.actor import ActorContext, MaintenanceRole
 from app.services.inventory_query_service import (
     InventoryQueryService,
@@ -27,8 +40,11 @@ from app.services.inventory_transaction_service import (
 )
 from app.services.snapshot_service import snapshot_service
 
-_SOURCE_EXTENSION = "inventory_target_source"
-_OPERATIONS = ("OPENING", "ADJUST", "TARGET")
+_RECEIPT_CONSTRAINT = "uq_inventory_target_receipt_tenant_key"
+_SQLITE_RECEIPT_UNIQUE_ERROR = (
+    "UNIQUE constraint failed: inventory_target_receipts.tenant_id, "
+    "inventory_target_receipts.idempotency_key"
+)
 _PHYSICAL_FIELDS = (
     "on_hand_quantity",
     "reserved_quantity",
@@ -58,13 +74,13 @@ class InventoryTargetAdapter:
         self,
         *,
         repository: InventoryRepository | None = None,
-        transaction_repository: InventoryTransactionRepository | None = None,
+        receipt_repository: InventoryTargetReceiptRepository | None = None,
         query_service: InventoryQueryService | None = None,
         transaction_service: InventoryTransactionService | None = None,
     ) -> None:
         self.repository = repository or InventoryRepository()
-        self.transaction_repository = (
-            transaction_repository or InventoryTransactionRepository()
+        self.receipt_repository = (
+            receipt_repository or InventoryTargetReceiptRepository()
         )
         self.query_service = query_service or inventory_query_service
         self.transaction_service = (
@@ -84,19 +100,13 @@ class InventoryTargetAdapter:
         source_payload: Mapping[str, object],
         reason: str,
     ) -> InventoryTargetResult:
-        if actor.role is not MaintenanceRole.ADMIN:
-            from app.core.exceptions import InsufficientMaintenanceRoleError
-
-            raise InsufficientMaintenanceRoleError(
-                required_role=MaintenanceRole.ADMIN.value,
-                actual_role=actor.role.value,
-                request_id=actor.request_id,
-            )
+        self._require_admin(actor)
+        clean_key = self._normalize_idempotency_key(idempotency_key)
         source_hash = snapshot_service.canonical_hash(source_payload)
-        replay = self._replay_source(
+        receipt, replay = self._reserve_source(
             session,
             actor,
-            idempotency_key=idempotency_key,
+            idempotency_key=clean_key,
             source_hash=source_hash,
         )
         if replay is not None:
@@ -111,17 +121,7 @@ class InventoryTargetAdapter:
             .with_for_update()
         )
         if warehouse is None:
-            from app.core.exceptions import NotFoundError
-
             raise NotFoundError("warehouse", warehouse_id)
-        replay = self._replay_source(
-            session,
-            actor,
-            idempotency_key=idempotency_key,
-            source_hash=source_hash,
-        )
-        if replay is not None:
-            return replay
 
         policy = self.repository.get_policy_by_business_key(
             session,
@@ -143,6 +143,31 @@ class InventoryTargetAdapter:
                     "retryable": False,
                 },
             )
+
+        current = self._current_values(
+            session,
+            actor,
+            warehouse_id=warehouse_id,
+            spare_part_id=spare_part_id,
+        )
+        target = {
+            field: getattr(quantities, field)
+            for field in _PHYSICAL_FIELDS
+        }
+        default_values = {
+            field: (
+                getattr(balance, field)
+                if balance is not None
+                else Decimal("0")
+            )
+            for field in _PHYSICAL_FIELDS
+        }
+        self._require_reachable(
+            current=current,
+            default_values=default_values,
+            target=target,
+        )
+
         policy_data = {
             "safety_stock": quantities.safety_stock,
             "reorder_point": quantities.reorder_point,
@@ -173,31 +198,6 @@ class InventoryTargetAdapter:
                     changes,
                 )
 
-        summaries = self.query_service.summary_for_part(
-            session,
-            actor,
-            spare_part_id,
-        )
-        summary = next(
-            (
-                item
-                for item in summaries
-                if item.warehouse_id == warehouse_id
-            ),
-            None,
-        )
-        current = {
-            field: (
-                getattr(summary, field)
-                if summary is not None
-                else Decimal("0")
-            )
-            for field in _PHYSICAL_FIELDS
-        }
-        target = {
-            field: getattr(quantities, field)
-            for field in _PHYSICAL_FIELDS
-        }
         delta = InventoryQuantityDelta(
             **{
                 delta_field: target[field] - current[field]
@@ -209,119 +209,205 @@ class InventoryTargetAdapter:
             }
         )
         if all(value == 0 for value in delta.model_dump().values()):
-            transaction = self.transaction_repository.create_transaction(
-                session,
-                actor=actor,
-                operation_type="TARGET",
-                idempotency_key=idempotency_key,
-                request_hash=source_hash,
-                reason=reason,
-            )
-            completed_at = utc_now()
-            self.transaction_repository.complete(
-                session,
-                transaction,
-                completed_at=completed_at,
-                response_snapshot={
-                    "_extensions": {
-                        _SOURCE_EXTENSION: {
-                            "source_hash": source_hash,
-                            "created_identity": created_identity,
-                            "operation_type": "TARGET",
-                        }
-                    }
-                },
-            )
-            return InventoryTargetResult(
+            result = InventoryTargetReceiptResult(
                 created_identity=created_identity,
-                operation_type="TARGET",
-                transaction_id=transaction.id,
-                replayed=False,
+                operation_type=None,
+                transaction_id=None,
             )
-
-        operation_type = "OPENING" if created_identity else "ADJUST"
-        command = getattr(
-            self.transaction_service,
-            operation_type.lower(),
-        )
-        transaction = command(
+        else:
+            operation_type = "OPENING" if created_identity else "ADJUST"
+            command = getattr(
+                self.transaction_service,
+                operation_type.lower(),
+            )
+            transaction = command(
+                session,
+                actor,
+                balance_id=balance.id,
+                expected_version=balance.version,
+                deltas=delta,
+                reason=reason,
+                idempotency_key=clean_key,
+            )
+            result = InventoryTargetReceiptResult(
+                created_identity=created_identity,
+                operation_type=operation_type,
+                transaction_id=transaction.id,
+            )
+        self.receipt_repository.complete(
             session,
-            actor,
-            balance_id=balance.id,
-            expected_version=balance.version,
-            deltas=delta,
-            reason=reason,
-            idempotency_key=idempotency_key,
-        )
-        self.transaction_service.store_response_extension(
-            session,
-            actor,
-            transaction_id=transaction.id,
-            name=_SOURCE_EXTENSION,
-            value={
-                "source_hash": source_hash,
-                "created_identity": created_identity,
-                "operation_type": operation_type,
-            },
+            receipt,
+            result=result.model_dump(mode="json"),
+            completed_at=utc_now(),
         )
         return InventoryTargetResult(
-            created_identity=created_identity,
-            operation_type=operation_type,
-            transaction_id=transaction.id,
+            **result.model_dump(),
             replayed=False,
         )
 
-    def _replay_source(
+    def _reserve_source(
         self,
         session: Session,
         actor: ActorContext,
         *,
         idempotency_key: str,
         source_hash: str,
-    ) -> InventoryTargetResult | None:
-        receipts = [
-            receipt
-            for operation in _OPERATIONS
-            if (
-                receipt := self.transaction_repository.get_idempotent(
+    ) -> tuple[InventoryTargetReceipt, InventoryTargetResult | None]:
+        existing = self.receipt_repository.get(
+            session,
+            actor.tenant_id,
+            idempotency_key,
+        )
+        if existing is not None:
+            return existing, self._replay_source(actor, existing, source_hash)
+
+        self._ensure_savepoint_parent_transaction(session)
+        try:
+            with session.begin_nested():
+                receipt = self.receipt_repository.create_pending(
                     session,
-                    actor.tenant_id,
-                    operation,
-                    idempotency_key,
+                    actor,
+                    idempotency_key=idempotency_key,
+                    source_hash=source_hash,
                 )
+            return receipt, None
+        except IntegrityError as exc:
+            if not self._is_receipt_constraint_violation(exc):
+                raise
+            winner = self.receipt_repository.get(
+                session,
+                actor.tenant_id,
+                idempotency_key,
             )
-            is not None
+            if winner is None:
+                conflict = ConflictError(
+                    "inventory target reservation conflict",
+                    code="INVENTORY_TARGET_RESERVATION_CONFLICT",
+                    details={
+                        "conflict_object": "inventory_target_receipt",
+                        "retryable": True,
+                    },
+                )
+                conflict.request_id = actor.request_id
+                raise conflict from exc
+            return winner, self._replay_source(actor, winner, source_hash)
+
+    def _current_values(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        warehouse_id: int,
+        spare_part_id: int,
+    ) -> dict[str, Decimal]:
+        summaries = self.query_service.summary_for_part(
+            session,
+            actor,
+            spare_part_id,
+        )
+        summary = next(
+            (item for item in summaries if item.warehouse_id == warehouse_id),
+            None,
+        )
+        return {
+            field: getattr(summary, field) if summary is not None else Decimal("0")
+            for field in _PHYSICAL_FIELDS
+        }
+
+    @staticmethod
+    def _require_reachable(
+        *,
+        current: dict[str, Decimal],
+        default_values: dict[str, Decimal],
+        target: dict[str, Decimal],
+    ) -> None:
+        result_default = {
+            field: target[field] - (current[field] - default_values[field])
+            for field in _PHYSICAL_FIELDS
+        }
+        unreachable = [
+            delta_field
+            for field, delta_field in zip(
+                _PHYSICAL_FIELDS,
+                _DELTA_FIELDS,
+                strict=True,
+            )
+            if result_default[field] < 0
         ]
-        if not receipts:
-            return None
-        if len(receipts) != 1:
-            self._raise_reused(actor, idempotency_key)
-        receipt = receipts[0]
-        metadata = self._source_metadata(receipt)
-        if metadata.get("source_hash") != source_hash:
-            self._raise_reused(actor, idempotency_key)
+        allocated = sum(
+            result_default[field]
+            for field in (
+                "reserved_quantity",
+                "damaged_quantity",
+                "quarantined_quantity",
+            )
+        )
+        if not unreachable and allocated > result_default["on_hand_quantity"]:
+            unreachable.append("allocation")
+        if unreachable:
+            raise BusinessValidationError(
+                "inventory target cannot be represented without changing granular facts",
+                code="INVENTORY_TARGET_UNREACHABLE",
+                details={
+                    "unreachable_components": unreachable,
+                    "retryable": False,
+                },
+            )
+
+    @staticmethod
+    def _replay_source(
+        actor: ActorContext,
+        receipt: InventoryTargetReceipt,
+        source_hash: str,
+    ) -> InventoryTargetResult:
+        if receipt.source_hash != source_hash:
+            InventoryTargetAdapter._raise_reused(actor, receipt.idempotency_key)
+        if receipt.status is not InventoryTargetReceiptStatus.COMPLETED:
+            InventoryTargetAdapter._raise_unavailable(actor)
+        try:
+            result = InventoryTargetReceiptResult.model_validate(receipt.result_json)
+        except ValidationError as exc:
+            unavailable = InventoryTargetAdapter._unavailable(actor)
+            raise unavailable from exc
         return InventoryTargetResult(
-            created_identity=bool(metadata.get("created_identity")),
-            operation_type=str(metadata.get("operation_type")),
-            transaction_id=receipt.id,
+            **result.model_dump(),
             replayed=True,
         )
 
     @staticmethod
-    def _source_metadata(receipt: InventoryTransaction) -> dict:
-        snapshot = receipt.response_snapshot_json
-        extensions = snapshot.get("_extensions") if isinstance(snapshot, dict) else None
-        metadata = extensions.get(_SOURCE_EXTENSION) if isinstance(extensions, dict) else None
-        if not isinstance(metadata, dict):
-            raise ConflictError(
-                "idempotent response is unavailable",
-                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
-                details={
-                    "conflict_object": "inventory_transaction",
-                    "retryable": False,
-                },
+    def _normalize_idempotency_key(idempotency_key: str) -> str:
+        clean_key = idempotency_key.strip()
+        if not clean_key or len(clean_key) > 128:
+            raise BusinessValidationError(
+                "idempotency key is invalid",
+                code="INVALID_IDEMPOTENCY_KEY",
             )
-        return metadata
+        return clean_key
+
+    @staticmethod
+    def _is_receipt_constraint_violation(exc: IntegrityError) -> bool:
+        diagnostic = getattr(exc.orig, "diag", None)
+        if getattr(diagnostic, "constraint_name", None) == _RECEIPT_CONSTRAINT:
+            return True
+        return str(exc.orig) == _SQLITE_RECEIPT_UNIQUE_ERROR
+
+    @staticmethod
+    def _ensure_savepoint_parent_transaction(session: Session) -> None:
+        if session.get_bind().dialect.name == "sqlite":
+            session.execute(
+                update(InventoryBalance)
+                .where(false())
+                .values(version=InventoryBalance.version)
+            )
+
+    @staticmethod
+    def _require_admin(actor: ActorContext) -> None:
+        if actor.role is not MaintenanceRole.ADMIN:
+            raise InsufficientMaintenanceRoleError(
+                required_role=MaintenanceRole.ADMIN.value,
+                actual_role=actor.role.value,
+                request_id=actor.request_id,
+            )
 
     @staticmethod
     def _raise_reused(actor: ActorContext, key: str) -> None:
@@ -329,13 +415,30 @@ class InventoryTargetAdapter:
             "idempotency key was reused",
             code="IDEMPOTENCY_KEY_REUSED",
             details={
-                "conflict_object": "inventory_transaction",
+                "conflict_object": "inventory_target_receipt",
                 "idempotency_key": key,
                 "retryable": False,
             },
         )
         conflict.request_id = actor.request_id
         raise conflict
+
+    @staticmethod
+    def _unavailable(actor: ActorContext) -> ConflictError:
+        conflict = ConflictError(
+            "idempotent response is unavailable",
+            code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+            details={
+                "conflict_object": "inventory_target_receipt",
+                "retryable": True,
+            },
+        )
+        conflict.request_id = actor.request_id
+        return conflict
+
+    @staticmethod
+    def _raise_unavailable(actor: ActorContext) -> None:
+        raise InventoryTargetAdapter._unavailable(actor)
 
 
 inventory_target_adapter = InventoryTargetAdapter()

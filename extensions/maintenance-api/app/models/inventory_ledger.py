@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -38,6 +39,11 @@ TRANSACTION_STATUSES = (
     "EXPIRED",
     "REVERSED",
 )
+
+
+class InventoryTargetReceiptStatus(StrEnum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
 LOT_QUALITY_STATUSES = ("AVAILABLE", "QUARANTINED", "DAMAGED", "REJECTED")
 EXPIRY_RULE_SCOPE_TYPES = ("TENANT", "CATEGORY", "SPARE_PART")
 SERIAL_ITEM_STATUSES = (
@@ -270,6 +276,54 @@ class InventoryTransaction(Base, TimestampMixin):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InventoryTargetReceipt(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "inventory_target_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_inventory_target_receipt_tenant_key",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'COMPLETED')",
+            name="ck_inventory_target_receipt_status",
+        ),
+        CheckConstraint(
+            "(status = 'PENDING' AND result_json IS NULL AND completed_at IS NULL) "
+            "OR (status = 'COMPLETED' AND result_json IS NOT NULL "
+            "AND completed_at IS NOT NULL)",
+            name="ck_inventory_target_receipt_state",
+        ),
+        CheckConstraint(
+            "length(source_hash) = 64",
+            name="ck_inventory_target_receipt_source_hash",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[InventoryTargetReceiptStatus] = mapped_column(
+        Enum(
+            InventoryTargetReceiptStatus,
+            native_enum=False,
+            length=16,
+        ),
+        nullable=False,
+        default=InventoryTargetReceiptStatus.PENDING,
+    )
+    result_json: Mapped[dict | None] = mapped_column(JSON)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class InventoryLedgerEntry(Base, TimestampMixin):
