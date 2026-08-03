@@ -18,7 +18,6 @@ from app.models import (
     EquipmentModel,
     SparePart,
     Warehouse,
-    WarehouseInventory,
 )
 from app.models.enums import (
     AIReviewFindingStatus,
@@ -34,6 +33,7 @@ from app.schemas.dashboard import (
     RiskItem,
 )
 from app.security.actor import ActorContext
+from app.services.inventory_query_service import InventoryQueryService
 
 
 class DashboardService:
@@ -46,13 +46,21 @@ class DashboardService:
         "BLOCKING": 4,
     }
 
+    def __init__(
+        self,
+        inventory_query_service: InventoryQueryService | None = None,
+    ) -> None:
+        self.inventory_query_service = (
+            inventory_query_service or InventoryQueryService()
+        )
+
     def summary(
         self,
         session: Session,
         actor: ActorContext,
     ) -> DashboardSummary:
         return DashboardSummary(
-            metrics=self._metrics(session, actor.tenant_id),
+            metrics=self._metrics(session, actor),
             recent_tasks=self._recent_tasks(session, actor.tenant_id),
             risk_items=self._risk_items(session, actor.tenant_id),
             risk_distribution=self._risk_distribution(
@@ -65,13 +73,37 @@ class DashboardService:
     def _metrics(
         self,
         session: Session,
-        tenant_id: str,
+        actor: ActorContext,
     ) -> list[DashboardMetric]:
-        available_quantity = (
-            WarehouseInventory.on_hand_quantity
-            - WarehouseInventory.reserved_quantity
-            - WarehouseInventory.damaged_quantity
-            - WarehouseInventory.quarantined_quantity
+        tenant_id = actor.tenant_id
+        summaries = self.inventory_query_service.summaries_for_parts(
+            session,
+            actor,
+        )
+        active_warehouse_ids = set(
+            session.scalars(
+                select(Warehouse.id).where(
+                    Warehouse.tenant_id == tenant_id,
+                    Warehouse.is_active.is_(True),
+                )
+            )
+        )
+        active_spare_part_ids = set(
+            session.scalars(
+                select(SparePart.id).where(
+                    SparePart.tenant_id == tenant_id,
+                    SparePart.is_active.is_(True),
+                )
+            )
+        )
+        inventory_risk_count = len(
+            {
+                summary.spare_part_id
+                for summary in summaries
+                if summary.warehouse_id in active_warehouse_ids
+                and summary.spare_part_id in active_spare_part_ids
+                and summary.available_quantity < summary.reorder_point
+            }
         )
 
         active_equipment = (
@@ -87,31 +119,6 @@ class DashboardService:
             .where(
                 SparePart.tenant_id == tenant_id,
                 SparePart.is_active.is_(True),
-            )
-            .scalar_subquery()
-        )
-        inventory_risk = (
-            select(
-                func.count(
-                    func.distinct(WarehouseInventory.spare_part_id)
-                )
-            )
-            .select_from(WarehouseInventory)
-            .join(
-                Warehouse,
-                Warehouse.id == WarehouseInventory.warehouse_id,
-            )
-            .join(
-                SparePart,
-                SparePart.id == WarehouseInventory.spare_part_id,
-            )
-            .where(
-                WarehouseInventory.tenant_id == tenant_id,
-                Warehouse.tenant_id == tenant_id,
-                SparePart.tenant_id == tenant_id,
-                Warehouse.is_active.is_(True),
-                SparePart.is_active.is_(True),
-                available_quantity < WarehouseInventory.reorder_point,
             )
             .scalar_subquery()
         )
@@ -184,7 +191,6 @@ class DashboardService:
             select(
                 active_equipment.label("active_equipment_count"),
                 active_spare_parts.label("active_spare_part_count"),
-                inventory_risk.label("inventory_risk_count"),
                 pending_scenarios.label("pending_scenario_count"),
                 running_calculations.label(
                     "running_calculation_count"
@@ -199,22 +205,22 @@ class DashboardService:
             )
         ).one()
 
-        keys = (
-            "active_equipment_count",
-            "active_spare_part_count",
-            "inventory_risk_count",
-            "pending_scenario_count",
-            "running_calculation_count",
-            "failed_calculation_count",
-            "high_risk_finding_count",
-            "demand_gap_count",
-        )
+        values = {
+            "active_equipment_count": row.active_equipment_count,
+            "active_spare_part_count": row.active_spare_part_count,
+            "inventory_risk_count": inventory_risk_count,
+            "pending_scenario_count": row.pending_scenario_count,
+            "running_calculation_count": row.running_calculation_count,
+            "failed_calculation_count": row.failed_calculation_count,
+            "high_risk_finding_count": row.high_risk_finding_count,
+            "demand_gap_count": row.demand_gap_count,
+        }
         return [
             DashboardMetric(
                 key=key,
-                value=int(getattr(row, key) or 0),
+                value=int(value or 0),
             )
-            for key in keys
+            for key, value in values.items()
         ]
 
     def _recent_tasks(

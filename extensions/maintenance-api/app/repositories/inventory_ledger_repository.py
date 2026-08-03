@@ -89,7 +89,71 @@ class InventoryLedgerRepository:
             conditions.append(
                 self._compatibility_identity_exists(tenant_id)
             )
-        statement = (
+        statement = self._summary_statement(
+            tenant_id,
+            conditions,
+        )
+        total = int(session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
+        rows = session.execute(
+            statement.offset((page - 1) * page_size).limit(page_size)
+        ).mappings()
+        return [dict(row) for row in rows], total
+
+    def summaries_for_parts(
+        self,
+        session: Session,
+        tenant_id: str,
+        spare_part_ids: Sequence[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions = self._balance_conditions(
+            tenant_id,
+            warehouse_id=None,
+            spare_part_id=None,
+            location_id=None,
+            lot_id=None,
+            serial_item_id=None,
+        )
+        if spare_part_ids is not None:
+            ids = sorted(set(spare_part_ids))
+            if not ids:
+                return []
+            conditions.append(InventoryBalance.spare_part_id.in_(ids))
+        rows = session.execute(
+            self._summary_statement(tenant_id, conditions)
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    def count_balance_references(
+        self,
+        session: Session,
+        tenant_id: str,
+        *,
+        warehouse_id: int | None = None,
+        spare_part_id: int | None = None,
+    ) -> int:
+        conditions = self._balance_conditions(
+            tenant_id,
+            warehouse_id=warehouse_id,
+            spare_part_id=spare_part_id,
+            location_id=None,
+            lot_id=None,
+            serial_item_id=None,
+        )
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(InventoryBalance)
+                .where(*conditions)
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _summary_statement(
+        tenant_id: str,
+        conditions: Sequence[Any],
+    ) -> Select:
+        return (
             select(
                 InventoryBalance.warehouse_id.label("warehouse_id"),
                 InventoryBalance.spare_part_id.label("spare_part_id"),
@@ -120,11 +184,6 @@ class InventoryLedgerRepository:
             )
             .order_by(InventoryBalance.warehouse_id, InventoryBalance.spare_part_id)
         )
-        total = int(session.scalar(select(func.count()).select_from(statement.subquery())) or 0)
-        rows = session.execute(
-            statement.offset((page - 1) * page_size).limit(page_size)
-        ).mappings()
-        return [dict(row) for row in rows], total
 
     @staticmethod
     def _compatibility_identity_exists(tenant_id: str):

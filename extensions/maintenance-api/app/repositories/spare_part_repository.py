@@ -6,14 +6,15 @@ from app.models import (
     ReliabilityProfile,
     SparePart,
     SupplierOffer,
-    WarehouseInventory,
 )
 from app.repositories.base import BaseRepository
+from app.repositories.inventory_ledger_repository import InventoryLedgerRepository
 
 
 class SparePartRepository(BaseRepository[SparePart]):
     def __init__(self) -> None:
         super().__init__(SparePart)
+        self.inventory_ledger_repository = InventoryLedgerRepository()
 
     def count_references(
         self,
@@ -38,13 +39,10 @@ class SparePartRepository(BaseRepository[SparePart]):
                     ReliabilityProfile.spare_part_id == identifier,
                 )
             ),
-            session.scalar(
-                select(func.count())
-                .select_from(WarehouseInventory)
-                .where(
-                    WarehouseInventory.tenant_id == tenant_id,
-                    WarehouseInventory.spare_part_id == identifier,
-                )
+            self.inventory_ledger_repository.count_balance_references(
+                session,
+                tenant_id,
+                spare_part_id=identifier,
             ),
             session.scalar(
                 select(func.count())

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from math import ceil
 
 from sqlalchemy.orm import Session
@@ -83,6 +84,33 @@ class InventoryQueryService:
             page,
             page_size,
             total,
+        )
+
+    def summaries_for_parts(
+        self,
+        session: Session,
+        actor: ActorContext,
+        spare_part_ids: Sequence[int] | None = None,
+    ) -> list[InventorySummaryRead]:
+        return [
+            InventorySummaryRead.model_validate(row)
+            for row in self.repository.summaries_for_parts(
+                session,
+                actor.tenant_id,
+                spare_part_ids,
+            )
+        ]
+
+    def summary_for_part(
+        self,
+        session: Session,
+        actor: ActorContext,
+        spare_part_id: int,
+    ) -> list[InventorySummaryRead]:
+        return self.summaries_for_parts(
+            session,
+            actor,
+            [spare_part_id],
         )
 
     @staticmethod

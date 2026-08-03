@@ -15,6 +15,7 @@ from app.models import (
     DemandScenarioTemplate,
     DemandScenarioVersion,
     EquipmentModel,
+    InventoryBalance,
     Part,
     ReliabilityProfile,
     RepairProfile,
@@ -23,6 +24,7 @@ from app.models import (
     SupplierOffer,
     Warehouse,
     WarehouseInventory,
+    WarehouseLocation,
 )
 from app.models.enums import (
     CalculationExecutionType,
@@ -193,6 +195,34 @@ def add_inventory(
     row = WarehouseInventory(
         tenant_id=tenant_id,
         warehouse_id=warehouse_id,
+        spare_part_id=spare_id,
+        on_hand_quantity=Decimal("10"),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def add_balance(
+    session: Session,
+    tenant_id: str,
+    warehouse_id: int,
+    spare_id: int,
+    suffix: str,
+) -> InventoryBalance:
+    location = WarehouseLocation(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse_id,
+        code=f"LOC-{suffix}",
+        name=f"Location {suffix}",
+        location_type="SHELF",
+    )
+    session.add(location)
+    session.flush()
+    row = InventoryBalance(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse_id,
+        location_id=location.id,
         spare_part_id=spare_id,
         on_hand_quantity=Decimal("10"),
     )
@@ -594,23 +624,26 @@ def test_reference_counts_are_tenant_scoped(
 
     warehouse_a = add_warehouse(session, "tenant-a", "WHA")
     warehouse_b = add_warehouse(session, "tenant-b", "WHB")
-    add_inventory(
+    add_balance(
         session,
         "tenant-a",
         warehouse_a.id,
         spare.id,
+        "A",
     )
-    add_inventory(
+    add_balance(
         session,
         "tenant-b",
         warehouse_b.id,
         spare.id,
+        "B",
     )
-    add_inventory(
+    add_balance(
         session,
         "tenant-b",
         warehouse_a.id,
         spare_b.id,
+        "C",
     )
 
     supplier_a = add_supplier(session, "tenant-a", "SUPA")
