@@ -164,6 +164,27 @@ def test_downgrade_round_trips_lossless_default_aggregate(tmp_path: Path, monkey
     get_settings.cache_clear()
 
 
+def test_downgrade_allows_ordinary_warehouse_update(tmp_path: Path, monkeypatch) -> None:
+    config, url = _config(tmp_path / "warehouse-update.db", monkeypatch)
+    command.upgrade(config, PREVIOUS_REVISION)
+    engine = create_engine(url)
+    _seed_legacy_inventory(engine)
+    command.upgrade(config, REVISION)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE warehouses SET name = 'Renamed warehouse', "
+                "updated_at = '2030-01-01 00:00:00' WHERE id = 1"
+            )
+        )
+
+    command.downgrade(config, PREVIOUS_REVISION)
+
+    assert _one(engine, "warehouse_inventories")["warehouse_id"] == 1
+    engine.dispose()
+    get_settings.cache_clear()
+
+
 @pytest.mark.parametrize(
     "table_name, insert_sql",
     [

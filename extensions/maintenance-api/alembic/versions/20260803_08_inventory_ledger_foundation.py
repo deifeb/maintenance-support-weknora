@@ -440,9 +440,7 @@ def _migration_locations_are_canonical() -> bool:
     rows = op.get_bind().execute(
         sa.text(
             "SELECT l.tenant_id, l.warehouse_id, l.code, l.name, l.location_type, "
-            "l.is_pickable, l.is_active, l.version, l.created_at, l.updated_at, "
-            "w.tenant_id AS warehouse_tenant_id, w.created_at AS warehouse_created_at, "
-            "w.updated_at AS warehouse_updated_at "
+            "l.is_pickable, l.is_active, l.version, w.tenant_id AS warehouse_tenant_id "
             "FROM warehouse_locations l JOIN warehouses w ON w.id = l.warehouse_id"
         )
     ).mappings()
@@ -455,8 +453,6 @@ def _migration_locations_are_canonical() -> bool:
             or not row["is_pickable"]
             or not row["is_active"]
             or row["version"] != 1
-            or str(row["created_at"]) != str(row["warehouse_created_at"])
-            or str(row["updated_at"]) != str(row["warehouse_updated_at"])
         ):
             return False
     return True
