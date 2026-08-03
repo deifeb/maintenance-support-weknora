@@ -687,7 +687,7 @@ def test_adjust_hides_cross_tenant_balance(
     assert response.status_code == 404
 
 
-def test_inventory_service_replays_before_mutable_warehouse_validation(
+def test_inventory_service_replays_before_mutable_identity_validation(
     session: Session,
     actor_admin,
 ) -> None:
@@ -705,8 +705,14 @@ def test_inventory_service_replays_before_mutable_warehouse_validation(
         idempotency_key="inventory-wrapper-replay",
     )
     warehouse = session.get(Warehouse, balance.warehouse_id)
+    location = session.get(
+        WarehouseLocation,
+        balance.location_id,
+    )
     assert warehouse is not None
+    assert location is not None
     warehouse.status = WarehouseStatus.FROZEN
+    location.code = "RENAMED"
     balance.version += 5
     session.commit()
 
@@ -732,7 +738,7 @@ def test_inventory_service_replays_before_mutable_warehouse_validation(
     assert exc_info.value.code == "IDEMPOTENCY_KEY_REUSED"
 
 
-def test_adjust_api_replays_exact_response_after_warehouse_and_version_change(
+def test_adjust_api_receipt_precedes_mutable_identity_validation(
     client: TestClient,
     session: Session,
     internal_auth_headers: Callable[..., dict[str, str]],
@@ -755,21 +761,69 @@ def test_adjust_api_replays_exact_response_after_warehouse_and_version_change(
     first = client.post(route, headers=headers, json=payload)
     assert first.status_code == 200, first.text
     warehouse = session.get(Warehouse, balance.warehouse_id)
+    location = session.get(
+        WarehouseLocation,
+        balance.location_id,
+    )
     assert warehouse is not None
+    assert location is not None
     warehouse.status = WarehouseStatus.FROZEN
+    location.code = "RENAMED"
     balance.version += 5
     session.commit()
+    session.refresh(balance)
+    balance_state = (
+        balance.on_hand_quantity,
+        balance.reserved_quantity,
+        balance.damaged_quantity,
+        balance.quarantined_quantity,
+        balance.in_transit_quantity,
+        balance.version,
+    )
+    transaction_count = session.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    )
+    ledger_count = session.scalar(
+        select(func.count()).select_from(InventoryLedgerEntry)
+    )
 
     replay = client.post(route, headers=headers, json=payload)
-    assert replay.status_code == 200, replay.text
-    assert replay.json() == first.json()
-
     different = client.post(
         route,
         headers=headers,
         json={**payload, "reason": "different API request"},
     )
+    new_command = client.post(
+        route,
+        headers={
+            **headers,
+            "Idempotency-Key": "inventory-api-renamed-new",
+        },
+        json=payload,
+    )
+
+    assert (
+        replay.status_code,
+        different.status_code,
+        new_command.status_code,
+    ) == (200, 409, 404)
+    assert replay.json() == first.json()
     assert different.status_code == 409
     assert different.json()["error"]["code"] == (
         "IDEMPOTENCY_KEY_REUSED"
     )
+    session.expire_all()
+    assert (
+        balance.on_hand_quantity,
+        balance.reserved_quantity,
+        balance.damaged_quantity,
+        balance.quarantined_quantity,
+        balance.in_transit_quantity,
+        balance.version,
+    ) == balance_state
+    assert session.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    ) == transaction_count
+    assert session.scalar(
+        select(func.count()).select_from(InventoryLedgerEntry)
+    ) == ledger_count
