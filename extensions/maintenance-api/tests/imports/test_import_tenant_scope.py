@@ -66,10 +66,11 @@ def test_validation_does_not_treat_other_tenant_code_as_conflict(
 
 def test_apply_creates_rows_for_actor_tenant_only(
     session,
+    actor_admin,
 ):
     result = master_data_import_service.apply(
         session,
-        tenant_id="tenant-a",
+        actor=actor_admin,
         content=_workbook_with_spare_row(
             operation="CREATE",
             code="SP-A-001",
@@ -92,6 +93,7 @@ def test_apply_creates_rows_for_actor_tenant_only(
 
 def test_apply_never_updates_same_code_in_other_tenant(
     session,
+    actor_admin,
 ):
     tenant_b = SparePart(
         tenant_id="tenant-b",
@@ -105,7 +107,7 @@ def test_apply_never_updates_same_code_in_other_tenant(
 
     master_data_import_service.apply(
         session,
-        tenant_id="tenant-a",
+        actor=actor_admin,
         content=_workbook_with_spare_row(
             operation="CREATE",
             code="SP-SHARED",

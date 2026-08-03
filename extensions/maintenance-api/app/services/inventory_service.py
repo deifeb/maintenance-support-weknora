@@ -15,10 +15,10 @@ from app.repositories import (
 from app.schemas.inventory import (
     InventoryAdjustment,
     InventoryAdjustmentRead,
+    InventoryCreate,
     InventoryQuantities,
-    WarehouseInventoryCreate,
-    WarehouseInventoryRead,
-    WarehouseInventoryUpdate,
+    InventoryRead,
+    InventoryUpdate,
 )
 from app.security.actor import ActorContext
 from app.services.inventory_query_service import (
@@ -113,10 +113,10 @@ class InventoryService:
         self,
         session: Session,
         actor: ActorContext,
-        payload: WarehouseInventoryCreate,
+        payload: InventoryCreate,
         *,
         commit: bool = True,
-    ) -> WarehouseInventoryRead:
+    ) -> InventoryRead:
         warehouse = self._validate_references(
             session,
             actor,
@@ -155,7 +155,7 @@ class InventoryService:
         session: Session,
         actor: ActorContext,
         identifier: int,
-    ) -> WarehouseInventoryRead:
+    ) -> InventoryRead:
         balance = self.inventory_repository.get_compatibility_balance(
             session,
             actor.tenant_id,
@@ -231,8 +231,8 @@ class InventoryService:
         session: Session,
         actor: ActorContext,
         identifier: int,
-        payload: WarehouseInventoryUpdate,
-    ) -> WarehouseInventoryRead:
+        payload: InventoryUpdate,
+    ) -> InventoryRead:
         balance = self.inventory_repository.get_compatibility_balance(
             session,
             actor.tenant_id,
@@ -363,7 +363,7 @@ class InventoryService:
         actor: ActorContext,
         summary,
         balance: InventoryBalance,
-    ) -> WarehouseInventoryRead:
+    ) -> InventoryRead:
         policy = self.inventory_repository.get_policy_by_business_key(
             session,
             actor.tenant_id,
@@ -372,7 +372,7 @@ class InventoryService:
         )
         if policy is None:
             raise NotFoundError("inventory_policy", balance.id)
-        return WarehouseInventoryRead.model_validate(
+        return InventoryRead.model_validate(
             {
                 "id": balance.id,
                 "version": balance.version,

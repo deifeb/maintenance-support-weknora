@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from app.db.session import SessionLocal
 from app.importers.inspection import inspect_workbook
 from app.importers.template import create_template_bytes
@@ -18,6 +19,7 @@ from app.schemas.import_data import (
     ImportExecutionResult,
     ImportValidationResult,
 )
+from app.security.actor import ActorContext, MaintenanceRole
 from app.services.import_task_service import (
     ImportTaskFileStore,
 )
@@ -42,8 +44,9 @@ class FakeWorkerImportService:
         content: bytes,
         filename: str,
         mapping=None,
+        task_id: str | None = None,
     ) -> ImportValidationResult:
-        del session, tenant_id, content, filename, mapping
+        del session, tenant_id, content, filename, mapping, task_id
         self.validate_calls += 1
         return ImportValidationResult(
             valid=True,
@@ -57,18 +60,19 @@ class FakeWorkerImportService:
         self,
         session,
         *,
-        tenant_id: str,
+        actor: ActorContext,
+        task_id: str,
         content: bytes,
         filename: str,
         mapping=None,
     ) -> ImportExecutionResult:
-        del content, filename, mapping
+        del task_id, content, filename, mapping
         self.apply_calls += 1
 
         if self.fail_after_write:
             session.add(
                 SparePart(
-                    tenant_id=tenant_id,
+                    tenant_id=actor.tenant_id,
                     code="ROLLBACK-PROBE",
                     name="must rollback",
                     unit="件",
@@ -184,6 +188,7 @@ def test_execute_revalidates_file_hash_before_writing(
             task_id=task.id,
             tenant_id=task.tenant_id,
             user_id=task.created_by_user_id,
+            execution_role=MaintenanceRole.ADMIN,
         )
     finally:
         worker.shutdown(wait=False)
@@ -238,6 +243,7 @@ def test_failed_business_transaction_writes_no_partial_rows(
             task_id=task.id,
             tenant_id=task.tenant_id,
             user_id=task.created_by_user_id,
+            execution_role=MaintenanceRole.ADMIN,
         )
     finally:
         worker.shutdown(wait=False)
@@ -265,3 +271,41 @@ def test_failed_business_transaction_writes_no_partial_rows(
     assert after == before
     assert import_service.validate_calls == 1
     assert import_service.apply_calls == 1
+
+
+def test_worker_rejects_non_admin_execution_role_without_starting_task(
+    tmp_path: Path,
+    session,
+    actor_contributor,
+):
+    file_store = ImportTaskFileStore(root=tmp_path)
+    import_service = FakeWorkerImportService()
+    task = _queued_task(
+        session=session,
+        file_store=file_store,
+        tenant_id=actor_contributor.tenant_id,
+        user_id=actor_contributor.user_id,
+        content=create_template_bytes(),
+    )
+    worker = _build_worker(
+        file_store=file_store,
+        import_service=import_service,
+    )
+    try:
+        with pytest.raises(Exception) as raised:
+            worker.run_once(
+                task_id=task.id,
+                tenant_id=task.tenant_id,
+                user_id=task.created_by_user_id,
+                execution_role=MaintenanceRole.CONTRIBUTOR,
+            )
+    finally:
+        worker.shutdown(wait=False)
+
+    assert getattr(raised.value, "code", None) == (
+        "INSUFFICIENT_MAINTENANCE_ROLE"
+    )
+    session.expire_all()
+    assert session.get(MasterDataImportTask, task.id).status is ImportTaskStatus.QUEUED
+    assert import_service.validate_calls == 0
+    assert import_service.apply_calls == 0

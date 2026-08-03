@@ -14,7 +14,7 @@ from app.schemas.equipment import (
     ConfigurationVersionCreate,
     EquipmentModelCreate,
 )
-from app.schemas.inventory import InventoryAdjustment, WarehouseCreate, WarehouseInventoryCreate
+from app.schemas.inventory import InventoryAdjustment, InventoryCreate, WarehouseCreate
 from app.schemas.reliability import ReliabilityProfileCreate
 from app.schemas.supplier import SupplierCreate, SupplierOfferCreate
 from app.services import (
@@ -113,7 +113,7 @@ def test_inventory_adjustment_and_frozen_warehouse(session, actor_admin) -> None
     warehouse = warehouse_service.create(session, actor_admin, WarehouseCreate(code="WH-1", name="Warehouse"))
     inventory = inventory_service.create_inventory(
         session, actor_admin,
-        WarehouseInventoryCreate(
+        InventoryCreate(
             warehouse_id=warehouse.id,
             spare_part_id=spare.id,
             safety_stock=2,

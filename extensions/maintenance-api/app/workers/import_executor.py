@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.exceptions import (
     AppException,
     BusinessValidationError,
+    InsufficientMaintenanceRoleError,
 )
 from app.db.session import SessionLocal
 from app.models.import_task import (
@@ -19,6 +20,7 @@ from app.models.import_task import (
     MasterDataImportTask,
 )
 from app.models.mixins import utc_now
+from app.security.actor import ActorContext, MaintenanceRole
 from app.services.import_service import (
     MasterDataImportService,
     master_data_import_service,
@@ -66,6 +68,7 @@ class ImportTaskExecutor:
         task_id: str,
         tenant_id: str,
         user_id: str,
+        execution_role: MaintenanceRole,
     ) -> bool:
         key = (tenant_id, task_id)
         with self._lock:
@@ -79,6 +82,7 @@ class ImportTaskExecutor:
                 task_id,
                 tenant_id,
                 user_id,
+                execution_role,
             )
         except Exception:
             with self._lock:
@@ -91,6 +95,7 @@ class ImportTaskExecutor:
         task_id: str,
         tenant_id: str,
         user_id: str,
+        execution_role: MaintenanceRole,
     ) -> None:
         key = (tenant_id, task_id)
         try:
@@ -98,6 +103,7 @@ class ImportTaskExecutor:
                 task_id=task_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
+                execution_role=execution_role,
             )
         finally:
             with self._lock:
@@ -226,7 +232,14 @@ class ImportTaskExecutor:
         task_id: str,
         tenant_id: str,
         user_id: str,
+        execution_role: MaintenanceRole,
     ) -> None:
+        if execution_role is not MaintenanceRole.ADMIN:
+            raise InsufficientMaintenanceRoleError(
+                required_role=MaintenanceRole.ADMIN.value,
+                actual_role=execution_role.value,
+                request_id=f"import-task:{task_id}",
+            )
         if not self._start_task(
             task_id=task_id,
             tenant_id=tenant_id,
@@ -273,6 +286,7 @@ class ImportTaskExecutor:
                 content=content,
                 filename=task.original_filename,
                 mapping=task.mapping_json,
+                task_id=task.id,
             )
             if not validation.valid:
                 raise BusinessValidationError(
@@ -282,7 +296,14 @@ class ImportTaskExecutor:
 
             result = self.import_service.apply(
                 session,
-                tenant_id=tenant_id,
+                actor=ActorContext(
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    role=execution_role,
+                    request_id=task.created_by_request_id,
+                    token_id=f"import-task:{task.id}",
+                ),
+                task_id=task.id,
                 content=content,
                 filename=task.original_filename,
                 mapping=task.mapping_json,

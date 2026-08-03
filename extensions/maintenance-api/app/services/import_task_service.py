@@ -14,6 +14,7 @@ from app.core.exceptions import (
     AppException,
     BusinessValidationError,
     ConflictError,
+    InsufficientMaintenanceRoleError,
     NotFoundError,
 )
 from app.exporters.import_error_excel import (
@@ -29,7 +30,7 @@ from app.repositories.import_task_repository import (
     ImportTaskRepository,
     import_task_repository,
 )
-from app.security.actor import ActorContext
+from app.security.actor import ActorContext, MaintenanceRole
 from app.services.import_service import (
     master_data_import_service,
 )
@@ -451,6 +452,12 @@ class ImportTaskService:
         task_id: str,
         max_pending_tasks: int,
     ) -> tuple[MasterDataImportTask, bool]:
+        if actor.role is not MaintenanceRole.ADMIN:
+            raise InsufficientMaintenanceRoleError(
+                required_role=MaintenanceRole.ADMIN.value,
+                actual_role=actor.role.value,
+                request_id=actor.request_id,
+            )
         if max_pending_tasks <= 0:
             raise ValueError(
                 "max_pending_tasks must be positive"

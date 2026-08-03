@@ -45,6 +45,8 @@ MASTER_ROLE_BY_FUNCTION = {
     "create_inventory": "require_admin",
     "update_inventory": "require_admin",
     "adjust_inventory": "require_admin",
+    "execute_import": "require_admin",
+    "execute_import_task": "require_admin",
 }
 DEMAND_ROLE_BY_FUNCTION = {
     "create_draft": "require_contributor",

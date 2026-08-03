@@ -33,6 +33,7 @@ from app.schemas.import_data import (
 )
 from app.security.actor import ActorContext
 from app.security.permissions import (
+    require_admin,
     require_contributor,
     require_viewer,
 )
@@ -54,6 +55,7 @@ SessionDep = Annotated[
     Session,
     Depends(get_db_session),
 ]
+AdminDep = Annotated[ActorContext, Depends(require_admin)]
 
 _settings = get_settings()
 import_task_service = build_import_task_service(
@@ -222,17 +224,14 @@ async def validate_import(
 )
 async def execute_import(
     session: SessionDep,
-    actor: Annotated[
-        ActorContext,
-        Depends(require_contributor),
-    ],
+    actor: AdminDep,
     file: UploadFile = File(...),
 ):
     content = await file.read()
     try:
         result = master_data_import_service.apply(
             session,
-            tenant_id=actor.tenant_id,
+            actor=actor,
             content=content,
             filename=file.filename or "upload.xlsx",
         )
@@ -320,10 +319,7 @@ def execute_import_task(
     task_id: str,
     response: Response,
     session: SessionDep,
-    actor: Annotated[
-        ActorContext,
-        Depends(require_contributor),
-    ],
+    actor: AdminDep,
 ):
     task, should_submit = (
         import_task_service.queue_for_execution(
@@ -341,6 +337,7 @@ def execute_import_task(
             task.id,
             actor.tenant_id,
             actor.user_id,
+            actor.role,
         )
         response.status_code = (
             status.HTTP_202_ACCEPTED

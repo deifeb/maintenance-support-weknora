@@ -10,7 +10,6 @@ DIRECT_SERVICE_TEST = Path("tests/services/test_services.py")
 NO_ACTOR_SERVICE_CALLS = {
     ("master_data_import_service", "template_bytes"),
     ("master_data_import_service", "validate"),
-    ("master_data_import_service", "apply"),
 }
 
 
@@ -196,6 +195,14 @@ MASTER_ROUTE_ROLE_OVERRIDES = {
         "imports.py",
         "download_import_errors",
     ): "require_contributor",
+    (
+        "imports.py",
+        "execute_import",
+    ): "require_admin",
+    (
+        "imports.py",
+        "execute_import_task",
+    ): "require_admin",
 }
 
 
@@ -432,16 +439,20 @@ def test_import_routes_supply_actor_tenant_without_request_tenant_field(
 
         for call in service_calls:
             observed.add(call.func.attr)
-            actual = _keyword_expression(
-                call,
-                "tenant_id",
-            )
-            if actual not in expected_expressions:
+            if call.func.attr == "apply":
+                actual = _keyword_expression(call, "actor")
+                expected = actor_names
+                label = "actor"
+            else:
+                actual = _keyword_expression(call, "tenant_id")
+                expected = expected_expressions
+                label = "tenant_id"
+            if actual not in expected:
                 failures.append(
                     f"{function.name}:{call.lineno}: "
-                    f"{call.func.attr} tenant_id={actual!r}, "
+                    f"{call.func.attr} {label}={actual!r}, "
                     f"expected one of "
-                    f"{sorted(expected_expressions)!r}"
+                    f"{sorted(expected)!r}"
                 )
 
     assert observed == TENANT_SCOPED_IMPORT_METHODS

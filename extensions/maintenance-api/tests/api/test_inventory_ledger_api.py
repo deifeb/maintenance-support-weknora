@@ -13,7 +13,6 @@ from app.models import (
     InventoryTransaction,
     SparePart,
     Warehouse,
-    WarehouseInventory,
     WarehouseLocation,
 )
 from app.models.enums import WarehouseStatus
@@ -112,20 +111,6 @@ def _seed_inventory(
             )
         )
     session.flush()
-    session.add(
-        WarehouseInventory(
-            tenant_id=tenant_id,
-            warehouse_id=warehouse.id,
-            spare_part_id=spare.id,
-            on_hand_quantity=Decimal("99"),
-            reserved_quantity=Decimal("0"),
-            damaged_quantity=Decimal("0"),
-            quarantined_quantity=Decimal("0"),
-            in_transit_quantity=Decimal("0"),
-            safety_stock=Decimal("0"),
-            reorder_point=Decimal("0"),
-        )
-    )
     session.commit()
     return balance, policy
 

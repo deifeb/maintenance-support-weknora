@@ -10,9 +10,9 @@ from app.schemas.common import MaintenanceSuccessResponse, PageData
 from app.schemas.inventory import (
     InventoryAdjustment,
     InventoryAdjustmentRead,
-    WarehouseInventoryCreate,
-    WarehouseInventoryRead,
-    WarehouseInventoryUpdate,
+    InventoryCreate,
+    InventoryRead,
+    InventoryUpdate,
 )
 from app.security.actor import ActorContext
 from app.security.permissions import (
@@ -27,18 +27,18 @@ AdminDep = Annotated[ActorContext, Depends(require_admin)]
 
 
 @router.post(
-    "", response_model=MaintenanceSuccessResponse[WarehouseInventoryRead], status_code=status.HTTP_201_CREATED
+    "", response_model=MaintenanceSuccessResponse[InventoryRead], status_code=status.HTTP_201_CREATED
 )
 def create_inventory(
-    payload: WarehouseInventoryCreate,
+    payload: InventoryCreate,
     session: SessionDep,
     actor: AdminDep,
 ):
     item = inventory_service.create_inventory(session, actor, payload)
-    return success_response(WarehouseInventoryRead.model_validate(item), "Inventory created", actor=actor, version=item.version)
+    return success_response(InventoryRead.model_validate(item), "Inventory created", actor=actor, version=item.version)
 
 
-@router.get("", response_model=MaintenanceSuccessResponse[PageData[WarehouseInventoryRead]])
+@router.get("", response_model=MaintenanceSuccessResponse[PageData[InventoryRead]])
 def list_inventories(
     session: SessionDep,
     actor: Annotated[ActorContext, Depends(require_viewer)],
@@ -53,28 +53,28 @@ def list_inventories(
     )
 
 
-@router.get("/{identifier}", response_model=MaintenanceSuccessResponse[WarehouseInventoryRead])
+@router.get("/{identifier}", response_model=MaintenanceSuccessResponse[InventoryRead])
 def get_inventory(
     identifier: int,
     session: SessionDep,
     actor: Annotated[ActorContext, Depends(require_viewer)],
 ):
     return success_response(
-        WarehouseInventoryRead.model_validate(inventory_service.get(session, actor, identifier)),
+        InventoryRead.model_validate(inventory_service.get(session, actor, identifier)),
         actor=actor,
     )
 
 
-@router.put("/{identifier}", response_model=MaintenanceSuccessResponse[WarehouseInventoryRead])
+@router.put("/{identifier}", response_model=MaintenanceSuccessResponse[InventoryRead])
 def update_inventory(
     identifier: int,
-    payload: WarehouseInventoryUpdate,
+    payload: InventoryUpdate,
     session: SessionDep,
     actor: AdminDep,
 ):
     item = inventory_service.update_inventory(session, actor, identifier, payload)
     return success_response(
-        WarehouseInventoryRead.model_validate(
+        InventoryRead.model_validate(
             item
         ),
         "Inventory updated",

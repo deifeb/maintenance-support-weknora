@@ -87,7 +87,7 @@ class InventoryPolicyQuantities(BaseModel):
         return self
 
 
-class WarehouseInventoryCreate(InventoryPolicyQuantities):
+class InventoryCreate(InventoryPolicyQuantities):
     model_config = ConfigDict(extra="forbid")
 
     warehouse_id: int
@@ -95,7 +95,7 @@ class WarehouseInventoryCreate(InventoryPolicyQuantities):
     notes: str | None = None
 
 
-class WarehouseInventoryUpdate(BaseModel):
+class InventoryUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     safety_stock: Decimal | None = Field(default=None, ge=0)
@@ -137,7 +137,7 @@ class InventoryAdjustment(BaseModel):
         )
 
 
-class WarehouseInventoryRead(ORMModel):
+class InventoryRead(ORMModel):
     id: int
     version: int
     policy_version: int
@@ -169,4 +169,4 @@ class WarehouseInventoryRead(ORMModel):
 
 class InventoryAdjustmentRead(BaseModel):
     transaction: InventoryTransactionRead
-    summary: WarehouseInventoryRead
+    summary: InventoryRead

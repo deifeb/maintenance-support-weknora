@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import defaultdict
 from decimal import Decimal
 from typing import Any, Callable
@@ -25,13 +26,14 @@ from app.models import (
     ConfigurationItem,
     ConfigurationVersion,
     EquipmentModel,
+    InventoryPolicy,
+    InventoryTransaction,
     Part,
     ReliabilityProfile,
     SparePart,
     Supplier,
     SupplierOffer,
     Warehouse,
-    WarehouseInventory,
 )
 from app.models.enums import (
     ConfigurationStatus,
@@ -51,6 +53,8 @@ from app.schemas.import_data import ImportExecutionResult, ImportIssue, ImportVa
 from app.schemas.inventory import InventoryQuantities, WarehouseCreate
 from app.schemas.reliability import ReliabilityProfileCreate
 from app.schemas.supplier import SupplierCreate, SupplierOfferCreate
+from app.security.actor import ActorContext
+from app.services.inventory_target_adapter import inventory_target_adapter
 
 SHEET_EQUIPMENT = "01_装备型号"
 SHEET_CONFIGURATION = "02_构型版本"
@@ -426,6 +430,7 @@ class MasterDataImportService:
         tenant_id: str,
         normalized: dict[str, list[dict[str, Any]]],
         errors: list[ImportIssue],
+        task_id: str | None = None,
     ) -> None:
         existing: dict[str, set[Any]] = {
             SHEET_EQUIPMENT: self._existing_codes(
@@ -518,21 +523,37 @@ class MasterDataImportService:
             (warehouse_code, spare_code)
             for warehouse_code, spare_code in session.execute(
                 select(Warehouse.code, SparePart.code)
-                .join(
-                    WarehouseInventory,
-                    WarehouseInventory.warehouse_id == Warehouse.id,
-                )
+                .join(InventoryPolicy, InventoryPolicy.warehouse_id == Warehouse.id)
                 .join(
                     SparePart,
-                    WarehouseInventory.spare_part_id == SparePart.id,
+                    InventoryPolicy.spare_part_id == SparePart.id,
                 )
                 .where(
                     Warehouse.tenant_id == tenant_id,
-                    WarehouseInventory.tenant_id == tenant_id,
+                    InventoryPolicy.tenant_id == tenant_id,
                     SparePart.tenant_id == tenant_id,
                 )
             ).all()
         }
+        replayed_inventory_rows = (
+            {
+                row["_row"]
+                for row in normalized[SHEET_INVENTORY]
+                if session.scalar(
+                    select(InventoryTransaction.id).where(
+                        InventoryTransaction.tenant_id == tenant_id,
+                        InventoryTransaction.operation_type.in_(
+                            ("OPENING", "ADJUST", "TARGET")
+                        ),
+                        InventoryTransaction.idempotency_key
+                        == f"import:{task_id}:{SHEET_INVENTORY}:{row['_row']}",
+                    )
+                )
+                is not None
+            }
+            if task_id is not None
+            else set()
+        )
         key_functions: dict[str, Callable[[dict[str, Any]], Any]] = {
             SHEET_EQUIPMENT: lambda row: row["code"],
             SHEET_CONFIGURATION: lambda row: (
@@ -558,6 +579,8 @@ class MasterDataImportService:
         for sheet, rows in normalized.items():
             for row in rows:
                 key = key_functions[sheet](row)
+                if sheet == SHEET_INVENTORY and row["_row"] in replayed_inventory_rows:
+                    continue
                 operation = ImportOperation(row["operation"])
                 exists = key in existing[sheet]
                 if operation == ImportOperation.CREATE and exists:
@@ -817,6 +840,7 @@ class MasterDataImportService:
         content: bytes,
         filename: str,
         mapping: dict[str, dict[str, str]] | None = None,
+        task_id: str | None = None,
     ) -> ImportValidationResult:
         parsed, errors = self._parse(
             content=content,
@@ -830,6 +854,7 @@ class MasterDataImportService:
             tenant_id=tenant_id,
             normalized=normalized,
             errors=errors,
+            task_id=task_id,
         )
         self._cross_reference_checks(
             session,
@@ -874,17 +899,21 @@ class MasterDataImportService:
         self,
         session: Session,
         *,
-        tenant_id: str,
+        actor: ActorContext,
         content: bytes,
         filename: str,
         mapping: dict[str, dict[str, str]] | None = None,
+        task_id: str | None = None,
     ) -> ImportExecutionResult:
+        tenant_id = actor.tenant_id
+        stable_task_id = task_id or hashlib.sha256(content).hexdigest()
         validation = self.validate(
             session,
             tenant_id=tenant_id,
             content=content,
             filename=filename,
             mapping=mapping,
+            task_id=stable_task_id,
         )
         if not validation.valid:
             raise BusinessValidationError(
@@ -1175,39 +1204,46 @@ class MasterDataImportService:
         for row in normalized[SHEET_INVENTORY]:
             warehouse = warehouse_by_code[row["warehouse_code"]]
             spare = spare_by_code[row["spare_part_code"]]
-            instance = session.scalar(
-                select(WarehouseInventory).where(
-                    WarehouseInventory.tenant_id == tenant_id,
-                    WarehouseInventory.warehouse_id == warehouse.id,
-                    WarehouseInventory.spare_part_id == spare.id,
-                )
-            )
-            data = {
-                field: value
-                for field, value in row.items()
-                if field
-                not in {
-                    "operation",
-                    "_row",
-                    "warehouse_code",
-                    "spare_part_code",
-                }
-            }
-            data.update(
+            quantities = InventoryQuantities.model_validate(
                 {
-                    "tenant_id": tenant_id,
-                    "warehouse_id": warehouse.id,
-                    "spare_part_id": spare.id,
+                    field: row[field]
+                    for field in (
+                        "on_hand_quantity",
+                        "reserved_quantity",
+                        "damaged_quantity",
+                        "quarantined_quantity",
+                        "in_transit_quantity",
+                        "safety_stock",
+                        "reorder_point",
+                        "maximum_stock",
+                    )
                 }
             )
-            if instance is None:
-                instance = WarehouseInventory(**data)
-                session.add(instance)
+            target = inventory_target_adapter.apply_target(
+                session,
+                actor,
+                warehouse_id=warehouse.id,
+                spare_part_id=spare.id,
+                quantities=quantities,
+                notes=row.get("notes"),
+                idempotency_key=(
+                    f"import:{stable_task_id}:"
+                    f"{SHEET_INVENTORY}:{row['_row']}"
+                ),
+                source_payload={
+                    key: value
+                    for key, value in row.items()
+                    if key != "_row"
+                },
+                reason=(
+                    "Master data inventory import "
+                    f"{SHEET_INVENTORY} row {row['_row']}"
+                ),
+            )
+            if target.created_identity:
                 created[SHEET_INVENTORY] += 1
             else:
-                self._apply(instance, data, set())
                 updated[SHEET_INVENTORY] += 1
-            session.flush()
 
         for row in normalized[SHEET_OFFER]:
             supplier = supplier_by_code[row["supplier_code"]]

@@ -16,9 +16,11 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.exceptions import BusinessValidationError
 from app.models.catalog import Part, SparePart
 from app.models.equipment import ConfigurationVersion, EquipmentModel
-from app.models.inventory import Warehouse, WarehouseInventory
+from app.models.inventory import Warehouse
 from app.models.reliability import ReliabilityProfile
 from app.models.supplier import Supplier, SupplierOffer
+from app.security.actor import ActorContext, MaintenanceRole
+from app.services.inventory_query_service import inventory_query_service
 
 DEFAULT_MAX_EXPORT_ROWS = 100_000
 FORMULA_PREFIXES = ("=", "+", "-", "@")
@@ -45,6 +47,24 @@ class ExportResourceSpec:
         Callable[[str], Any],
         ...,
     ] = ()
+
+
+@dataclass(frozen=True)
+class InventoryExportRow:
+    warehouse_id: int
+    spare_part_id: int
+    warehouse_code: str
+    spare_part_code: str
+    on_hand_quantity: Decimal
+    reserved_quantity: Decimal
+    damaged_quantity: Decimal
+    quarantined_quantity: Decimal
+    in_transit_quantity: Decimal
+    available_quantity: Decimal
+    safety_stock: Decimal
+    reorder_point: Decimal
+    maximum_stock: Decimal | None
+    last_counted_at: datetime | None = None
 
 
 def _attr(name: str) -> Callable[[Any], object]:
@@ -130,24 +150,6 @@ def _reliability_keyword(keyword: str) -> Any:
             pattern
         ),
         ReliabilityProfile.spare_part.has(
-            or_(
-                SparePart.code.ilike(pattern),
-                SparePart.name.ilike(pattern),
-            )
-        ),
-    )
-
-
-def _inventory_keyword(keyword: str) -> Any:
-    pattern = f"%{keyword}%"
-    return or_(
-        WarehouseInventory.warehouse.has(
-            or_(
-                Warehouse.code.ilike(pattern),
-                Warehouse.name.ilike(pattern),
-            )
-        ),
-        WarehouseInventory.spare_part.has(
             or_(
                 SparePart.code.ilike(pattern),
                 SparePart.name.ilike(pattern),
@@ -479,74 +481,6 @@ RESOURCE_SPECS: Mapping[
             ),
         },
     ),
-    "inventories": ExportResourceSpec(
-        worksheet_title="库存",
-        model=WarehouseInventory,
-        columns=(
-            _related_column(
-                "库房编码",
-                "warehouse",
-                "code",
-            ),
-            _related_column(
-                "器材编码",
-                "spare_part",
-                "code",
-            ),
-            _column("现存数量", "on_hand_quantity"),
-            _column("预留数量", "reserved_quantity"),
-            _column("损坏数量", "damaged_quantity"),
-            _column(
-                "隔离数量",
-                "quarantined_quantity",
-            ),
-            _column("在途数量", "in_transit_quantity"),
-            _column("可用数量", "available_quantity"),
-            _column("安全库存", "safety_stock"),
-            _column("补货点", "reorder_point"),
-            _column("最大库存", "maximum_stock"),
-            _column("盘点时间", "last_counted_at", 22),
-        ),
-        keyword_builder=_inventory_keyword,
-        sort_fields={
-            "last_counted_at": (
-                WarehouseInventory.last_counted_at
-            ),
-            "on_hand_quantity": (
-                WarehouseInventory.on_hand_quantity
-            ),
-            "available_quantity": (
-                WarehouseInventory.available_quantity
-            ),
-        },
-        default_sort="last_counted_at",
-        filter_builders={
-            "spare_part_id": _eq(
-                WarehouseInventory.spare_part_id
-            ),
-            "warehouse_id": _eq(
-                WarehouseInventory.warehouse_id
-            ),
-        },
-        query_options=(
-            joinedload(
-                WarehouseInventory.warehouse
-            ),
-            joinedload(
-                WarehouseInventory.spare_part
-            ),
-        ),
-        related_tenant_builders=(
-            _related_tenant(
-                WarehouseInventory.warehouse,
-                Warehouse,
-            ),
-            _related_tenant(
-                WarehouseInventory.spare_part,
-                SparePart,
-            ),
-        ),
-    ),
     "suppliers": ExportResourceSpec(
         worksheet_title="供应商",
         model=Supplier,
@@ -710,6 +644,12 @@ class MasterDataExcelExporter:
         resource_key: str,
         filters: Mapping[str, object | None],
     ) -> bytes:
+        if resource_key == "inventories":
+            return self._export_inventory(
+                session,
+                tenant_id=tenant_id,
+                filters=filters,
+            )
         spec = RESOURCE_SPECS.get(resource_key)
         if spec is None:
             raise BusinessValidationError(
@@ -891,6 +831,160 @@ class MasterDataExcelExporter:
                 ).column_letter
             ].width = column.width
 
+        stream = BytesIO()
+        workbook.save(stream)
+        return stream.getvalue()
+
+    def _export_inventory(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        filters: Mapping[str, object | None],
+    ) -> bytes:
+        supported = {
+            "keyword",
+            "include_inactive",
+            "sort_by",
+            "sort_order",
+            "warehouse_id",
+            "spare_part_id",
+        }
+        unknown = next(
+            (
+                name
+                for name, value in filters.items()
+                if name not in supported and value is not None
+            ),
+            None,
+        )
+        if unknown is not None:
+            raise BusinessValidationError(
+                "Filter is not supported for this export resource",
+                code="INVALID_EXPORT_FILTER",
+                details={"resource_key": "inventories", "filter": unknown},
+            )
+        actor = ActorContext(
+            user_id="master-data-export",
+            tenant_id=tenant_id,
+            role=MaintenanceRole.VIEWER,
+            request_id="master-data-export",
+            token_id="master-data-export",
+        )
+        summaries = inventory_query_service.summaries_for_parts(
+            session,
+            actor,
+        )
+        warehouses = {
+            item.id: item
+            for item in session.scalars(
+                select(Warehouse).where(Warehouse.tenant_id == tenant_id)
+            )
+        }
+        spare_parts = {
+            item.id: item
+            for item in session.scalars(
+                select(SparePart).where(SparePart.tenant_id == tenant_id)
+            )
+        }
+        warehouse_filter = filters.get("warehouse_id")
+        spare_filter = filters.get("spare_part_id")
+        keyword = str(filters.get("keyword") or "").strip().lower()
+        rows: list[InventoryExportRow] = []
+        for summary in summaries:
+            warehouse = warehouses.get(summary.warehouse_id)
+            spare = spare_parts.get(summary.spare_part_id)
+            if warehouse is None or spare is None:
+                continue
+            if warehouse_filter is not None and summary.warehouse_id != warehouse_filter:
+                continue
+            if spare_filter is not None and summary.spare_part_id != spare_filter:
+                continue
+            if keyword and not any(
+                keyword in value.lower()
+                for value in (warehouse.code, warehouse.name, spare.code, spare.name)
+            ):
+                continue
+            rows.append(
+                InventoryExportRow(
+                    warehouse_id=summary.warehouse_id,
+                    spare_part_id=summary.spare_part_id,
+                    warehouse_code=warehouse.code,
+                    spare_part_code=spare.code,
+                    on_hand_quantity=summary.on_hand_quantity,
+                    reserved_quantity=summary.reserved_quantity,
+                    damaged_quantity=summary.damaged_quantity,
+                    quarantined_quantity=summary.quarantined_quantity,
+                    in_transit_quantity=summary.in_transit_quantity,
+                    available_quantity=summary.available_quantity,
+                    safety_stock=summary.safety_stock,
+                    reorder_point=summary.reorder_point,
+                    maximum_stock=summary.maximum_stock,
+                )
+            )
+        sort_by = str(filters.get("sort_by") or "last_counted_at")
+        if sort_by not in {
+            "last_counted_at",
+            "on_hand_quantity",
+            "available_quantity",
+        }:
+            raise BusinessValidationError(
+                "Sort field is not supported for this export resource",
+                code="INVALID_EXPORT_SORT_FIELD",
+                details={"resource_key": "inventories", "sort_by": sort_by},
+            )
+        sort_order = str(filters.get("sort_order") or "asc").lower()
+        if sort_order not in {"asc", "desc"}:
+            raise BusinessValidationError(
+                "Export sort order must be 'asc' or 'desc'",
+                code="INVALID_EXPORT_SORT_ORDER",
+                details={"sort_order": sort_order},
+            )
+        rows.sort(
+            key=lambda row: (
+                getattr(row, sort_by) is not None,
+                getattr(row, sort_by) or Decimal("0"),
+                row.warehouse_id,
+                row.spare_part_id,
+            ),
+            reverse=sort_order == "desc",
+        )
+        if len(rows) > self.max_rows:
+            raise BusinessValidationError(
+                "Export row limit was exceeded",
+                code="EXPORT_ROW_LIMIT_EXCEEDED",
+                details={"max_rows": self.max_rows, "resource_key": "inventories"},
+            )
+        columns = (
+            _column("库房编码", "warehouse_code"),
+            _column("器材编码", "spare_part_code"),
+            _column("现存数量", "on_hand_quantity"),
+            _column("预留数量", "reserved_quantity"),
+            _column("损坏数量", "damaged_quantity"),
+            _column("隔离数量", "quarantined_quantity"),
+            _column("在途数量", "in_transit_quantity"),
+            _column("可用数量", "available_quantity"),
+            _column("安全库存", "safety_stock"),
+            _column("补货点", "reorder_point"),
+            _column("最大库存", "maximum_stock"),
+            _column("盘点时间", "last_counted_at", 22),
+        )
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = "库存"
+        worksheet.append([column.header for column in columns])
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True)
+        for row in rows:
+            worksheet.append(
+                [_safe_excel_value(column.getter(row)) for column in columns]
+            )
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for index, column in enumerate(columns, start=1):
+            worksheet.column_dimensions[
+                worksheet.cell(row=1, column=index).column_letter
+            ].width = column.width
         stream = BytesIO()
         workbook.save(stream)
         return stream.getvalue()

@@ -62,7 +62,7 @@ from app.models.import_task import (
     ImportTaskStatus,
     MasterDataImportTask,
 )
-from app.models.inventory import Warehouse, WarehouseInventory
+from app.models.inventory import Warehouse
 from app.models.inventory_ledger import (
     InventoryBalance,
     InventoryExpiryRule,
@@ -88,7 +88,6 @@ __all__ = [
     "SparePart",
     "ReliabilityProfile",
     "Warehouse",
-    "WarehouseInventory",
     "WarehouseLocation",
     "InventoryPolicy",
     "InventoryExpiryRule",

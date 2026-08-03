@@ -38,8 +38,6 @@ def migrated_inventory_session() -> Generator[Session, None, None]:
         cursor.close()
 
     Base.metadata.create_all(engine)
-    with engine.begin() as connection:
-        connection.exec_driver_sql("DROP TABLE warehouse_inventories")
 
     local_session = sessionmaker(bind=engine, expire_on_commit=False)()
     try:

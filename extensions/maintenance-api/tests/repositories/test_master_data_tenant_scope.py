@@ -16,6 +16,7 @@ from app.models import (
     DemandScenarioVersion,
     EquipmentModel,
     InventoryBalance,
+    InventoryPolicy,
     Part,
     ReliabilityProfile,
     RepairProfile,
@@ -23,7 +24,6 @@ from app.models import (
     Supplier,
     SupplierOffer,
     Warehouse,
-    WarehouseInventory,
     WarehouseLocation,
 )
 from app.models.enums import (
@@ -191,10 +191,27 @@ def add_inventory(
     tenant_id: str,
     warehouse_id: int,
     spare_id: int,
-) -> WarehouseInventory:
-    row = WarehouseInventory(
+) -> InventoryBalance:
+    location = WarehouseLocation(
         tenant_id=tenant_id,
         warehouse_id=warehouse_id,
+        code="DEFAULT",
+        name="Default location",
+        location_type="DEFAULT",
+    )
+    session.add(location)
+    session.flush()
+    session.add(
+        InventoryPolicy(
+            tenant_id=tenant_id,
+            warehouse_id=warehouse_id,
+            spare_part_id=spare_id,
+        )
+    )
+    row = InventoryBalance(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse_id,
+        location_id=location.id,
         spare_part_id=spare_id,
         on_hand_quantity=Decimal("10"),
     )
@@ -292,7 +309,7 @@ METHOD_MATRIX = [
         ("get_by_profile_code", "find_overlap"),
     ),
     (WarehouseRepository, ("count_references",)),
-    (InventoryRepository, ("get_by_business_key",)),
+    (InventoryRepository, ("get_default_balance_by_business_key",)),
     (SupplierRepository, ("count_references",)),
     (
         SupplierOfferRepository,
@@ -474,13 +491,13 @@ def test_business_keys_and_overlap_queries_are_tenant_scoped(
     session.commit()
 
     inventories = InventoryRepository()
-    assert inventories.get_by_business_key(
+    assert inventories.get_default_balance_by_business_key(
         session,
         "tenant-a",
         warehouse_a.id,
         spare_a.id,
     ).id == inventory_a.id
-    assert inventories.get_by_business_key(
+    assert inventories.get_default_balance_by_business_key(
         session,
         "tenant-a",
         warehouse_b.id,

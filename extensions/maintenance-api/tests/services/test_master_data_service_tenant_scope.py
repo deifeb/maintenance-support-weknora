@@ -10,6 +10,8 @@ from app.models import (
     ConfigurationItem,
     ConfigurationVersion,
     EquipmentModel,
+    InventoryBalance,
+    InventoryPolicy,
     Part,
     ReliabilityProfile,
     RepairProfile,
@@ -17,7 +19,7 @@ from app.models import (
     Supplier,
     SupplierOffer,
     Warehouse,
-    WarehouseInventory,
+    WarehouseLocation,
 )
 from app.models.enums import (
     DataSourceType,
@@ -31,8 +33,8 @@ from app.schemas.equipment import (
 )
 from app.schemas.inventory import (
     InventoryAdjustment,
-    WarehouseInventoryCreate,
-    WarehouseInventoryUpdate,
+    InventoryCreate,
+    InventoryUpdate,
 )
 from app.schemas.reliability import (
     ReliabilityProfileCreate,
@@ -155,10 +157,27 @@ def add_inventory(
     tenant_id: str,
     warehouse_id: int,
     spare_id: int,
-) -> WarehouseInventory:
-    row = WarehouseInventory(
+) -> InventoryBalance:
+    location = WarehouseLocation(
         tenant_id=tenant_id,
         warehouse_id=warehouse_id,
+        code="DEFAULT",
+        name="Default location",
+        location_type="DEFAULT",
+    )
+    session.add(location)
+    session.flush()
+    session.add(
+        InventoryPolicy(
+            tenant_id=tenant_id,
+            warehouse_id=warehouse_id,
+            spare_part_id=spare_id,
+        )
+    )
+    row = InventoryBalance(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse_id,
+        location_id=location.id,
         spare_part_id=spare_id,
         on_hand_quantity=Decimal("10"),
     )
@@ -361,7 +380,7 @@ def test_services_reject_foreign_reference_ids(
         inventory_service.create_inventory(
             session,
             actor,
-            WarehouseInventoryCreate(
+            InventoryCreate(
                 warehouse_id=warehouse_b.id,
                 spare_part_id=spare_b.id,
             ),
@@ -668,7 +687,7 @@ def test_custom_service_target_ids_are_tenant_scoped(
             session,
             actor,
             inventory_b.id,
-            WarehouseInventoryUpdate(safety_stock=Decimal("9")),
+            InventoryUpdate(safety_stock=Decimal("9")),
         )
 
     with pytest.raises(NotFoundError):
@@ -789,7 +808,7 @@ def test_inventory_update_rejects_foreign_spare_reference(
             session,
             actor,
             inventory.id,
-            WarehouseInventoryUpdate(safety_stock=Decimal("9")),
+            InventoryUpdate(safety_stock=Decimal("9")),
         )
 
 

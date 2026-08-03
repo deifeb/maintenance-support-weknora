@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from io import BytesIO
 
 import pytest
@@ -329,9 +330,10 @@ def test_reliability_export_excludes_cross_tenant_spare_part_relation(
 def test_inventory_export_excludes_each_cross_tenant_relation(
     session,
 ):
-    from app.models.inventory import (
+    from app.models import (
+        InventoryBalance,
         Warehouse,
-        WarehouseInventory,
+        WarehouseLocation,
     )
 
     tenant_a_part = SparePart(
@@ -365,17 +367,37 @@ def test_inventory_export_excludes_each_cross_tenant_relation(
         ]
     )
     session.flush()
+    location_for_foreign_warehouse = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=tenant_b_warehouse.id,
+        code="DEFAULT",
+        name="Foreign warehouse location",
+        location_type="DEFAULT",
+    )
+    location_for_local_warehouse = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=tenant_a_warehouse.id,
+        code="DEFAULT",
+        name="Local warehouse location",
+        location_type="DEFAULT",
+    )
+    session.add_all(
+        [location_for_foreign_warehouse, location_for_local_warehouse]
+    )
+    session.flush()
     session.add_all(
         [
-            WarehouseInventory(
+            InventoryBalance(
                 tenant_id="tenant-a",
                 warehouse_id=tenant_b_warehouse.id,
+                location_id=location_for_foreign_warehouse.id,
                 spare_part_id=tenant_a_part.id,
                 on_hand_quantity=1,
             ),
-            WarehouseInventory(
+            InventoryBalance(
                 tenant_id="tenant-a",
                 warehouse_id=tenant_a_warehouse.id,
+                location_id=location_for_local_warehouse.id,
                 spare_part_id=tenant_b_part.id,
                 on_hand_quantity=2,
             ),
@@ -398,6 +420,114 @@ def test_inventory_export_excludes_each_cross_tenant_relation(
     assert rows == [], (
         "INVENTORY_RELATED_TENANT_LEAK_GAP"
     )
+
+
+def test_inventory_export_aggregates_all_locations_and_lots_into_legacy_columns(
+    session,
+):
+    from app.models import (
+        InventoryBalance,
+        InventoryLot,
+        InventoryPolicy,
+        Warehouse,
+        WarehouseLocation,
+    )
+
+    warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code="WH-AGG",
+        name="Aggregate warehouse",
+    )
+    spare = SparePart(
+        tenant_id="tenant-a",
+        code="SP-AGG",
+        name="Aggregate spare",
+        unit="件",
+    )
+    session.add_all([warehouse, spare])
+    session.flush()
+    default = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="DEFAULT",
+        name="Default",
+        location_type="DEFAULT",
+    )
+    shelf = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="SHELF-1",
+        name="Shelf 1",
+        location_type="STORAGE",
+    )
+    lot = InventoryLot(
+        tenant_id="tenant-a",
+        spare_part_id=spare.id,
+        lot_code="LOT-1",
+    )
+    session.add_all([default, shelf, lot])
+    session.flush()
+    session.add(
+        InventoryPolicy(
+            tenant_id="tenant-a",
+            warehouse_id=warehouse.id,
+            spare_part_id=spare.id,
+            safety_stock=Decimal("4"),
+            reorder_point=Decimal("6"),
+            maximum_stock=Decimal("20"),
+        )
+    )
+    session.add_all(
+        [
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                location_id=default.id,
+                spare_part_id=spare.id,
+                on_hand_quantity=Decimal("5"),
+                reserved_quantity=Decimal("1"),
+                in_transit_quantity=Decimal("2"),
+            ),
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                location_id=shelf.id,
+                spare_part_id=spare.id,
+                lot_id=lot.id,
+                on_hand_quantity=Decimal("7"),
+                damaged_quantity=Decimal("1"),
+                quarantined_quantity=Decimal("0.5"),
+                in_transit_quantity=Decimal("1"),
+            ),
+        ]
+    )
+    session.commit()
+
+    content = _exporter().export(
+        session,
+        tenant_id="tenant-a",
+        resource_key="inventories",
+        filters={"sort_by": "on_hand_quantity"},
+    )
+    workbook = load_workbook(BytesIO(content), read_only=True)
+    rows = _rows_as_dicts(workbook["库存"])
+
+    assert rows == [
+        {
+            "库房编码": "WH-AGG",
+            "器材编码": "SP-AGG",
+            "现存数量": 12,
+            "预留数量": 1,
+            "损坏数量": 1,
+            "隔离数量": 0.5,
+            "在途数量": 3,
+            "可用数量": 9.5,
+            "安全库存": 4,
+            "补货点": 6,
+            "最大库存": 20,
+            "盘点时间": None,
+        }
+    ]
 
 
 def test_supplier_offer_export_excludes_each_cross_tenant_relation(

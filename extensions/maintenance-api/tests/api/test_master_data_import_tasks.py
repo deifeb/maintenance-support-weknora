@@ -9,6 +9,12 @@ from app.importers.inspection import inspect_workbook
 from app.importers.template import create_template_bytes
 from app.models.catalog import SparePart
 from app.models.import_task import ImportTaskStatus
+from app.models.inventory_ledger import (
+    InventoryBalance,
+    InventoryLedgerEntry,
+    InventoryPolicy,
+    InventoryTransaction,
+)
 from app.repositories.import_task_repository import (
     ImportTaskRepository,
 )
@@ -16,7 +22,7 @@ from app.schemas.import_data import (
     ImportIssue,
     ImportValidationResult,
 )
-from app.security.actor import ActorContext
+from app.security.actor import ActorContext, MaintenanceRole
 from app.security.dependencies import get_actor
 from app.services.import_task_service import (
     ImportTaskFileStore,
@@ -431,7 +437,7 @@ def test_import_service_accepts_inspection_mapping_for_task_preview(
 class FakeImportTaskExecutor:
     def __init__(self) -> None:
         self.submissions: list[
-            tuple[str, str, str]
+            tuple[str, str, str, MaintenanceRole]
         ] = []
 
     def submit(
@@ -439,18 +445,20 @@ class FakeImportTaskExecutor:
         task_id: str,
         tenant_id: str,
         user_id: str,
+        execution_role: MaintenanceRole,
     ) -> bool:
         self.submissions.append(
             (
                 task_id,
                 tenant_id,
                 user_id,
+                execution_role,
             )
         )
         return True
 
 
-def test_execute_task_route_requires_contributor(
+def test_execute_task_route_requires_admin(
     task_app: FastAPI,
 ):
     execute_key = (
@@ -491,7 +499,7 @@ def test_execute_task_route_requires_contributor(
 
     assert execute_key in actual
     assert (
-        "require_contributor"
+        "require_admin"
         in actual[execute_key]
     )
 
@@ -581,6 +589,7 @@ def test_duplicate_execute_is_idempotent(
             task.id,
             actor_admin.tenant_id,
             actor_admin.user_id,
+            MaintenanceRole.ADMIN,
         )
     ]
 
@@ -592,3 +601,76 @@ def test_duplicate_execute_is_idempotent(
     )
     assert refreshed is not None
     assert refreshed.status is ImportTaskStatus.QUEUED
+
+
+def test_contributor_cannot_queue_import_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    task_app: FastAPI,
+    task_service: ImportTaskService,
+    session,
+    actor_contributor: ActorContext,
+):
+    import app.api.v1.master_data.imports as imports_api
+    import app.services.import_task_service as service_module
+
+    content = create_template_bytes()
+    fake_import_service = FakeImportService(
+        ImportValidationResult(
+            valid=True,
+            sheet_counts={
+                sheet["name"]: 0
+                for sheet in inspect_workbook(content)["sheets"]
+            },
+            errors=[],
+            warnings=[],
+            preview={},
+        )
+    )
+    fake_executor = FakeImportTaskExecutor()
+    monkeypatch.setattr(
+        service_module,
+        "master_data_import_service",
+        fake_import_service,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        imports_api,
+        "import_task_executor",
+        fake_executor,
+        raising=False,
+    )
+    task = task_service.upload(
+        session,
+        actor=actor_contributor,
+        content=content,
+        filename="master-data.xlsx",
+    )
+    previewed = task_service.preview(
+        session,
+        actor=actor_contributor,
+        task_id=task.id,
+        mapping=_mapping(content),
+    )
+    assert previewed.status is ImportTaskStatus.PREVIEW_VALID
+
+    with _client(task_app, actor_contributor) as client:
+        response = client.post(
+            "/api/v1/master-data/import/tasks/"
+            f"{task.id}/execute",
+            json={},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == (
+        "INSUFFICIENT_MAINTENANCE_ROLE"
+    )
+    assert fake_executor.submissions == []
+    session.expire_all()
+    assert session.get(type(task), task.id).status is ImportTaskStatus.PREVIEW_VALID
+    for model in (
+        InventoryPolicy,
+        InventoryBalance,
+        InventoryTransaction,
+        InventoryLedgerEntry,
+    ):
+        assert session.scalar(select(func.count()).select_from(model)) == 0
