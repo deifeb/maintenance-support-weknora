@@ -60,6 +60,11 @@ class MasterDataImportTask(
         String(128),
         nullable=False,
     )
+    execution_user_id: Mapped[str | None] = mapped_column(String(64))
+    execution_roles_json: Mapped[list[str] | None] = mapped_column(JSON)
+    execution_request_id: Mapped[str | None] = mapped_column(String(128))
+    execution_token_id: Mapped[str | None] = mapped_column(String(128))
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     original_filename: Mapped[str] = mapped_column(
         String(255),
         nullable=False,

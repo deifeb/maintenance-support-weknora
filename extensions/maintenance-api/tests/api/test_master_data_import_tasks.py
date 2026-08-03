@@ -436,25 +436,14 @@ def test_import_service_accepts_inspection_mapping_for_task_preview(
 
 class FakeImportTaskExecutor:
     def __init__(self) -> None:
-        self.submissions: list[
-            tuple[str, str, str, MaintenanceRole]
-        ] = []
+        self.submissions: list[tuple[str, str]] = []
 
     def submit(
         self,
         task_id: str,
         tenant_id: str,
-        user_id: str,
-        execution_role: MaintenanceRole,
     ) -> bool:
-        self.submissions.append(
-            (
-                task_id,
-                tenant_id,
-                user_id,
-                execution_role,
-            )
-        )
+        self.submissions.append((task_id, tenant_id))
         return True
 
 
@@ -585,12 +574,8 @@ def test_duplicate_execute_is_idempotent(
         == task.id
     )
     assert fake_executor.submissions == [
-        (
-            task.id,
-            actor_admin.tenant_id,
-            actor_admin.user_id,
-            MaintenanceRole.ADMIN,
-        )
+        (task.id, actor_admin.tenant_id),
+        (task.id, actor_admin.tenant_id),
     ]
 
     session.rollback()
@@ -674,3 +659,190 @@ def test_contributor_cannot_queue_import_execution(
         InventoryLedgerEntry,
     ):
         assert session.scalar(select(func.count()).select_from(model)) == 0
+
+
+def _valid_preview_service(content: bytes) -> FakeImportService:
+    return FakeImportService(
+        ImportValidationResult(
+            valid=True,
+            sheet_counts={
+                sheet["name"]: 0
+                for sheet in inspect_workbook(content)["sheets"]
+            },
+            errors=[],
+            warnings=[],
+            preview={},
+        )
+    )
+
+
+def test_same_tenant_admin_can_take_over_contributor_preview(
+    monkeypatch,
+    task_service,
+    session,
+    actor_contributor,
+    actor_context,
+):
+    import app.services.import_task_service as service_module
+
+    content = create_template_bytes()
+    monkeypatch.setattr(
+        service_module,
+        "master_data_import_service",
+        _valid_preview_service(content),
+    )
+    task = task_service.upload(
+        session,
+        actor=actor_contributor,
+        content=content,
+        filename="handoff.xlsx",
+    )
+    task_service.preview(
+        session,
+        actor=actor_contributor,
+        task_id=task.id,
+        mapping=_mapping(content),
+    )
+    admin = actor_context(
+        tenant_id=actor_contributor.tenant_id,
+        user_id="different-admin",
+        role=MaintenanceRole.ADMIN,
+        request_id="execute-request",
+        token_id="execute-token",
+    )
+
+    queued, should_submit = task_service.queue_for_execution(
+        session,
+        actor=admin,
+        task_id=task.id,
+        max_pending_tasks=10,
+    )
+
+    assert should_submit is True
+    assert queued.status is ImportTaskStatus.QUEUED
+    assert queued.created_by_user_id == actor_contributor.user_id
+    assert queued.execution_user_id == admin.user_id
+    assert queued.execution_roles_json == [MaintenanceRole.ADMIN.value]
+    assert queued.execution_request_id == admin.request_id
+    assert queued.execution_token_id == admin.token_id
+    assert queued.queued_at is not None
+
+
+def test_admin_takeover_does_not_cross_tenant(
+    monkeypatch,
+    task_service,
+    session,
+    actor_contributor,
+    actor_context,
+):
+    import app.services.import_task_service as service_module
+
+    content = create_template_bytes()
+    monkeypatch.setattr(
+        service_module,
+        "master_data_import_service",
+        _valid_preview_service(content),
+    )
+    task = task_service.upload(
+        session,
+        actor=actor_contributor,
+        content=content,
+        filename="tenant-boundary.xlsx",
+    )
+    task_service.preview(
+        session,
+        actor=actor_contributor,
+        task_id=task.id,
+        mapping=_mapping(content),
+    )
+    foreign_admin = actor_context(
+        tenant_id="tenant-b",
+        user_id="foreign-admin",
+        role=MaintenanceRole.ADMIN,
+    )
+
+    with pytest.raises(Exception) as raised:
+        task_service.queue_for_execution(
+            session,
+            actor=foreign_admin,
+            task_id=task.id,
+            max_pending_tasks=10,
+        )
+    assert getattr(raised.value, "code", None) == "RESOURCE_NOT_FOUND"
+
+
+def test_contributor_preview_response_cannot_claim_execute_capability(
+    monkeypatch,
+    task_app,
+    task_service,
+    session,
+    actor_contributor,
+):
+    import app.services.import_task_service as service_module
+
+    content = create_template_bytes()
+    monkeypatch.setattr(
+        service_module,
+        "master_data_import_service",
+        _valid_preview_service(content),
+    )
+    task = task_service.upload(
+        session,
+        actor=actor_contributor,
+        content=content,
+        filename="capability.xlsx",
+    )
+
+    with _client(task_app, actor_contributor) as client:
+        response = client.post(
+            f"/api/v1/master-data/import/tasks/{task.id}/preview",
+            json={"mapping": _mapping(content)},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "PREVIEW_VALID"
+    assert response.json()["data"]["can_execute"] is False
+
+
+def test_duplicate_queued_task_requests_resubmission_after_submit_failure(
+    monkeypatch,
+    task_service,
+    session,
+    actor_admin,
+):
+    import app.services.import_task_service as service_module
+
+    content = create_template_bytes()
+    monkeypatch.setattr(
+        service_module,
+        "master_data_import_service",
+        _valid_preview_service(content),
+    )
+    task = task_service.upload(
+        session,
+        actor=actor_admin,
+        content=content,
+        filename="resubmit.xlsx",
+    )
+    task_service.preview(
+        session,
+        actor=actor_admin,
+        task_id=task.id,
+        mapping=_mapping(content),
+    )
+    first, first_should_submit = task_service.queue_for_execution(
+        session,
+        actor=actor_admin,
+        task_id=task.id,
+        max_pending_tasks=10,
+    )
+    second, second_should_submit = task_service.queue_for_execution(
+        session,
+        actor=actor_admin,
+        task_id=task.id,
+        max_pending_tasks=10,
+    )
+
+    assert first.status is second.status is ImportTaskStatus.QUEUED
+    assert first_should_submit is True
+    assert second_should_submit is True

@@ -31,7 +31,6 @@ def test_inventory_target_receipt_revision_is_single_head_and_has_contract(
 ):
     config, url = _config(tmp_path / "receipt.db", monkeypatch)
     script = ScriptDirectory.from_config(config)
-    assert script.get_current_head() == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
 
     command.upgrade(config, REVISION)

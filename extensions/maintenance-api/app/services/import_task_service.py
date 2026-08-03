@@ -463,17 +463,20 @@ class ImportTaskService:
                 "max_pending_tasks must be positive"
             )
 
-        task = self._require_for_actor(
+        task = self.repository.get_for_execution(
             session,
             task_id=task_id,
-            actor=actor,
+            tenant_id=actor.tenant_id,
         )
-        idempotent_statuses = {
-            ImportTaskStatus.QUEUED,
+        if task is None:
+            raise NotFoundError("master_data_import_task", task_id)
+        terminal_idempotent_statuses = {
             ImportTaskStatus.RUNNING,
             ImportTaskStatus.SUCCEEDED,
         }
-        if task.status in idempotent_statuses:
+        if task.status is ImportTaskStatus.QUEUED:
+            return task, True
+        if task.status in terminal_idempotent_statuses:
             return task, False
 
         if task.status is not ImportTaskStatus.PREVIEW_VALID:
@@ -493,6 +496,7 @@ class ImportTaskService:
             select(func.count())
             .select_from(MasterDataImportTask)
             .where(
+                MasterDataImportTask.tenant_id == actor.tenant_id,
                 MasterDataImportTask.status.in_(
                     (
                         ImportTaskStatus.QUEUED,
@@ -518,8 +522,6 @@ class ImportTaskService:
                 MasterDataImportTask.id == task.id,
                 MasterDataImportTask.tenant_id
                 == actor.tenant_id,
-                MasterDataImportTask.created_by_user_id
-                == actor.user_id,
                 MasterDataImportTask.status
                 == ImportTaskStatus.PREVIEW_VALID,
                 MasterDataImportTask.version
@@ -531,6 +533,11 @@ class ImportTaskService:
                 version=MasterDataImportTask.version + 1,
                 error_code=None,
                 error_message=None,
+                execution_user_id=actor.user_id,
+                execution_roles_json=[actor.role.value],
+                execution_request_id=actor.request_id,
+                execution_token_id=actor.token_id,
+                queued_at=now,
                 updated_at=now,
             )
             .execution_options(
@@ -540,14 +547,19 @@ class ImportTaskService:
 
         if result.rowcount != 1:
             session.rollback()
-            current = self.get_for_actor(
+            current = self.repository.get_for_execution(
                 session,
                 task_id=task_id,
-                actor=actor,
+                tenant_id=actor.tenant_id,
             )
             if (
                 current is not None
-                and current.status in idempotent_statuses
+                and current.status is ImportTaskStatus.QUEUED
+            ):
+                return current, True
+            if (
+                current is not None
+                and current.status in terminal_idempotent_statuses
             ):
                 return current, False
             raise ConflictError(
@@ -560,11 +572,12 @@ class ImportTaskService:
             )
 
         session.commit()
-        queued = self._require_for_actor(
+        queued = self.repository.get_for_execution(
             session,
             task_id=task_id,
-            actor=actor,
+            tenant_id=actor.tenant_id,
         )
+        assert queued is not None
         return queued, True
 
     def read_error_workbook_for_actor(

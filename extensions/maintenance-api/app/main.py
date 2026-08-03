@@ -32,6 +32,7 @@ async def lifespan(application: FastAPI):
         recover_stale_import_tasks(
             session,
             file_store=import_task_executor.file_store,
+            executor=import_task_executor,
         )
     finally:
         session.close()

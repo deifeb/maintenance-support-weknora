@@ -67,8 +67,6 @@ class ImportTaskExecutor:
         self,
         task_id: str,
         tenant_id: str,
-        user_id: str,
-        execution_role: MaintenanceRole,
     ) -> bool:
         key = (tenant_id, task_id)
         with self._lock:
@@ -81,8 +79,6 @@ class ImportTaskExecutor:
                 self._run_guarded,
                 task_id,
                 tenant_id,
-                user_id,
-                execution_role,
             )
         except Exception:
             with self._lock:
@@ -94,16 +90,12 @@ class ImportTaskExecutor:
         self,
         task_id: str,
         tenant_id: str,
-        user_id: str,
-        execution_role: MaintenanceRole,
     ) -> None:
         key = (tenant_id, task_id)
         try:
             self.run_once(
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
-                execution_role=execution_role,
             )
         finally:
             with self._lock:
@@ -122,7 +114,6 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> MasterDataImportTask | None:
         return session.scalar(
             select(MasterDataImportTask)
@@ -131,9 +122,35 @@ class ImportTaskExecutor:
                 MasterDataImportTask.id == task_id,
                 MasterDataImportTask.tenant_id
                 == tenant_id,
-                MasterDataImportTask.created_by_user_id
-                == user_id,
             )
+        )
+
+    @staticmethod
+    def _execution_actor(task: MasterDataImportTask) -> ActorContext:
+        roles = task.execution_roles_json
+        if (
+            not isinstance(roles, list)
+            or MaintenanceRole.ADMIN.value not in roles
+            or not task.execution_user_id
+            or not task.execution_request_id
+            or not task.execution_token_id
+        ):
+            actual_role = (
+                ",".join(str(role) for role in roles)
+                if isinstance(roles, list) and roles
+                else "missing"
+            )
+            raise InsufficientMaintenanceRoleError(
+                required_role=MaintenanceRole.ADMIN.value,
+                actual_role=actual_role,
+                request_id=task.execution_request_id or f"import-task:{task.id}",
+            )
+        return ActorContext(
+            user_id=task.execution_user_id,
+            tenant_id=task.tenant_id,
+            role=MaintenanceRole.ADMIN,
+            request_id=task.execution_request_id,
+            token_id=task.execution_token_id,
         )
 
     def _start_task(
@@ -141,7 +158,6 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> bool:
         session = self.session_factory()
         try:
@@ -149,7 +165,6 @@ class ImportTaskExecutor:
                 session,
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
             if (
                 task is None
@@ -195,7 +210,6 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
         exc: Exception,
     ) -> None:
         session = self.session_factory()
@@ -204,7 +218,6 @@ class ImportTaskExecutor:
                 session,
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
             if task is None:
                 return
@@ -231,19 +244,22 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
-        execution_role: MaintenanceRole,
     ) -> None:
-        if execution_role is not MaintenanceRole.ADMIN:
-            raise InsufficientMaintenanceRoleError(
-                required_role=MaintenanceRole.ADMIN.value,
-                actual_role=execution_role.value,
-                request_id=f"import-task:{task_id}",
+        principal_session = self.session_factory()
+        try:
+            pending = self._load_exact(
+                principal_session,
+                task_id=task_id,
+                tenant_id=tenant_id,
             )
+            if pending is None:
+                return
+            self._execution_actor(pending)
+        finally:
+            principal_session.close()
         if not self._start_task(
             task_id=task_id,
             tenant_id=tenant_id,
-            user_id=user_id,
         ):
             return
 
@@ -253,7 +269,6 @@ class ImportTaskExecutor:
                 session,
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
             if (
                 task is None
@@ -261,6 +276,7 @@ class ImportTaskExecutor:
                 is not ImportTaskStatus.RUNNING
             ):
                 return
+            execution_actor = self._execution_actor(task)
 
             content = self.file_store.read_source(
                 task.file_path
@@ -296,13 +312,7 @@ class ImportTaskExecutor:
 
             result = self.import_service.apply(
                 session,
-                actor=ActorContext(
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    role=execution_role,
-                    request_id=task.created_by_request_id,
-                    token_id=f"import-task:{task.id}",
-                ),
+                actor=execution_actor,
                 task_id=task.id,
                 content=content,
                 filename=task.original_filename,
@@ -321,7 +331,6 @@ class ImportTaskExecutor:
             self._persist_failure(
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
                 exc=exc,
             )
         finally:
@@ -340,6 +349,7 @@ def recover_stale_import_tasks(
     session: Session,
     *,
     file_store: ImportTaskFileStore,
+    executor: ImportTaskExecutor | None = None,
 ) -> None:
     now = utc_now()
     stale = list(
@@ -362,6 +372,21 @@ def recover_stale_import_tasks(
         task.error_message = "Import task expired"
         task.finished_at = now
 
+    interrupted = list(
+        session.scalars(
+            select(MasterDataImportTask).where(
+                MasterDataImportTask.expires_at > now,
+                MasterDataImportTask.status == ImportTaskStatus.RUNNING,
+            )
+        )
+    )
+    for task in interrupted:
+        task.status = ImportTaskStatus.QUEUED
+        task.started_at = None
+        task.finished_at = None
+        task.error_code = None
+        task.error_message = None
+
     terminal = list(
         session.scalars(
             select(MasterDataImportTask).where(
@@ -377,6 +402,23 @@ def recover_stale_import_tasks(
         )
     )
     session.commit()
+
+    recoverable = list(
+        session.scalars(
+            select(MasterDataImportTask).where(
+                MasterDataImportTask.expires_at > now,
+                MasterDataImportTask.status == ImportTaskStatus.QUEUED,
+                MasterDataImportTask.execution_user_id.is_not(None),
+                MasterDataImportTask.execution_roles_json.is_not(None),
+                MasterDataImportTask.execution_request_id.is_not(None),
+                MasterDataImportTask.execution_token_id.is_not(None),
+            )
+        )
+    )
+
+    if executor is not None:
+        for task in recoverable:
+            executor.submit(task.id, task.tenant_id)
 
     for task in terminal:
         try:

@@ -42,5 +42,23 @@ class ImportTaskRepository:
             )
         )
 
+    def get_for_execution(
+        self,
+        session: Session,
+        *,
+        task_id: str,
+        tenant_id: str,
+    ) -> MasterDataImportTask | None:
+        return session.scalar(
+            select(MasterDataImportTask)
+            .execution_options(populate_existing=True)
+            .where(
+                MasterDataImportTask.id == task_id,
+                MasterDataImportTask.tenant_id == tenant_id,
+                MasterDataImportTask.expires_at > utc_now(),
+                MasterDataImportTask.status != ImportTaskStatus.EXPIRED,
+            )
+        )
+
 
 import_task_repository = ImportTaskRepository()

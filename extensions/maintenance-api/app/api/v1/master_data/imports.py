@@ -112,6 +112,7 @@ def _task_summaries(
 
 def _task_view(
     task: MasterDataImportTask,
+    actor: ActorContext,
 ) -> ImportTaskView:
     return ImportTaskView(
         task_id=task.id,
@@ -124,8 +125,12 @@ def _task_view(
         errors=task.errors_json or [],
         warnings=task.warnings_json or [],
         can_execute=(
-            task.status
-            is ImportTaskStatus.PREVIEW_VALID
+            actor.role.value == "admin"
+            and task.status
+            in {
+                ImportTaskStatus.PREVIEW_VALID,
+                ImportTaskStatus.QUEUED,
+            }
         ),
         created_at=task.created_at,
         expires_at=task.expires_at,
@@ -301,7 +306,7 @@ def preview_import_task(
         mapping=request.mapping,
     )
     return success_response(
-        _task_view(task),
+        _task_view(task, actor),
         "Import task preview completed",
         actor=actor,
         version=task.version,
@@ -336,8 +341,6 @@ def execute_import_task(
         import_task_executor.submit(
             task.id,
             actor.tenant_id,
-            actor.user_id,
-            actor.role,
         )
         response.status_code = (
             status.HTTP_202_ACCEPTED
@@ -348,7 +351,7 @@ def execute_import_task(
         message = "Import task already queued"
 
     return success_response(
-        _task_view(task),
+        _task_view(task, actor),
         message,
         actor=actor,
         version=task.version,
@@ -380,7 +383,7 @@ def read_import_task(
             task_id,
         )
     return success_response(
-        _task_view(task),
+        _task_view(task, actor),
         "Import task loaded",
         actor=actor,
         version=task.version,
