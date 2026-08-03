@@ -156,7 +156,7 @@ class InventoryService:
         actor: ActorContext,
         identifier: int,
     ) -> WarehouseInventoryRead:
-        balance = self.inventory_repository.get_balance(
+        balance = self.inventory_repository.get_compatibility_balance(
             session,
             actor.tenant_id,
             identifier,
@@ -202,6 +202,7 @@ class InventoryService:
             page_size=page_size,
             warehouse_id=filters.get("warehouse_id"),
             spare_part_id=filters.get("spare_part_id"),
+            compatibility_identity=True,
         )
         items = []
         for summary in summaries.items:
@@ -232,7 +233,7 @@ class InventoryService:
         identifier: int,
         payload: WarehouseInventoryUpdate,
     ) -> WarehouseInventoryRead:
-        balance = self.inventory_repository.get_balance(
+        balance = self.inventory_repository.get_compatibility_balance(
             session,
             actor.tenant_id,
             identifier,
@@ -303,6 +304,14 @@ class InventoryService:
         *,
         idempotency_key: str,
     ) -> InventoryAdjustmentRead:
+        balance = self.inventory_repository.get_compatibility_balance(
+            session,
+            actor.tenant_id,
+            identifier,
+        )
+        if balance is None:
+            raise NotFoundError("inventory_balance", identifier)
+
         def validate_new_command(balance: InventoryBalance) -> None:
             warehouse = self._validate_references(
                 session,
@@ -315,7 +324,7 @@ class InventoryService:
         transaction = self.transaction_service.adjust(
             session,
             actor,
-            balance_id=identifier,
+            balance_id=balance.id,
             expected_version=payload.expected_version,
             deltas=payload.quantity_delta(),
             reason=payload.reason,

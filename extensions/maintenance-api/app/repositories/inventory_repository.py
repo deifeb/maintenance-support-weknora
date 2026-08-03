@@ -52,6 +52,32 @@ class InventoryRepository(BaseRepository[WarehouseInventory]):
             )
         )
 
+    def get_compatibility_balance(
+        self,
+        session: Session,
+        tenant_id: str,
+        identifier: int,
+    ) -> InventoryBalance | None:
+        return session.scalar(
+            select(InventoryBalance)
+            .join(
+                WarehouseLocation,
+                and_(
+                    WarehouseLocation.tenant_id == tenant_id,
+                    WarehouseLocation.id
+                    == InventoryBalance.location_id,
+                    WarehouseLocation.warehouse_id
+                    == InventoryBalance.warehouse_id,
+                ),
+            )
+            .where(
+                InventoryBalance.tenant_id == tenant_id,
+                InventoryBalance.id == identifier,
+                InventoryBalance.lot_id.is_(None),
+                WarehouseLocation.code == "DEFAULT",
+            )
+        )
+
     def get_default_balance_by_business_key(
         self,
         session: Session,

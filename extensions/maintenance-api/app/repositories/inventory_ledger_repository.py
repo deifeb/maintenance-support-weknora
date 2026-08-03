@@ -6,9 +6,14 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Select, and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
-from app.models import InventoryBalance, InventoryPolicy, SerializedItem
+from app.models import (
+    InventoryBalance,
+    InventoryPolicy,
+    SerializedItem,
+    WarehouseLocation,
+)
 
 
 class InventoryLedgerRepository:
@@ -70,6 +75,7 @@ class InventoryLedgerRepository:
         location_id: int | None = None,
         lot_id: int | None = None,
         serial_item_id: int | None = None,
+        compatibility_identity: bool = False,
     ) -> tuple[list[dict[str, Any]], int]:
         conditions = self._balance_conditions(
             tenant_id,
@@ -79,6 +85,10 @@ class InventoryLedgerRepository:
             lot_id=lot_id,
             serial_item_id=serial_item_id,
         )
+        if compatibility_identity:
+            conditions.append(
+                self._compatibility_identity_exists(tenant_id)
+            )
         statement = (
             select(
                 InventoryBalance.warehouse_id.label("warehouse_id"),
@@ -115,6 +125,34 @@ class InventoryLedgerRepository:
             statement.offset((page - 1) * page_size).limit(page_size)
         ).mappings()
         return [dict(row) for row in rows], total
+
+    @staticmethod
+    def _compatibility_identity_exists(tenant_id: str):
+        identity_balance = aliased(InventoryBalance)
+        identity_location = aliased(WarehouseLocation)
+        return (
+            select(identity_balance.id)
+            .join(
+                identity_location,
+                and_(
+                    identity_location.tenant_id == tenant_id,
+                    identity_location.id
+                    == identity_balance.location_id,
+                    identity_location.warehouse_id
+                    == identity_balance.warehouse_id,
+                ),
+            )
+            .where(
+                identity_balance.tenant_id == tenant_id,
+                identity_balance.warehouse_id
+                == InventoryBalance.warehouse_id,
+                identity_balance.spare_part_id
+                == InventoryBalance.spare_part_id,
+                identity_balance.lot_id.is_(None),
+                identity_location.code == "DEFAULT",
+            )
+            .exists()
+        )
 
     def serial_item_ids_by_balance(
         self,

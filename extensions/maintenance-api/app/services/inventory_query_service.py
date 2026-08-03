@@ -64,6 +64,7 @@ class InventoryQueryService:
         location_id: int | None = None,
         lot_id: int | None = None,
         serial_item_id: int | None = None,
+        compatibility_identity: bool = False,
     ) -> PageData[InventorySummaryRead]:
         rows, total = self.repository.list_summaries(
             session,
@@ -75,6 +76,7 @@ class InventoryQueryService:
             location_id=location_id,
             lot_id=lot_id,
             serial_item_id=serial_item_id,
+            compatibility_identity=compatibility_identity,
         )
         return self._page(
             [InventorySummaryRead.model_validate(row) for row in rows],

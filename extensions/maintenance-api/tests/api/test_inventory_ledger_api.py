@@ -8,6 +8,7 @@ from app.core.exceptions import ConflictError
 from app.models import (
     InventoryBalance,
     InventoryLedgerEntry,
+    InventoryLot,
     InventoryPolicy,
     InventoryTransaction,
     SparePart,
@@ -129,6 +130,56 @@ def _seed_inventory(
     return balance, policy
 
 
+def _seed_non_default_only_inventory(
+    session: Session,
+    *,
+    tenant_id: str = "tenant-a",
+    suffix: str,
+) -> InventoryBalance:
+    warehouse = Warehouse(
+        tenant_id=tenant_id,
+        code=f"WH-NON-DEFAULT-{suffix}",
+        name=f"Non-default warehouse {suffix}",
+    )
+    spare = SparePart(
+        tenant_id=tenant_id,
+        code=f"SP-NON-DEFAULT-{suffix}",
+        name=f"Non-default spare {suffix}",
+    )
+    session.add_all([warehouse, spare])
+    session.flush()
+    shelf = WarehouseLocation(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse.id,
+        code=f"SHELF-{suffix}",
+        name=f"Shelf {suffix}",
+        location_type="SHELF",
+    )
+    session.add(shelf)
+    session.flush()
+    balance = InventoryBalance(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse.id,
+        location_id=shelf.id,
+        spare_part_id=spare.id,
+        on_hand_quantity=Decimal("11"),
+    )
+    session.add_all(
+        [
+            InventoryPolicy(
+                tenant_id=tenant_id,
+                warehouse_id=warehouse.id,
+                spare_part_id=spare.id,
+                safety_stock=Decimal("1"),
+                reorder_point=Decimal("2"),
+            ),
+            balance,
+        ]
+    )
+    session.commit()
+    return balance
+
+
 def test_list_and_get_inventory_use_ledger_summary_and_tenant_balance_id(
     client: TestClient,
     session: Session,
@@ -173,6 +224,168 @@ def test_list_and_get_inventory_use_ledger_summary_and_tenant_balance_id(
         headers=_headers(internal_auth_headers, role=MaintenanceRole.VIEWER),
     )
     assert hidden.status_code == 404
+
+
+def test_list_filters_compatibility_identity_before_count_and_pagination(
+    client: TestClient,
+    session: Session,
+    internal_auth_headers: Callable[..., dict[str, str]],
+) -> None:
+    hidden = _seed_non_default_only_inventory(
+        session,
+        suffix="PAGE-HIDDEN",
+    )
+    first_default, _ = _seed_inventory(
+        session,
+        suffix="PAGE-FIRST",
+        with_extra_balance=True,
+    )
+    second_default, _ = _seed_inventory(
+        session,
+        suffix="PAGE-SECOND",
+    )
+    headers = _headers(
+        internal_auth_headers,
+        role=MaintenanceRole.VIEWER,
+    )
+
+    first_page = client.get(
+        "/api/v1/master-data/inventories?page=1&page_size=1",
+        headers=headers,
+    )
+    second_page = client.get(
+        "/api/v1/master-data/inventories?page=2&page_size=1",
+        headers=headers,
+    )
+
+    assert first_page.status_code == 200, first_page.text
+    assert second_page.status_code == 200, second_page.text
+    first_data = first_page.json()["data"]
+    second_data = second_page.json()["data"]
+    assert (
+        first_data["total"],
+        first_data["pages"],
+        len(first_data["items"]),
+    ) == (2, 2, 1)
+    assert (
+        second_data["total"],
+        second_data["pages"],
+        len(second_data["items"]),
+    ) == (2, 2, 1)
+    assert first_data["items"][0]["id"] == first_default.id
+    assert first_data["items"][0]["version"] == first_default.version
+    assert first_data["items"][0]["on_hand_quantity"] == "8.0000"
+    assert second_data["items"][0]["id"] == second_default.id
+    assert hidden.id not in {
+        first_data["items"][0]["id"],
+        second_data["items"][0]["id"],
+    }
+
+
+def test_non_compatibility_balance_ids_are_hidden_from_detail_and_writes(
+    client: TestClient,
+    session: Session,
+    internal_auth_headers: Callable[..., dict[str, str]],
+) -> None:
+    default_balance, policy = _seed_inventory(
+        session,
+        suffix="CANONICAL",
+        with_extra_balance=True,
+    )
+    shelf_balance = session.scalar(
+        select(InventoryBalance)
+        .join(WarehouseLocation)
+        .where(
+            InventoryBalance.tenant_id == "tenant-a",
+            InventoryBalance.warehouse_id
+            == default_balance.warehouse_id,
+            InventoryBalance.spare_part_id
+            == default_balance.spare_part_id,
+            WarehouseLocation.code == "SHELF-1",
+        )
+    )
+    assert shelf_balance is not None
+    lot = InventoryLot(
+        tenant_id="tenant-a",
+        spare_part_id=default_balance.spare_part_id,
+        lot_code="LOT-CANONICAL",
+    )
+    session.add(lot)
+    session.flush()
+    lot_balance = InventoryBalance(
+        tenant_id="tenant-a",
+        warehouse_id=default_balance.warehouse_id,
+        location_id=default_balance.location_id,
+        spare_part_id=default_balance.spare_part_id,
+        lot_id=lot.id,
+        on_hand_quantity=Decimal("4"),
+    )
+    session.add(lot_balance)
+    session.commit()
+    policy_state = (
+        policy.safety_stock,
+        policy.reorder_point,
+        policy.version,
+    )
+    balance_states = {
+        balance.id: (
+            balance.on_hand_quantity,
+            balance.version,
+        )
+        for balance in (shelf_balance, lot_balance)
+    }
+    transaction_count = session.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    )
+    headers = _headers(internal_auth_headers)
+    statuses: list[int] = []
+
+    for balance in (shelf_balance, lot_balance):
+        statuses.append(
+            client.get(
+                f"/api/v1/master-data/inventories/{balance.id}",
+                headers=headers,
+            ).status_code
+        )
+        statuses.append(
+            client.put(
+                f"/api/v1/master-data/inventories/{balance.id}",
+                headers=headers,
+                json={"safety_stock": "7", "reorder_point": "8"},
+            ).status_code
+        )
+        statuses.append(
+            client.post(
+                f"/api/v1/master-data/inventories/{balance.id}/adjust",
+                headers={
+                    **headers,
+                    "Idempotency-Key": f"hidden-balance-{balance.id}",
+                },
+                json={
+                    "expected_version": balance.version,
+                    "on_hand_delta": "1",
+                    "reason": "must remain hidden",
+                },
+            ).status_code
+        )
+
+    assert statuses == [404, 404, 404, 404, 404, 404]
+    session.expire_all()
+    assert (
+        policy.safety_stock,
+        policy.reorder_point,
+        policy.version,
+    ) == policy_state
+    assert {
+        balance.id: (
+            balance.on_hand_quantity,
+            balance.version,
+        )
+        for balance in (shelf_balance, lot_balance)
+    } == balance_states
+    assert session.scalar(
+        select(func.count()).select_from(InventoryTransaction)
+    ) == transaction_count
 
 
 def test_create_update_reject_physical_fields_and_preserve_state(
