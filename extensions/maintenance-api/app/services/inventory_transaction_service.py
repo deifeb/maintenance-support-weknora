@@ -31,6 +31,11 @@ from app.security.actor import ActorContext, MaintenanceRole
 from app.services.snapshot_service import snapshot_service
 
 OperationType = Literal["OPENING", "ADJUST"]
+_IDEMPOTENCY_CONSTRAINT = "uq_inventory_tx_tenant_operation_idempotency"
+_SQLITE_IDEMPOTENCY_UNIQUE_ERROR = (
+    "UNIQUE constraint failed: inventory_transactions.tenant_id, "
+    "inventory_transactions.operation_type, inventory_transactions.idempotency_key"
+)
 
 
 class InventoryTransactionService:
@@ -199,6 +204,8 @@ class InventoryTransactionService:
                 )
                 return response
         except IntegrityError as exc:
+            if not self._is_idempotency_constraint_violation(exc):
+                raise
             winner = self.transaction_repository.get_idempotent(
                 session,
                 actor.tenant_id,
@@ -216,6 +223,17 @@ class InventoryTransactionService:
             )
             conflict.request_id = actor.request_id
             raise conflict from exc
+
+    @staticmethod
+    def _is_idempotency_constraint_violation(exc: IntegrityError) -> bool:
+        driver_error = exc.orig
+        diagnostic = getattr(driver_error, "diag", None)
+        if (
+            getattr(diagnostic, "constraint_name", None)
+            == _IDEMPOTENCY_CONSTRAINT
+        ):
+            return True
+        return str(driver_error) == _SQLITE_IDEMPOTENCY_UNIQUE_ERROR
 
     @staticmethod
     def _ensure_savepoint_parent_transaction(session: Session) -> None:

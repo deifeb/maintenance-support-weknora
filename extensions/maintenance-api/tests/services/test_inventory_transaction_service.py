@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 from decimal import Decimal
 
 import pytest
@@ -20,6 +21,7 @@ from app.models import (
 )
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 
 def _transaction_api():
@@ -435,10 +437,11 @@ def test_caller_controls_outer_commit(session, actor_admin) -> None:
     assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 0
 
 
-def test_same_balance_race_rechecks_receipt_after_lock_and_replays(
+def test_same_balance_race_window_rechecks_receipt_after_lock_and_replays(
     session,
     actor_admin,
 ) -> None:
+    """Reproduce a stale first read with two sessions, not simultaneous lock waiting."""
     (
         InventoryQuantityDelta,
         InventoryTransactionRepository,
@@ -499,10 +502,11 @@ def test_same_balance_race_rechecks_receipt_after_lock_and_replays(
         winner_session.close()
 
 
-def test_different_balance_race_recovers_unique_winner_as_domain_conflict(
+def test_different_balance_race_window_recovers_unique_winner_as_domain_conflict(
     session,
     actor_admin,
 ) -> None:
+    """Reproduce stale reads and exercise the real SQLite unique constraint."""
     (
         InventoryQuantityDelta,
         InventoryTransactionRepository,
@@ -590,6 +594,75 @@ def test_idempotency_key_and_reason_accept_persistence_boundaries(
 
     assert result.idempotency_key == "k" * 128
     assert result.reason == "r" * 500
+
+
+def test_unrelated_integrity_error_is_reraised_even_when_receipt_exists(
+    session,
+    actor_admin,
+) -> None:
+    (
+        InventoryQuantityDelta,
+        InventoryTransactionRepository,
+        InventoryTransactionService,
+        service,
+    ) = _transaction_api()
+    winner_balance = _seed_balance(session, suffix="UNRELATED-WINNER")
+    loser_balance = _seed_balance(session, suffix="UNRELATED-LOSER")
+    session.commit()
+    winner_balance_id = winner_balance.id
+    loser_balance_id = loser_balance.id
+    winner_session = SessionLocal()
+    loser_session = SessionLocal()
+    unrelated_error = IntegrityError(
+        "INSERT INTO unrelated_table VALUES (?)",
+        ("value",),
+        sqlite3.IntegrityError("CHECK constraint failed: unrelated_constraint"),
+    )
+
+    class UnrelatedFailureRepository(InventoryTransactionRepository):
+        def __init__(self) -> None:
+            self.stale_reads = 2
+
+        def get_idempotent(self, *args, **kwargs):
+            if self.stale_reads:
+                self.stale_reads -= 1
+                return None
+            return super().get_idempotent(*args, **kwargs)
+
+        def create_transaction(self, *args, **kwargs):
+            raise unrelated_error
+
+    try:
+        service.adjust(
+            winner_session,
+            actor_admin,
+            balance_id=winner_balance_id,
+            expected_version=1,
+            deltas=InventoryQuantityDelta(on_hand=Decimal("1")),
+            reason="winner correction",
+            idempotency_key="unrelated-integrity",
+        )
+        winner_session.commit()
+        loser_service = InventoryTransactionService(
+            transaction_repository=UnrelatedFailureRepository()
+        )
+
+        with pytest.raises(IntegrityError) as exc_info:
+            loser_service.adjust(
+                loser_session,
+                actor_admin,
+                balance_id=loser_balance_id,
+                expected_version=1,
+                deltas=InventoryQuantityDelta(on_hand=Decimal("1")),
+                reason="winner correction",
+                idempotency_key="unrelated-integrity",
+            )
+
+        assert exc_info.value is unrelated_error
+    finally:
+        loser_session.rollback()
+        loser_session.close()
+        winner_session.close()
 
 
 @pytest.mark.parametrize(
