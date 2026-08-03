@@ -127,6 +127,113 @@ class InventoryLedgerRepository:
         ).mappings()
         return [dict(row) for row in rows]
 
+    def inventory_export_rows(
+        self,
+        session: Session,
+        tenant_id: str,
+        *,
+        keyword: str,
+        warehouse_id: int | None,
+        spare_part_id: int | None,
+        sort_by: str,
+        sort_order: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        on_hand = func.sum(InventoryBalance.on_hand_quantity)
+        reserved = func.sum(InventoryBalance.reserved_quantity)
+        damaged = func.sum(InventoryBalance.damaged_quantity)
+        quarantined = func.sum(InventoryBalance.quarantined_quantity)
+        in_transit = func.sum(InventoryBalance.in_transit_quantity)
+        available = on_hand - reserved - damaged - quarantined
+        conditions = [
+            InventoryBalance.tenant_id == tenant_id,
+            Warehouse.tenant_id == tenant_id,
+            SparePart.tenant_id == tenant_id,
+        ]
+        if warehouse_id is not None:
+            conditions.append(InventoryBalance.warehouse_id == warehouse_id)
+        if spare_part_id is not None:
+            conditions.append(InventoryBalance.spare_part_id == spare_part_id)
+        if keyword:
+            pattern = f"%{keyword}%"
+            conditions.append(
+                or_(
+                    Warehouse.code.ilike(pattern),
+                    Warehouse.name.ilike(pattern),
+                    SparePart.code.ilike(pattern),
+                    SparePart.name.ilike(pattern),
+                )
+            )
+        statement = (
+            select(
+                Warehouse.id.label("warehouse_id"),
+                SparePart.id.label("spare_part_id"),
+                Warehouse.code.label("warehouse_code"),
+                SparePart.code.label("spare_part_code"),
+                on_hand.label("on_hand_quantity"),
+                reserved.label("reserved_quantity"),
+                damaged.label("damaged_quantity"),
+                quarantined.label("quarantined_quantity"),
+                in_transit.label("in_transit_quantity"),
+                available.label("available_quantity"),
+                func.coalesce(InventoryPolicy.safety_stock, Decimal("0")).label(
+                    "safety_stock"
+                ),
+                func.coalesce(InventoryPolicy.reorder_point, Decimal("0")).label(
+                    "reorder_point"
+                ),
+                InventoryPolicy.maximum_stock.label("maximum_stock"),
+            )
+            .join(
+                Warehouse,
+                and_(
+                    Warehouse.id == InventoryBalance.warehouse_id,
+                    Warehouse.tenant_id == tenant_id,
+                ),
+            )
+            .join(
+                SparePart,
+                and_(
+                    SparePart.id == InventoryBalance.spare_part_id,
+                    SparePart.tenant_id == tenant_id,
+                ),
+            )
+            .outerjoin(
+                InventoryPolicy,
+                and_(
+                    InventoryPolicy.tenant_id == tenant_id,
+                    InventoryPolicy.warehouse_id == InventoryBalance.warehouse_id,
+                    InventoryPolicy.spare_part_id == InventoryBalance.spare_part_id,
+                ),
+            )
+            .where(*conditions)
+            .group_by(
+                Warehouse.id,
+                SparePart.id,
+                Warehouse.code,
+                SparePart.code,
+                InventoryPolicy.safety_stock,
+                InventoryPolicy.reorder_point,
+                InventoryPolicy.maximum_stock,
+            )
+        )
+        sort_expression = {
+            "on_hand_quantity": on_hand,
+            "available_quantity": available,
+        }.get(sort_by)
+        ordering = []
+        if sort_expression is not None:
+            ordering.append(
+                sort_expression.desc()
+                if sort_order == "desc"
+                else sort_expression.asc()
+            )
+        ordering.extend((Warehouse.id.asc(), SparePart.id.asc()))
+        rows = session.execute(
+            statement.order_by(*ordering).limit(limit)
+        ).mappings()
+        return [dict(row) for row in rows]
+
     def count_balance_references(
         self,
         session: Session,

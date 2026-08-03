@@ -133,6 +133,29 @@ class InventoryQueryService:
             [spare_part_id],
         )
 
+    def inventory_export_rows(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        keyword: str,
+        warehouse_id: int | None,
+        spare_part_id: int | None,
+        sort_by: str,
+        sort_order: str,
+        limit: int,
+    ) -> list[dict]:
+        return self.repository.inventory_export_rows(
+            session,
+            actor.tenant_id,
+            keyword=keyword,
+            warehouse_id=warehouse_id,
+            spare_part_id=spare_part_id,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+        )
+
     def count_low_stock_spare_parts(
         self,
         session: Session,

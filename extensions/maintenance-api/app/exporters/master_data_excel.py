@@ -628,13 +628,21 @@ def _safe_excel_value(value: object) -> object:
     return value
 
 
+def _inventory_excel_value(value: object) -> object:
+    if isinstance(value, Decimal):
+        return format(value.quantize(Decimal("0.0001")), ".4f")
+    return _safe_excel_value(value)
+
+
 class MasterDataExcelExporter:
     def __init__(
         self,
         *,
         max_rows: int = DEFAULT_MAX_EXPORT_ROWS,
+        query_service=inventory_query_service,
     ) -> None:
         self.max_rows = max_rows
+        self.query_service = query_service
 
     def export(
         self,
@@ -871,57 +879,6 @@ class MasterDataExcelExporter:
             request_id="master-data-export",
             token_id="master-data-export",
         )
-        summaries = inventory_query_service.summaries_for_parts(
-            session,
-            actor,
-        )
-        warehouses = {
-            item.id: item
-            for item in session.scalars(
-                select(Warehouse).where(Warehouse.tenant_id == tenant_id)
-            )
-        }
-        spare_parts = {
-            item.id: item
-            for item in session.scalars(
-                select(SparePart).where(SparePart.tenant_id == tenant_id)
-            )
-        }
-        warehouse_filter = filters.get("warehouse_id")
-        spare_filter = filters.get("spare_part_id")
-        keyword = str(filters.get("keyword") or "").strip().lower()
-        rows: list[InventoryExportRow] = []
-        for summary in summaries:
-            warehouse = warehouses.get(summary.warehouse_id)
-            spare = spare_parts.get(summary.spare_part_id)
-            if warehouse is None or spare is None:
-                continue
-            if warehouse_filter is not None and summary.warehouse_id != warehouse_filter:
-                continue
-            if spare_filter is not None and summary.spare_part_id != spare_filter:
-                continue
-            if keyword and not any(
-                keyword in value.lower()
-                for value in (warehouse.code, warehouse.name, spare.code, spare.name)
-            ):
-                continue
-            rows.append(
-                InventoryExportRow(
-                    warehouse_id=summary.warehouse_id,
-                    spare_part_id=summary.spare_part_id,
-                    warehouse_code=warehouse.code,
-                    spare_part_code=spare.code,
-                    on_hand_quantity=summary.on_hand_quantity,
-                    reserved_quantity=summary.reserved_quantity,
-                    damaged_quantity=summary.damaged_quantity,
-                    quarantined_quantity=summary.quarantined_quantity,
-                    in_transit_quantity=summary.in_transit_quantity,
-                    available_quantity=summary.available_quantity,
-                    safety_stock=summary.safety_stock,
-                    reorder_point=summary.reorder_point,
-                    maximum_stock=summary.maximum_stock,
-                )
-            )
         sort_by = str(filters.get("sort_by") or "last_counted_at")
         if sort_by not in {
             "last_counted_at",
@@ -940,15 +897,19 @@ class MasterDataExcelExporter:
                 code="INVALID_EXPORT_SORT_ORDER",
                 details={"sort_order": sort_order},
             )
-        rows.sort(
-            key=lambda row: (
-                getattr(row, sort_by) is not None,
-                getattr(row, sort_by) or Decimal("0"),
-                row.warehouse_id,
-                row.spare_part_id,
-            ),
-            reverse=sort_order == "desc",
-        )
+        rows = [
+            InventoryExportRow(**row)
+            for row in self.query_service.inventory_export_rows(
+                session,
+                actor,
+                keyword=str(filters.get("keyword") or "").strip(),
+                warehouse_id=filters.get("warehouse_id"),
+                spare_part_id=filters.get("spare_part_id"),
+                sort_by=sort_by,
+                sort_order=sort_order,
+                limit=self.max_rows + 1,
+            )
+        ]
         if len(rows) > self.max_rows:
             raise BusinessValidationError(
                 "Export row limit was exceeded",
@@ -977,7 +938,7 @@ class MasterDataExcelExporter:
             cell.font = Font(bold=True)
         for row in rows:
             worksheet.append(
-                [_safe_excel_value(column.getter(row)) for column in columns]
+                [_inventory_excel_value(column.getter(row)) for column in columns]
             )
         worksheet.freeze_panes = "A2"
         worksheet.auto_filter.ref = worksheet.dimensions
