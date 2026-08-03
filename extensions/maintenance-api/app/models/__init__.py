@@ -63,6 +63,16 @@ from app.models.import_task import (
     MasterDataImportTask,
 )
 from app.models.inventory import Warehouse, WarehouseInventory
+from app.models.inventory_ledger import (
+    InventoryBalance,
+    InventoryExpiryRule,
+    InventoryLedgerEntry,
+    InventoryLot,
+    InventoryPolicy,
+    InventoryTransaction,
+    SerializedItem,
+    WarehouseLocation,
+)
 from app.models.mixins import TenantScopedMixin, VersionedMixin
 from app.models.reliability import ReliabilityProfile
 from app.models.repair import RepairProfile
@@ -79,6 +89,14 @@ __all__ = [
     "ReliabilityProfile",
     "Warehouse",
     "WarehouseInventory",
+    "WarehouseLocation",
+    "InventoryPolicy",
+    "InventoryExpiryRule",
+    "InventoryLot",
+    "SerializedItem",
+    "InventoryBalance",
+    "InventoryTransaction",
+    "InventoryLedgerEntry",
     "Supplier",
     "SupplierOffer",
     "RepairProfile",

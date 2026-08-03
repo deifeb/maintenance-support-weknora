@@ -28,6 +28,7 @@ from app.models.mixins import (
 
 if TYPE_CHECKING:
     from app.models.catalog import SparePart
+    from app.models.inventory_ledger import WarehouseLocation
 
 
 class Warehouse(
@@ -55,6 +56,7 @@ class Warehouse(
     description: Mapped[str | None] = mapped_column(Text)
 
     inventories: Mapped[list["WarehouseInventory"]] = relationship(back_populates="warehouse")
+    locations: Mapped[list["WarehouseLocation"]] = relationship(back_populates="warehouse")
 
     __table_args__ = (
         Index(

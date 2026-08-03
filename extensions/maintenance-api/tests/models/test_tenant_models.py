@@ -20,6 +20,14 @@ TENANT_TABLES = {
     "reliability_profiles",
     "warehouses",
     "warehouse_inventories",
+    "warehouse_locations",
+    "inventory_policies",
+    "inventory_expiry_rules",
+    "inventory_lots",
+    "serialized_items",
+    "inventory_balances",
+    "inventory_transactions",
+    "inventory_ledger_entries",
     "suppliers",
     "supplier_offers",
     "repair_profiles",
@@ -121,6 +129,23 @@ TENANT_UNIQUE_INDEXES = {
         frozenset({"tenant_id", "idempotency_key"}),
     ),
     ("ai_report_jobs", frozenset({"tenant_id", "report_code"})),
+    (
+        "warehouse_locations",
+        frozenset({"tenant_id", "warehouse_id", "code"}),
+    ),
+    (
+        "inventory_policies",
+        frozenset({"tenant_id", "warehouse_id", "spare_part_id"}),
+    ),
+    (
+        "inventory_lots",
+        frozenset({"tenant_id", "spare_part_id", "lot_code"}),
+    ),
+    ("serialized_items", frozenset({"tenant_id", "serial_number"})),
+    (
+        "inventory_transactions",
+        frozenset({"tenant_id", "operation_type", "idempotency_key"}),
+    ),
 }
 
 
@@ -179,9 +204,15 @@ def test_global_business_keys_are_unique_per_tenant(
 
     indexes_by_table = {
         table_name: {
-            frozenset(index["column_names"])
-            for index in inspector.get_indexes(table_name)
-            if index["unique"]
+            frozenset(item["column_names"])
+            for item in (
+                [
+                    index
+                    for index in inspector.get_indexes(table_name)
+                    if index["unique"]
+                ]
+                + inspector.get_unique_constraints(table_name)
+            )
         }
         for table_name in TENANT_TABLES
     }
