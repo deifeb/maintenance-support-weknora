@@ -369,3 +369,21 @@ Next implementation boundary:
 - Generate a Complete Demand List Draft;
 - add authoritative draft-generation preconditions and immutable source snapshots;
 - do not begin lifecycle transitions, publication, derivation, API routes, or frontend work in Task 2.
+
+## Plan 05-4A Inventory Ledger Foundation (2026-08-03)
+
+- Branch: `codex/maintenance-plan05-4`
+- Plan: `docs/superpowers/plans/2026-08-03-maintenance-plan05-04a-inventory-ledger-foundation.md`
+- Implementation base: `228d96dc74609b692efa1c3ff122f78ad5256a68`
+- Baseline: 736 passed, 8 deselected, 2 pre-existing warnings in 163.21s.
+- Task 1: complete (commits `228d96dc..33538c8b`, review clean) — inventory models and migration chain; temporary `WarehouseInventory` mapping is a binding Task 5 cleanup dependency.
+- Task 2: complete (commit `f7b54901`, review clean) — tenant-scoped repository and aggregate query contract; controller focused 6 passed and Ruff clean.
+- Task 3: complete (commits `f7b54901..119a09c6`, review clean) — opening/adjust transaction core, constraint-specific idempotency winner recovery, and immutable ledger.
+- Task 4: complete (commits `119a09c6..51bb6f43`, formal review approved) — ledger-backed compatibility API, canonical DEFAULT identity, admin-only policy/adjustment boundaries, stable idempotent replay, and legacy-ID-preserving migration.
+- Task 5: complete (commits `51bb6f43..7dd28069`, formal review approved) — dashboard, demand calculation, AI inventory reads, deletion guards, bounded/batched query contracts, and parent-side legacy relationship removal.
+- Task 6: complete — ledger-backed import, export, and seed compatibility; legacy `WarehouseInventory` runtime paths removed; formal review remediation and durable execution-principal recovery closed.
+- Task 7: pending and not authorized — Plan 05-4A integration gate and closure review.
+- Task 6 closure gate: principal recovery 17 passed; API/RBAC/migration 19 passed; expanded regression 181 passed; full backend 875 passed, 8 deselected; changed-file Ruff passed; Alembic single head `20260803_10`; `git diff --check` passed.
+- Task 6 independent closure review: no remaining Critical, Important, or Minor blocking findings; live PostgreSQL lock scheduling remains an explicit deployment-environment validation boundary.
+- Final-fix ledger: repository-wide Ruff findings are clear for the approved Task 6 scope.
+- Task 7 hardening audit: verify flush-time FK violations from corrupted or externally inserted cross-tenant references are translated to a stable tenant-neutral error; holistic composite tenant FKs are not part of approved Task 5 and require separate Task 1 schema approval if pursued.

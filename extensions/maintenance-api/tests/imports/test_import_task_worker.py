@@ -26,6 +26,10 @@ from app.schemas.import_data import (
     ImportValidationResult,
 )
 from app.security.actor import ActorContext, MaintenanceRole
+from app.services.import_execution_principal import (
+    INVALID_IMPORT_EXECUTION_PRINCIPAL_CODE,
+    INVALID_IMPORT_EXECUTION_PRINCIPAL_MESSAGE,
+)
 from app.services.import_service import master_data_import_service
 from app.services.import_task_service import (
     ImportTaskFileStore,
@@ -356,7 +360,12 @@ def test_worker_rejects_non_admin_execution_role_without_starting_task(
         "INSUFFICIENT_MAINTENANCE_ROLE"
     )
     session.expire_all()
-    assert session.get(MasterDataImportTask, task.id).status is ImportTaskStatus.QUEUED
+    recovered = session.get(MasterDataImportTask, task.id)
+    assert recovered.status is ImportTaskStatus.PREVIEW_VALID
+    assert recovered.error_code == INVALID_IMPORT_EXECUTION_PRINCIPAL_CODE
+    assert recovered.error_message == INVALID_IMPORT_EXECUTION_PRINCIPAL_MESSAGE
+    assert recovered.execution_user_id is None
+    assert recovered.execution_roles_json is None
     assert import_service.validate_calls == 0
     assert import_service.apply_calls == 0
 
@@ -442,7 +451,12 @@ def test_worker_rejects_non_admin_persisted_principal_from_database(
 
     assert getattr(raised.value, "code", None) == "INSUFFICIENT_MAINTENANCE_ROLE"
     session.expire_all()
-    assert session.get(MasterDataImportTask, task.id).status is ImportTaskStatus.QUEUED
+    recovered = session.get(MasterDataImportTask, task.id)
+    assert recovered.status is ImportTaskStatus.PREVIEW_VALID
+    assert recovered.error_code == INVALID_IMPORT_EXECUTION_PRINCIPAL_CODE
+    assert recovered.error_message == INVALID_IMPORT_EXECUTION_PRINCIPAL_MESSAGE
+    assert recovered.execution_user_id is None
+    assert recovered.execution_roles_json is None
     assert import_service.apply_calls == 0
 
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-DONE
+DONE — LOCAL PYTHON 3.11 GATE AND INDEPENDENT CLOSURE REVIEW PASSED
 
 ## TDD evidence
 
@@ -135,6 +135,58 @@ Fresh cumulative verification after remediation:
 - Runtime search under `app`: zero `WarehouseInventory` or
   `warehouse_inventories` references.
 
+## Follow-up remediation: durable execution-principal recovery
+
+A second independent review found that the nullable execution-principal columns
+left an upgrade/recovery gap for pre-existing or malformed `QUEUED`/`RUNNING`
+tasks. `queue_for_execution()` returned queued rows without validating the
+persisted principal, startup recovery filtered only on non-null columns, and
+`run_once()` validated before entering its failure-persistence path. Those rows
+could therefore remain stranded indefinitely.
+
+The follow-up remediation adds:
+
+- one shared persisted-principal validator used by queueing, workers, and
+  startup recovery;
+- same-tenant ADMIN reclamation of invalid queued work through an optimistic
+  update constrained by task id, tenant, status, version, and expiry;
+- preservation of an already-valid winning execution principal on duplicate
+  execute requests;
+- a stable recoverable transition to `PREVIEW_VALID` with
+  `IMPORT_EXECUTION_PRINCIPAL_INVALID` when a worker or startup recovery sees an
+  invalid principal;
+- optimistic recovery updates so a stale worker cannot overwrite a concurrent
+  administrator reclaim;
+- startup partitioning that resubmits only valid queued work and never infers
+  administrator authority from the uploader.
+
+Follow-up TDD evidence:
+
+- Initial recovery set: `4 failed, 1 passed`. The failures showed that null and
+  contributor principals were not reclaimed, worker rejection left the task
+  queued, and restart recovery resubmitted/stranded the wrong rows.
+- Concurrent ADMIN winner regression: `1 failed`. A stale worker could overwrite
+  the administrator's just-committed principal because the recovery write had
+  no version predicate.
+- Concurrent expiry regression: `1 failed`. A task could cross its expiry
+  boundary after the worker's initial check but before the optimistic recovery
+  update, leaving an expired `QUEUED` row. The worker now performs a final
+  expiry transition when principal recovery loses that race.
+- Final focused principal/worker set: `17 passed, 1 warning` in `8.59s` on the
+  project Python 3.11 virtual environment.
+- Task 6 API/RBAC/migration set: `19 passed, 1 warning` in `16.26s`.
+- Expanded Task 6 regression set: `181 passed, 1 warning` in `36.48s`.
+- Changed-file Ruff: `All checks passed!`.
+- Alembic reports the single head `20260803_10`.
+- Full backend: `875 passed, 8 deselected, 2 warnings` in `270.74s`.
+- `git diff --check`: PASS; only the existing Windows LF-to-CRLF notice was
+  emitted for `.superpowers/sdd/progress.md`.
+- Repository scope check found no Plan 05-4A Task 7 implementation files.
+
+The independent closure review found no remaining Critical, Important, or Minor
+blocking findings in Task 6. Plan 05-4A Task 7 remains a separate approval and
+implementation boundary.
+
 ## Remaining validation boundary
 
 The production first-use serialization uses PostgreSQL `SELECT ... FOR
@@ -148,9 +200,10 @@ daemon. Therefore live PostgreSQL migration execution, unique-conflict timing,
 and row-lock scheduling remain an explicit deployment-environment validation
 boundary.
 
-## Commit
+## Closure decision
 
-This report is included in the commit with subject:
-`refactor(maintenance): migrate inventory import export to ledger`.
-The formal-review evidence update is included in the commit with subject:
-`docs(maintenance): record task 6 review remediation`.
+Task 6 is complete and approved for one local commit with subject:
+`fix(maintenance): complete task 6 import execution recovery`.
+
+This approval does not authorize push, merge, rebase, cleanup, or Plan 05-4A
+Task 7 implementation.
