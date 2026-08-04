@@ -19,6 +19,7 @@ os.environ["INTERNAL_JWT_CLOCK_SKEW_SECONDS"] = "5"
 import app.models  # noqa: F401
 import jwt
 import pytest
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.security.actor import ActorContext, MaintenanceRole
@@ -34,6 +35,12 @@ def database_schema() -> Generator[None, None, None]:
     engine.dispose()
     _TEST_DIR.cleanup()
 
+
+@pytest.fixture(autouse=True)
+def reset_settings_cache() -> Generator[None, None, None]:
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 @pytest.fixture(autouse=True)
 def clean_database() -> Generator[None, None, None]:
