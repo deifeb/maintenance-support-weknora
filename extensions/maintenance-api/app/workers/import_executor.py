@@ -5,13 +5,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Lock
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.exceptions import (
     AppException,
     BusinessValidationError,
+    InsufficientMaintenanceRoleError,
 )
 from app.db.session import SessionLocal
 from app.models.import_task import (
@@ -19,6 +20,12 @@ from app.models.import_task import (
     MasterDataImportTask,
 )
 from app.models.mixins import utc_now
+from app.services.import_execution_principal import (
+    INVALID_IMPORT_EXECUTION_PRINCIPAL_CODE,
+    INVALID_IMPORT_EXECUTION_PRINCIPAL_MESSAGE,
+    execution_actor_from_task,
+    has_valid_execution_principal,
+)
 from app.services.import_service import (
     MasterDataImportService,
     master_data_import_service,
@@ -29,6 +36,45 @@ from app.services.import_task_service import (
 
 SessionFactory = Callable[[], Session]
 TaskKey = tuple[str, str]
+
+
+def _recover_invalid_execution_principal(
+    session: Session,
+    *,
+    task: MasterDataImportTask,
+    now: datetime,
+) -> bool:
+    if task.status not in {
+        ImportTaskStatus.QUEUED,
+        ImportTaskStatus.RUNNING,
+    }:
+        return False
+    result = session.execute(
+        update(MasterDataImportTask)
+        .where(
+            MasterDataImportTask.id == task.id,
+            MasterDataImportTask.tenant_id == task.tenant_id,
+            MasterDataImportTask.status == task.status,
+            MasterDataImportTask.version == task.version,
+            MasterDataImportTask.expires_at > now,
+        )
+        .values(
+            status=ImportTaskStatus.PREVIEW_VALID,
+            execution_user_id=None,
+            execution_roles_json=None,
+            execution_request_id=None,
+            execution_token_id=None,
+            queued_at=None,
+            started_at=None,
+            finished_at=None,
+            error_code=INVALID_IMPORT_EXECUTION_PRINCIPAL_CODE,
+            error_message=INVALID_IMPORT_EXECUTION_PRINCIPAL_MESSAGE,
+            version=MasterDataImportTask.version + 1,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
 
 
 class ImportTaskExecutor:
@@ -65,7 +111,6 @@ class ImportTaskExecutor:
         self,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> bool:
         key = (tenant_id, task_id)
         with self._lock:
@@ -78,7 +123,6 @@ class ImportTaskExecutor:
                 self._run_guarded,
                 task_id,
                 tenant_id,
-                user_id,
             )
         except Exception:
             with self._lock:
@@ -90,14 +134,12 @@ class ImportTaskExecutor:
         self,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> None:
         key = (tenant_id, task_id)
         try:
             self.run_once(
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
         finally:
             with self._lock:
@@ -116,7 +158,6 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> MasterDataImportTask | None:
         return session.scalar(
             select(MasterDataImportTask)
@@ -125,8 +166,6 @@ class ImportTaskExecutor:
                 MasterDataImportTask.id == task_id,
                 MasterDataImportTask.tenant_id
                 == tenant_id,
-                MasterDataImportTask.created_by_user_id
-                == user_id,
             )
         )
 
@@ -135,7 +174,6 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> bool:
         session = self.session_factory()
         try:
@@ -143,7 +181,6 @@ class ImportTaskExecutor:
                 session,
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
             if (
                 task is None
@@ -189,7 +226,6 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
         exc: Exception,
     ) -> None:
         session = self.session_factory()
@@ -198,7 +234,6 @@ class ImportTaskExecutor:
                 session,
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
             if task is None:
                 return
@@ -225,22 +260,70 @@ class ImportTaskExecutor:
         *,
         task_id: str,
         tenant_id: str,
-        user_id: str,
     ) -> None:
+        principal_session = self.session_factory()
+        try:
+            pending = self._load_exact(
+                principal_session,
+                task_id=task_id,
+                tenant_id=tenant_id,
+            )
+            if (
+                pending is None
+                or pending.status is not ImportTaskStatus.QUEUED
+            ):
+                return
+            if not self._is_expired(pending.expires_at):
+                try:
+                    execution_actor_from_task(pending)
+                except InsufficientMaintenanceRoleError:
+                    recovered = _recover_invalid_execution_principal(
+                        principal_session,
+                        task=pending,
+                        now=utc_now(),
+                    )
+                    if recovered:
+                        principal_session.commit()
+                        raise
+                    principal_session.rollback()
+                    current = self._load_exact(
+                        principal_session,
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                    )
+                    if (
+                        current is None
+                        or current.status
+                        is not ImportTaskStatus.QUEUED
+                    ):
+                        raise
+                    if (
+                        not has_valid_execution_principal(current)
+                        and not self._is_expired(
+                            current.expires_at
+                        )
+                    ):
+                        raise
+        except InsufficientMaintenanceRoleError:
+            raise
+        except Exception:
+            principal_session.rollback()
+            raise
+        finally:
+            principal_session.close()
         if not self._start_task(
             task_id=task_id,
             tenant_id=tenant_id,
-            user_id=user_id,
         ):
             return
 
         session = self.session_factory()
+        task: MasterDataImportTask | None = None
         try:
             task = self._load_exact(
                 session,
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
             )
             if (
                 task is None
@@ -248,6 +331,7 @@ class ImportTaskExecutor:
                 is not ImportTaskStatus.RUNNING
             ):
                 return
+            execution_actor = execution_actor_from_task(task)
 
             content = self.file_store.read_source(
                 task.file_path
@@ -273,6 +357,7 @@ class ImportTaskExecutor:
                 content=content,
                 filename=task.original_filename,
                 mapping=task.mapping_json,
+                task_id=task.id,
             )
             if not validation.valid:
                 raise BusinessValidationError(
@@ -282,7 +367,8 @@ class ImportTaskExecutor:
 
             result = self.import_service.apply(
                 session,
-                tenant_id=tenant_id,
+                actor=execution_actor,
+                task_id=task.id,
                 content=content,
                 filename=task.original_filename,
                 mapping=task.mapping_json,
@@ -295,12 +381,23 @@ class ImportTaskExecutor:
             task.error_message = None
             task.finished_at = utc_now()
             session.commit()
+        except InsufficientMaintenanceRoleError:
+            if task is not None:
+                recovered = _recover_invalid_execution_principal(
+                    session,
+                    task=task,
+                    now=utc_now(),
+                )
+                if recovered:
+                    session.commit()
+                else:
+                    session.rollback()
+            raise
         except Exception as exc:
             session.rollback()
             self._persist_failure(
                 task_id=task_id,
                 tenant_id=tenant_id,
-                user_id=user_id,
                 exc=exc,
             )
         finally:
@@ -319,6 +416,7 @@ def recover_stale_import_tasks(
     session: Session,
     *,
     file_store: ImportTaskFileStore,
+    executor: ImportTaskExecutor | None = None,
 ) -> None:
     now = utc_now()
     stale = list(
@@ -341,6 +439,83 @@ def recover_stale_import_tasks(
         task.error_message = "Import task expired"
         task.finished_at = now
 
+    active = list(
+        session.scalars(
+            select(MasterDataImportTask).where(
+                MasterDataImportTask.expires_at > now,
+                MasterDataImportTask.status.in_(
+                    (
+                        ImportTaskStatus.QUEUED,
+                        ImportTaskStatus.RUNNING,
+                    )
+                ),
+            )
+        )
+    )
+    recoverable: list[TaskKey] = []
+    for task in active:
+        if not has_valid_execution_principal(task):
+            recovered = _recover_invalid_execution_principal(
+                session,
+                task=task,
+                now=now,
+            )
+            if recovered:
+                continue
+            current = ImportTaskExecutor._load_exact(
+                session,
+                task_id=task.id,
+                tenant_id=task.tenant_id,
+            )
+            if (
+                current is not None
+                and current.status is ImportTaskStatus.QUEUED
+                and has_valid_execution_principal(current)
+            ):
+                recoverable.append(
+                    (current.tenant_id, current.id)
+                )
+            continue
+        if task.status is ImportTaskStatus.RUNNING:
+            result = session.execute(
+                update(MasterDataImportTask)
+                .where(
+                    MasterDataImportTask.id == task.id,
+                    MasterDataImportTask.tenant_id
+                    == task.tenant_id,
+                    MasterDataImportTask.status
+                    == ImportTaskStatus.RUNNING,
+                    MasterDataImportTask.version == task.version,
+                    MasterDataImportTask.expires_at > now,
+                )
+                .values(
+                    status=ImportTaskStatus.QUEUED,
+                    started_at=None,
+                    finished_at=None,
+                    error_code=None,
+                    error_message=None,
+                    version=MasterDataImportTask.version + 1,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                current = ImportTaskExecutor._load_exact(
+                    session,
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                )
+                if (
+                    current is not None
+                    and current.status is ImportTaskStatus.QUEUED
+                    and has_valid_execution_principal(current)
+                ):
+                    recoverable.append(
+                        (current.tenant_id, current.id)
+                    )
+                continue
+        recoverable.append((task.tenant_id, task.id))
+
     terminal = list(
         session.scalars(
             select(MasterDataImportTask).where(
@@ -356,6 +531,10 @@ def recover_stale_import_tasks(
         )
     )
     session.commit()
+
+    if executor is not None:
+        for tenant_id, task_id in recoverable:
+            executor.submit(task_id, tenant_id)
 
     for task in terminal:
         try:

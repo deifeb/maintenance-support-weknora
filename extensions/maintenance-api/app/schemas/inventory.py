@@ -1,10 +1,21 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from app.models.enums import WarehouseStatus
 from app.schemas.base import CodeModel, ORMModel, TimestampRead
+from app.schemas.inventory_ledger import (
+    InventoryQuantityDelta,
+    InventoryTransactionRead,
+)
 
 
 class WarehouseBase(CodeModel):
@@ -62,27 +73,41 @@ class InventoryQuantities(BaseModel):
         return self
 
 
-class WarehouseInventoryCreate(InventoryQuantities):
+class InventoryPolicyQuantities(BaseModel):
+    safety_stock: Decimal = Field(default=Decimal("0"), ge=0)
+    reorder_point: Decimal = Field(default=Decimal("0"), ge=0)
+    maximum_stock: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_policy_quantities(self):
+        if self.reorder_point < self.safety_stock:
+            raise ValueError("reorder_point must be at least safety_stock")
+        if self.maximum_stock is not None and self.maximum_stock < self.reorder_point:
+            raise ValueError("maximum_stock must be at least reorder_point")
+        return self
+
+
+class InventoryCreate(InventoryPolicyQuantities):
+    model_config = ConfigDict(extra="forbid")
+
     warehouse_id: int
     spare_part_id: int
-    last_counted_at: datetime | None = None
     notes: str | None = None
 
 
-class WarehouseInventoryUpdate(BaseModel):
-    on_hand_quantity: Decimal | None = Field(default=None, ge=0)
-    reserved_quantity: Decimal | None = Field(default=None, ge=0)
-    damaged_quantity: Decimal | None = Field(default=None, ge=0)
-    quarantined_quantity: Decimal | None = Field(default=None, ge=0)
-    in_transit_quantity: Decimal | None = Field(default=None, ge=0)
+class InventoryUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     safety_stock: Decimal | None = Field(default=None, ge=0)
     reorder_point: Decimal | None = Field(default=None, ge=0)
     maximum_stock: Decimal | None = Field(default=None, ge=0)
-    last_counted_at: datetime | None = None
     notes: str | None = None
 
 
 class InventoryAdjustment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
     on_hand_delta: Decimal = Decimal("0")
     reserved_delta: Decimal = Decimal("0")
     damaged_delta: Decimal = Decimal("0")
@@ -90,9 +115,32 @@ class InventoryAdjustment(BaseModel):
     in_transit_delta: Decimal = Decimal("0")
     reason: str = Field(min_length=1, max_length=500)
 
+    @field_validator(
+        "on_hand_delta",
+        "reserved_delta",
+        "damaged_delta",
+        "quarantined_delta",
+        "in_transit_delta",
+        mode="before",
+    )
+    @classmethod
+    def validate_exact_delta(cls, value):
+        return InventoryQuantityDelta.validate_numeric_18_4(value)
 
-class WarehouseInventoryRead(ORMModel):
+    def quantity_delta(self) -> InventoryQuantityDelta:
+        return InventoryQuantityDelta(
+            on_hand=self.on_hand_delta,
+            reserved=self.reserved_delta,
+            damaged=self.damaged_delta,
+            quarantined=self.quarantined_delta,
+            in_transit=self.in_transit_delta,
+        )
+
+
+class InventoryRead(ORMModel):
     id: int
+    version: int
+    policy_version: int
     warehouse_id: int
     spare_part_id: int
     on_hand_quantity: Decimal
@@ -117,3 +165,8 @@ class WarehouseInventoryRead(ORMModel):
             - self.damaged_quantity
             - self.quarantined_quantity
         )
+
+
+class InventoryAdjustmentRead(BaseModel):
+    transaction: InventoryTransactionRead
+    summary: InventoryRead

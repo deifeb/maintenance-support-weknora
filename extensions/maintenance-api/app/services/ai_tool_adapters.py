@@ -14,7 +14,6 @@ from app.repositories import (
     ConfigurationRepository,
     DemandCalculationRepository,
     EquipmentRepository,
-    InventoryRepository,
     ReliabilityRepository,
     SparePartRepository,
 )
@@ -31,6 +30,9 @@ from app.services.demand_calculation_service import (
 )
 from app.services.inventory_gap_service import (
     inventory_gap_service,
+)
+from app.services.inventory_query_service import (
+    InventoryQueryService,
 )
 from app.services.scenario_draft_service import (
     scenario_draft_service,
@@ -526,21 +528,16 @@ def get_inventory_snapshot(
     spare_part_id = payload.model_dump().get(
         "spare_part_id"
     )
-    filters = {}
-    if spare_part_id is not None:
-        filters["spare_part_id"] = (
-            spare_part_id
-        )
-    rows, _ = InventoryRepository().list_page(
+    page = InventoryQueryService().list_summaries(
         session,
-        context.tenant_id,
+        context.actor,
         page=1,
         page_size=500,
-        filters=filters,
-        include_inactive=True,
-        sort_by="id",
+        spare_part_id=spare_part_id,
     )
     return {
+        "total": page.total,
+        "truncated": page.total > len(page.items),
         "items": [
             {
                 "spare_part_id": (
@@ -560,7 +557,7 @@ def get_inventory_snapshot(
                     row.safety_stock
                 ),
             }
-            for row in rows
+            for row in page.items
         ]
     }
 

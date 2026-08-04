@@ -14,7 +14,7 @@ from app.schemas.equipment import (
     ConfigurationVersionCreate,
     EquipmentModelCreate,
 )
-from app.schemas.inventory import InventoryAdjustment, WarehouseCreate, WarehouseInventoryCreate
+from app.schemas.inventory import InventoryAdjustment, InventoryCreate, WarehouseCreate
 from app.schemas.reliability import ReliabilityProfileCreate
 from app.schemas.supplier import SupplierCreate, SupplierOfferCreate
 from app.services import (
@@ -113,23 +113,38 @@ def test_inventory_adjustment_and_frozen_warehouse(session, actor_admin) -> None
     warehouse = warehouse_service.create(session, actor_admin, WarehouseCreate(code="WH-1", name="Warehouse"))
     inventory = inventory_service.create_inventory(
         session, actor_admin,
-        WarehouseInventoryCreate(
+        InventoryCreate(
             warehouse_id=warehouse.id,
             spare_part_id=spare.id,
-            on_hand_quantity=10,
             safety_stock=2,
             reorder_point=3,
         ),
     )
     adjusted = inventory_service.adjust(
-        session, actor_admin, inventory.id, InventoryAdjustment(on_hand_delta=5, reason="count")
+        session,
+        actor_admin,
+        inventory.id,
+        InventoryAdjustment(
+            expected_version=inventory.version,
+            on_hand_delta=5,
+            reason="count",
+        ),
+        idempotency_key="service-inventory-count",
     )
-    assert adjusted.on_hand_quantity == Decimal("15.0000")
+    assert adjusted.summary.on_hand_quantity == Decimal("5.0000")
     warehouse.status = WarehouseStatus.FROZEN
     session.commit()
     with pytest.raises(ConflictError):
         inventory_service.adjust(
-            session, actor_admin, inventory.id, InventoryAdjustment(on_hand_delta=1, reason="blocked")
+            session,
+            actor_admin,
+            inventory.id,
+            InventoryAdjustment(
+                expected_version=adjusted.summary.version,
+                on_hand_delta=1,
+                reason="blocked",
+            ),
+            idempotency_key="service-inventory-blocked",
         )
 
 

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from io import BytesIO
 
 import pytest
 from app.core.exceptions import BusinessValidationError
+from app.importers.parser import parse_decimal
 from app.models.catalog import SparePart
 from app.models.supplier import Supplier
 from openpyxl import load_workbook
+from sqlalchemy import event
 
 SPARE_PART_HEADERS = [
     "器材编码",
@@ -329,9 +332,10 @@ def test_reliability_export_excludes_cross_tenant_spare_part_relation(
 def test_inventory_export_excludes_each_cross_tenant_relation(
     session,
 ):
-    from app.models.inventory import (
+    from app.models import (
+        InventoryBalance,
         Warehouse,
-        WarehouseInventory,
+        WarehouseLocation,
     )
 
     tenant_a_part = SparePart(
@@ -365,17 +369,37 @@ def test_inventory_export_excludes_each_cross_tenant_relation(
         ]
     )
     session.flush()
+    location_for_foreign_warehouse = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=tenant_b_warehouse.id,
+        code="DEFAULT",
+        name="Foreign warehouse location",
+        location_type="DEFAULT",
+    )
+    location_for_local_warehouse = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=tenant_a_warehouse.id,
+        code="DEFAULT",
+        name="Local warehouse location",
+        location_type="DEFAULT",
+    )
+    session.add_all(
+        [location_for_foreign_warehouse, location_for_local_warehouse]
+    )
+    session.flush()
     session.add_all(
         [
-            WarehouseInventory(
+            InventoryBalance(
                 tenant_id="tenant-a",
                 warehouse_id=tenant_b_warehouse.id,
+                location_id=location_for_foreign_warehouse.id,
                 spare_part_id=tenant_a_part.id,
                 on_hand_quantity=1,
             ),
-            WarehouseInventory(
+            InventoryBalance(
                 tenant_id="tenant-a",
                 warehouse_id=tenant_a_warehouse.id,
+                location_id=location_for_local_warehouse.id,
                 spare_part_id=tenant_b_part.id,
                 on_hand_quantity=2,
             ),
@@ -398,6 +422,114 @@ def test_inventory_export_excludes_each_cross_tenant_relation(
     assert rows == [], (
         "INVENTORY_RELATED_TENANT_LEAK_GAP"
     )
+
+
+def test_inventory_export_aggregates_all_locations_and_lots_into_legacy_columns(
+    session,
+):
+    from app.models import (
+        InventoryBalance,
+        InventoryLot,
+        InventoryPolicy,
+        Warehouse,
+        WarehouseLocation,
+    )
+
+    warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code="WH-AGG",
+        name="Aggregate warehouse",
+    )
+    spare = SparePart(
+        tenant_id="tenant-a",
+        code="SP-AGG",
+        name="Aggregate spare",
+        unit="件",
+    )
+    session.add_all([warehouse, spare])
+    session.flush()
+    default = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="DEFAULT",
+        name="Default",
+        location_type="DEFAULT",
+    )
+    shelf = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="SHELF-1",
+        name="Shelf 1",
+        location_type="STORAGE",
+    )
+    lot = InventoryLot(
+        tenant_id="tenant-a",
+        spare_part_id=spare.id,
+        lot_code="LOT-1",
+    )
+    session.add_all([default, shelf, lot])
+    session.flush()
+    session.add(
+        InventoryPolicy(
+            tenant_id="tenant-a",
+            warehouse_id=warehouse.id,
+            spare_part_id=spare.id,
+            safety_stock=Decimal("4"),
+            reorder_point=Decimal("6"),
+            maximum_stock=Decimal("20"),
+        )
+    )
+    session.add_all(
+        [
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                location_id=default.id,
+                spare_part_id=spare.id,
+                on_hand_quantity=Decimal("5"),
+                reserved_quantity=Decimal("1"),
+                in_transit_quantity=Decimal("2"),
+            ),
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                location_id=shelf.id,
+                spare_part_id=spare.id,
+                lot_id=lot.id,
+                on_hand_quantity=Decimal("7"),
+                damaged_quantity=Decimal("1"),
+                quarantined_quantity=Decimal("0.5"),
+                in_transit_quantity=Decimal("1"),
+            ),
+        ]
+    )
+    session.commit()
+
+    content = _exporter().export(
+        session,
+        tenant_id="tenant-a",
+        resource_key="inventories",
+        filters={"sort_by": "on_hand_quantity"},
+    )
+    workbook = load_workbook(BytesIO(content), read_only=True)
+    rows = _rows_as_dicts(workbook["库存"])
+
+    assert rows == [
+        {
+            "库房编码": "WH-AGG",
+            "器材编码": "SP-AGG",
+            "现存数量": "12.0000",
+            "预留数量": "1.0000",
+            "损坏数量": "1.0000",
+            "隔离数量": "0.5000",
+            "在途数量": "3.0000",
+            "可用数量": "9.5000",
+            "安全库存": "4.0000",
+            "补货点": "6.0000",
+            "最大库存": "20.0000",
+            "盘点时间": None,
+        }
+    ]
 
 
 def test_supplier_offer_export_excludes_each_cross_tenant_relation(
@@ -475,3 +607,175 @@ def test_supplier_offer_export_excludes_each_cross_tenant_relation(
     assert rows == [], (
         "SUPPLIER_OFFER_RELATED_TENANT_LEAK_GAP"
     )
+
+
+def _add_inventory_export_row(
+    session,
+    *,
+    code: str,
+    on_hand: Decimal,
+    reserved: Decimal = Decimal("0"),
+):
+    from app.models import (
+        InventoryBalance,
+        InventoryPolicy,
+        Warehouse,
+        WarehouseLocation,
+    )
+
+    warehouse = Warehouse(
+        tenant_id="tenant-a",
+        code=f"WH-{code}",
+        name=f"Warehouse {code}",
+    )
+    spare = SparePart(
+        tenant_id="tenant-a",
+        code=f"SP-{code}",
+        name=f"Spare {code}",
+        unit="EA",
+    )
+    session.add_all([warehouse, spare])
+    session.flush()
+    location = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=warehouse.id,
+        code="DEFAULT",
+        name="Default",
+        location_type="DEFAULT",
+    )
+    session.add(location)
+    session.flush()
+    session.add_all(
+        [
+            InventoryPolicy(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                spare_part_id=spare.id,
+                safety_stock=Decimal("1.0000"),
+                reorder_point=Decimal("2.0000"),
+                maximum_stock=max(on_hand, Decimal("2.0000")),
+            ),
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=warehouse.id,
+                location_id=location.id,
+                spare_part_id=spare.id,
+                on_hand_quantity=on_hand,
+                reserved_quantity=reserved,
+            ),
+        ]
+    )
+    session.flush()
+    return warehouse, spare
+
+
+def test_inventory_export_limit_is_applied_in_one_bounded_aggregate_select(
+    session,
+):
+    _add_inventory_export_row(session, code="LIMIT-A", on_hand=Decimal("1"))
+    _add_inventory_export_row(session, code="LIMIT-B", on_hand=Decimal("2"))
+    session.commit()
+    statements: list[str] = []
+
+    def record_select(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(session.get_bind(), "before_cursor_execute", record_select)
+    try:
+        with pytest.raises(BusinessValidationError) as raised:
+            from app.exporters.master_data_excel import MasterDataExcelExporter
+
+            MasterDataExcelExporter(max_rows=1).export(
+                session,
+                tenant_id="tenant-a",
+                resource_key="inventories",
+                filters={
+                    "keyword": "LIMIT",
+                    "sort_by": "on_hand_quantity",
+                    "sort_order": "desc",
+                },
+            )
+    finally:
+        event.remove(session.get_bind(), "before_cursor_execute", record_select)
+
+    assert raised.value.code == "EXPORT_ROW_LIMIT_EXCEEDED"
+    assert len(statements) == 1
+    statement = statements[0].lower()
+    assert " limit " in statement
+    assert "inventory_balances" in statement
+    assert "warehouses" in statement
+    assert "spare_parts" in statement
+    assert "group by" in statement
+
+
+def test_inventory_export_preserves_numeric_18_4_as_exact_text(
+    session,
+):
+    values = (
+        Decimal("12345678901234.5678"),
+        Decimal("99999999999999.9999"),
+    )
+    class ExactDecimalQueryService:
+        def inventory_export_rows(self, *_args, **_kwargs):
+            return [
+                {
+                    "warehouse_id": index,
+                    "spare_part_id": index,
+                    "warehouse_code": f"WH-DECIMAL-{index}",
+                    "spare_part_code": f"SP-DECIMAL-{index}",
+                    "on_hand_quantity": value,
+                    "reserved_quantity": Decimal("0.0000"),
+                    "damaged_quantity": Decimal("0.0000"),
+                    "quarantined_quantity": Decimal("0.0000"),
+                    "in_transit_quantity": Decimal("0.0000"),
+                    "available_quantity": value,
+                    "safety_stock": Decimal("0.0000"),
+                    "reorder_point": Decimal("0.0000"),
+                    "maximum_stock": value,
+                }
+                for index, value in enumerate(values, start=1)
+            ]
+
+    from app.exporters.master_data_excel import MasterDataExcelExporter
+
+    content = MasterDataExcelExporter(
+        query_service=ExactDecimalQueryService()
+    ).export(
+        session,
+        tenant_id="tenant-a",
+        resource_key="inventories",
+        filters={"sort_by": "on_hand_quantity", "sort_order": "asc"},
+    )
+    rows = _rows_as_dicts(load_workbook(BytesIO(content))["库存"])
+
+    exported = [row["现存数量"] for row in rows]
+    assert exported == [format(value, ".4f") for value in values]
+    assert [parse_decimal(value) for value in exported] == list(values)
+    assert all(isinstance(value, str) for value in exported)
+
+
+def test_inventory_descending_reverses_only_value_and_keeps_id_ties_ascending(
+    session,
+):
+    for code in ("TIE-A", "TIE-B", "TIE-C"):
+        _add_inventory_export_row(session, code=code, on_hand=Decimal("5"))
+    session.commit()
+
+    def codes(sort_by: str, sort_order: str) -> list[str]:
+        content = _exporter().export(
+            session,
+            tenant_id="tenant-a",
+            resource_key="inventories",
+            filters={"sort_by": sort_by, "sort_order": sort_order},
+        )
+        return [
+            row["库房编码"]
+            for row in _rows_as_dicts(load_workbook(BytesIO(content))["库存"])
+        ]
+
+    expected = ["WH-TIE-A", "WH-TIE-B", "WH-TIE-C"]
+    assert codes("on_hand_quantity", "asc") == expected
+    assert codes("on_hand_quantity", "desc") == expected
+    assert codes("last_counted_at", "asc") == expected
+    assert codes("last_counted_at", "desc") == expected

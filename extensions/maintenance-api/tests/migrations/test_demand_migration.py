@@ -4,7 +4,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
-MASTER_TABLES = {
+LEGACY_MASTER_TABLES = {
     "equipment_models",
     "configuration_versions",
     "configuration_items",
@@ -15,6 +15,16 @@ MASTER_TABLES = {
     "warehouse_inventories",
     "suppliers",
     "supplier_offers",
+}
+MASTER_TABLES = (LEGACY_MASTER_TABLES - {"warehouse_inventories"}) | {
+    "warehouse_locations",
+    "inventory_policies",
+    "inventory_expiry_rules",
+    "inventory_lots",
+    "serialized_items",
+    "inventory_balances",
+    "inventory_transactions",
+    "inventory_ledger_entries",
 }
 DEMAND_TABLES = {
     "repair_profiles",
@@ -48,7 +58,7 @@ def test_phase_three_upgrade_downgrade_upgrade(tmp_path: Path, monkeypatch):
     assert DEMAND_TABLES <= names
     command.downgrade(config, "cdbae5051f35")
     names = set(inspect(engine).get_table_names())
-    assert MASTER_TABLES <= names
+    assert LEGACY_MASTER_TABLES <= names
     assert not (DEMAND_TABLES & names)
     command.upgrade(config, "head")
     assert DEMAND_TABLES <= set(inspect(engine).get_table_names())
