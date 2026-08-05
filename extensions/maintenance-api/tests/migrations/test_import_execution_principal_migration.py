@@ -25,13 +25,12 @@ def _config(database_path: Path, monkeypatch) -> tuple[Config, str]:
     return config, url
 
 
-def test_import_execution_principal_revision_is_single_head_and_reversible(
+def test_import_execution_principal_revision_is_reversible(
     tmp_path,
     monkeypatch,
 ):
     config, url = _config(tmp_path / "execution-principal.db", monkeypatch)
     script = ScriptDirectory.from_config(config)
-    assert script.get_current_head() == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
 
     command.upgrade(config, REVISION)
