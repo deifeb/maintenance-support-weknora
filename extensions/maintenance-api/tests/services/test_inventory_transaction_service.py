@@ -696,3 +696,12 @@ def test_idempotency_key_and_reason_reject_values_over_persistence_limits(
     assert exc_info.value.code == expected_code
     assert session.scalar(select(func.count()).select_from(InventoryTransaction)) == 0
     assert session.scalar(select(func.count()).select_from(InventoryLedgerEntry)) == 0
+
+
+def test_transaction_service_exposes_apply_plan_contract() -> None:
+    _, _, InventoryTransactionService, _ = _transaction_api()
+
+    assert hasattr(
+        InventoryTransactionService,
+        "apply_plan",
+    ), "Task 2 requires InventoryTransactionService.apply_plan"

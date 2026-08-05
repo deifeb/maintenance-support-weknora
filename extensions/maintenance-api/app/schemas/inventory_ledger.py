@@ -105,8 +105,8 @@ class InventoryLedgerEntryRead(ORMModel):
     damaged_delta: Decimal
     quarantined_delta: Decimal
     in_transit_delta: Decimal
-    state_before_json: dict[str, str]
-    state_after_json: dict[str, str]
+    state_before_json: dict[str, Any]
+    state_after_json: dict[str, Any]
     before_balance_version: int
     resulting_balance_version: int
     created_at: datetime

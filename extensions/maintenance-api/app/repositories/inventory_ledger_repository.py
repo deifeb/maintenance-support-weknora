@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.exceptions import NotFoundError
 from app.models import (
     InventoryBalance,
     InventoryExpiryRule,
@@ -490,7 +491,83 @@ class InventoryLedgerRepository:
         tenant_id: str,
         balance_ids: Sequence[int],
     ) -> list[InventoryBalance]:
-        return list(session.scalars(self.lock_balances_statement(tenant_id, balance_ids)).all())
+        requested_ids = sorted(set(balance_ids))
+        balances = list(
+            session.scalars(
+                self.lock_balances_statement(tenant_id, requested_ids)
+            ).all()
+        )
+        self._require_complete_ids(
+            resource="inventory_balance",
+            requested_ids=requested_ids,
+            loaded_ids=[balance.id for balance in balances],
+        )
+        return balances
+
+    def lock_lots(
+        self,
+        session: Session,
+        tenant_id: str,
+        lot_ids: Sequence[int],
+    ) -> list[InventoryLot]:
+        requested_ids = sorted(set(lot_ids))
+        if not requested_ids:
+            return []
+        lots = list(
+            session.scalars(
+                select(InventoryLot)
+                .where(
+                    InventoryLot.tenant_id == tenant_id,
+                    InventoryLot.id.in_(requested_ids),
+                )
+                .order_by(InventoryLot.id)
+                .with_for_update()
+            ).all()
+        )
+        self._require_complete_ids(
+            resource="inventory_lot",
+            requested_ids=requested_ids,
+            loaded_ids=[lot.id for lot in lots],
+        )
+        return lots
+
+    def lock_serial_items(
+        self,
+        session: Session,
+        tenant_id: str,
+        serial_item_ids: Sequence[int],
+    ) -> list[SerializedItem]:
+        requested_ids = sorted(set(serial_item_ids))
+        if not requested_ids:
+            return []
+        serial_items = list(
+            session.scalars(
+                select(SerializedItem)
+                .where(
+                    SerializedItem.tenant_id == tenant_id,
+                    SerializedItem.id.in_(requested_ids),
+                )
+                .order_by(SerializedItem.id)
+                .with_for_update()
+            ).all()
+        )
+        self._require_complete_ids(
+            resource="serialized_item",
+            requested_ids=requested_ids,
+            loaded_ids=[item.id for item in serial_items],
+        )
+        return serial_items
+
+    @staticmethod
+    def _require_complete_ids(
+        *,
+        resource: str,
+        requested_ids: Sequence[int],
+        loaded_ids: Sequence[int],
+    ) -> None:
+        missing_ids = sorted(set(requested_ids) - set(loaded_ids))
+        if missing_ids:
+            raise NotFoundError(resource, missing_ids[0])
 
     @staticmethod
     def _balance_conditions(
