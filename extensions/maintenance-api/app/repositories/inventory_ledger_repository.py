@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
@@ -19,6 +19,9 @@ from app.models import (
     Warehouse,
     WarehouseLocation,
 )
+
+if TYPE_CHECKING:
+    from app.services.inventory_fefo_service import FEFOCandidate
 
 
 class InventoryLedgerRepository:
@@ -67,6 +70,122 @@ class InventoryLedgerRepository:
             session.scalar(select(func.count()).select_from(InventoryBalance).where(*conditions)) or 0
         )
         return list(session.scalars(statement).all()), total
+
+    def list_fefo_candidates(
+        self,
+        session: Session,
+        tenant_id: str,
+        *,
+        spare_part_id: int,
+        warehouse_id: int,
+        location_id: int | None = None,
+        lot_id: int | None = None,
+        serial_item_id: int | None = None,
+    ) -> list[FEFOCandidate]:
+        from app.services.inventory_fefo_service import FEFOCandidate
+
+        conditions = [
+            InventoryBalance.tenant_id == tenant_id,
+            InventoryBalance.spare_part_id == spare_part_id,
+            InventoryBalance.warehouse_id == warehouse_id,
+        ]
+        if location_id is not None:
+            conditions.append(InventoryBalance.location_id == location_id)
+        if lot_id is not None:
+            conditions.append(InventoryBalance.lot_id == lot_id)
+        if serial_item_id is not None:
+            conditions.append(SerializedItem.id == serial_item_id)
+
+        available_quantity = (
+            InventoryBalance.on_hand_quantity
+            - InventoryBalance.reserved_quantity
+            - InventoryBalance.damaged_quantity
+            - InventoryBalance.quarantined_quantity
+        )
+        statement = (
+            select(
+                InventoryBalance.id.label("balance_id"),
+                InventoryBalance.location_id.label("location_id"),
+                InventoryBalance.lot_id.label("lot_id"),
+                SerializedItem.id.label("serial_item_id"),
+                InventoryLot.expiry_date.label("expiry_date"),
+                InventoryLot.received_date.label("received_date"),
+                available_quantity.label("available_quantity"),
+                WarehouseLocation.is_active.label("location_active"),
+                WarehouseLocation.is_pickable.label("location_pickable"),
+                InventoryLot.is_frozen.label("lot_frozen"),
+                InventoryLot.quality_status.label("lot_quality"),
+                SerializedItem.status.label("serial_status"),
+            )
+            .join(
+                Warehouse,
+                and_(
+                    Warehouse.tenant_id == tenant_id,
+                    Warehouse.id == InventoryBalance.warehouse_id,
+                ),
+            )
+            .join(
+                SparePart,
+                and_(
+                    SparePart.tenant_id == tenant_id,
+                    SparePart.id == InventoryBalance.spare_part_id,
+                ),
+            )
+            .join(
+                WarehouseLocation,
+                and_(
+                    WarehouseLocation.tenant_id == tenant_id,
+                    WarehouseLocation.id == InventoryBalance.location_id,
+                    WarehouseLocation.warehouse_id == InventoryBalance.warehouse_id,
+                ),
+            )
+            .outerjoin(
+                InventoryLot,
+                and_(
+                    InventoryLot.tenant_id == tenant_id,
+                    InventoryLot.id == InventoryBalance.lot_id,
+                    InventoryLot.spare_part_id == InventoryBalance.spare_part_id,
+                ),
+            )
+            .outerjoin(
+                SerializedItem,
+                and_(
+                    SerializedItem.tenant_id == tenant_id,
+                    SerializedItem.warehouse_id == InventoryBalance.warehouse_id,
+                    SerializedItem.location_id == InventoryBalance.location_id,
+                    SerializedItem.spare_part_id == InventoryBalance.spare_part_id,
+                    or_(
+                        SerializedItem.lot_id == InventoryBalance.lot_id,
+                        and_(
+                            SerializedItem.lot_id.is_(None),
+                            InventoryBalance.lot_id.is_(None),
+                        ),
+                    ),
+                ),
+            )
+            .where(*conditions)
+            .order_by(InventoryBalance.id, SerializedItem.id)
+        )
+
+        return [
+            FEFOCandidate(
+                balance_id=row.balance_id,
+                location_id=row.location_id,
+                lot_id=row.lot_id,
+                serial_item_id=row.serial_item_id,
+                expiry_date=row.expiry_date,
+                received_date=row.received_date,
+                available_quantity=Decimal(row.available_quantity),
+                exclusion_facts=self._fefo_exclusion_facts(
+                    location_active=row.location_active,
+                    location_pickable=row.location_pickable,
+                    lot_frozen=row.lot_frozen,
+                    lot_quality=row.lot_quality,
+                    serial_status=row.serial_status,
+                ),
+            )
+            for row in session.execute(statement)
+        ]
 
     def list_summaries(
         self,
@@ -368,6 +487,30 @@ class InventoryLedgerRepository:
             )
             or 0
         )
+
+    @staticmethod
+    def _fefo_exclusion_facts(
+        *,
+        location_active: bool,
+        location_pickable: bool,
+        lot_frozen: bool | None,
+        lot_quality: str | None,
+        serial_status: str | None,
+    ) -> tuple[str, ...]:
+        facts: list[str] = []
+        if not location_active:
+            facts.append("LOCATION_INACTIVE")
+        if not location_pickable:
+            facts.append("LOCATION_NOT_PICKABLE")
+        if lot_frozen:
+            facts.append("LOT_FROZEN")
+        if lot_quality in {"QUARANTINED", "DAMAGED", "REJECTED"}:
+            facts.append(f"LOT_QUALITY_{lot_quality}")
+        if serial_status == "FROZEN":
+            facts.append("SERIAL_FROZEN")
+        elif serial_status is not None and serial_status != "IN_STOCK":
+            facts.append(f"SERIAL_STATUS_{serial_status}")
+        return tuple(facts)
 
     @staticmethod
     def _summary_statement(
