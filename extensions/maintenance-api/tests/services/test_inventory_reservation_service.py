@@ -412,7 +412,7 @@ def test_expire_releases_unissued_quantity_and_preserves_issued(
             spare_part,
             balances,
             requested_quantity="5.0000",
-            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         ),
         idempotency_key="reserve-expire",
     )
@@ -431,6 +431,9 @@ def test_expire_releases_unissued_quantity_and_preserves_issued(
         ),
         idempotency_key="issue-before-expire",
     )
+    stored = session.get(InventoryReservation, reservation.id)
+    stored.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session.flush()
 
     result = service.expire(
         session,
@@ -637,3 +640,132 @@ def test_reserve_ledger_entries_match_reservation_lines(
 
     assert [entry.balance_id for entry in entries] == [line.balance_id for line in lines]
     assert all(entry.reserved_delta > 0 for entry in entries)
+
+
+def test_issue_performs_lazy_expiry_before_mutation(
+    session,
+    actor_contributor,
+) -> None:
+    schema_api, service, reservation, _ = _reserve(
+        session,
+        actor_contributor,
+        suffix="LAZY-ISSUE",
+    )
+    stored = session.get(InventoryReservation, reservation.id)
+    stored.expires_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    session.flush()
+    line = reservation.lines[0]
+
+    with pytest.raises(AppException) as raised:
+        service.issue(
+            session,
+            actor_contributor,
+            reservation.id,
+            command=schema_api.IssueCommand(
+                expected_version=reservation.version,
+                lines=(
+                    schema_api.ReservationQuantityLine(
+                        reservation_line_id=line.id,
+                        quantity="1.0000",
+                    ),
+                ),
+            ),
+            idempotency_key="issue-after-lazy-expiry",
+        )
+
+    assert raised.value.code == "RESERVATION_EXPIRED"
+    session.expire_all()
+    assert session.get(InventoryReservation, reservation.id).status == "EXPIRED"
+    assert session.scalar(
+        select(func.count(InventoryTransaction.id)).where(
+            InventoryTransaction.operation_type == "UNRESERVE"
+        )
+    ) == 1
+
+
+def test_release_performs_lazy_expiry_before_manual_release(
+    session,
+    actor_contributor,
+) -> None:
+    schema_api, service, reservation, _ = _reserve(
+        session,
+        actor_contributor,
+        suffix="LAZY-RELEASE",
+    )
+    stored = session.get(InventoryReservation, reservation.id)
+    stored.expires_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    session.flush()
+
+    with pytest.raises(AppException) as raised:
+        service.release(
+            session,
+            actor_contributor,
+            reservation.id,
+            command=schema_api.ReleaseCommand(
+                expected_version=reservation.version,
+                lines=(),
+            ),
+            idempotency_key="release-after-lazy-expiry",
+        )
+
+    assert raised.value.code == "RESERVATION_EXPIRED"
+    session.expire_all()
+    assert session.get(InventoryReservation, reservation.id).status == "EXPIRED"
+    assert session.scalar(
+        select(func.count(InventoryTransaction.id)).where(
+            InventoryTransaction.operation_type == "UNRESERVE"
+        )
+    ) == 1
+
+
+def test_reserve_lazily_expires_related_inventory_before_fefo_query(
+    session,
+    actor_contributor,
+) -> None:
+    schema_api, service_api = _reservation_api()
+    warehouse, spare_part, balances, _ = _seed_inventory(
+        session,
+        suffix="LAZY-RESERVE",
+        quantities=("5.0000", "4.0000"),
+    )
+    service = service_api.InventoryReservationService()
+    old = service.reserve(
+        session,
+        actor_contributor,
+        command=_reserve_command(
+            schema_api,
+            warehouse,
+            spare_part,
+            balances,
+            requested_quantity="5.0000",
+            location_id=balances[0].location_id,
+            expires_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        ),
+        idempotency_key="lazy-reserve-old",
+    )
+    session.expire_all()
+
+    fresh_balances = [session.get(InventoryBalance, balance.id) for balance in balances]
+    result = service.reserve(
+        session,
+        actor_contributor,
+        command=_reserve_command(
+            schema_api,
+            warehouse,
+            spare_part,
+            fresh_balances,
+            requested_quantity="1.0000",
+            location_id=fresh_balances[1].location_id,
+        ),
+        idempotency_key="lazy-reserve-new",
+    )
+
+    session.expire_all()
+    assert session.get(InventoryReservation, old.id).status == "EXPIRED"
+    assert result.reserved_quantity == Decimal("1.0000")
+    assert result.lines[0].balance_id == fresh_balances[1].id
+    assert session.scalar(
+        select(func.count(InventoryTransaction.id)).where(
+            InventoryTransaction.operation_type == "UNRESERVE"
+        )
+    ) == 1

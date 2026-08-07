@@ -102,6 +102,12 @@ class InventoryReservationService:
         if replay is not None:
             return replay
 
+        self._expire_related_reservations(
+            session,
+            actor,
+            spare_part_id=command.spare_part_id,
+            warehouse_id=command.warehouse_id,
+        )
         candidates = self.ledger_repository.list_fefo_candidates(
             session,
             actor.tenant_id,
@@ -453,6 +459,11 @@ class InventoryReservationService:
         if replay is not None:
             return replay
 
+        self._expire_target_reservation_if_due(
+            session,
+            actor,
+            reservation_id,
+        )
         with session.begin_nested():
             reservation, lines = self._lock_and_validate(
                 session,
@@ -653,6 +664,137 @@ class InventoryReservationService:
                 result=result,
             )
             return result
+
+    def _expire_target_reservation_if_due(
+        self,
+        session: Session,
+        actor: ActorContext,
+        reservation_id: int,
+    ) -> None:
+        reservation = self.reservation_repository.get(
+            session,
+            actor.tenant_id,
+            reservation_id,
+        )
+        if reservation is None:
+            return
+        if reservation.status == "EXPIRED":
+            self._raise_validation(
+                actor,
+                "inventory reservation has expired",
+                code="RESERVATION_EXPIRED",
+            )
+        if reservation.status not in {"ACTIVE", "PARTIALLY_ISSUED"}:
+            return
+        now = datetime.now(timezone.utc)
+        if reservation.expires_at is None or self._as_utc(reservation.expires_at) > now:
+            return
+
+        expired = self._expire_due_reservation(
+            session,
+            actor,
+            reservation,
+            as_of=now,
+        )
+        if expired:
+            self._raise_validation(
+                actor,
+                "inventory reservation has expired",
+                code="RESERVATION_EXPIRED",
+            )
+
+    def _expire_related_reservations(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        spare_part_id: int,
+        warehouse_id: int,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        candidates = self.reservation_repository.list_expired_candidates(
+            session,
+            actor.tenant_id,
+            as_of=now,
+            limit=1000,
+        )
+        for reservation in candidates:
+            lines = self.reservation_repository.list_lines(
+                session,
+                actor.tenant_id,
+                reservation.id,
+            )
+            related = False
+            for line in lines:
+                if line.spare_part_id != spare_part_id:
+                    continue
+                balance = self.ledger_repository.get_balance(
+                    session,
+                    actor.tenant_id,
+                    line.balance_id,
+                )
+                if balance is not None and balance.warehouse_id == warehouse_id:
+                    related = True
+                    break
+            if related:
+                self._expire_due_reservation(
+                    session,
+                    actor,
+                    reservation,
+                    as_of=now,
+                )
+
+    def _expire_due_reservation(
+        self,
+        session: Session,
+        actor: ActorContext,
+        reservation: InventoryReservation,
+        *,
+        as_of: datetime,
+    ) -> bool:
+        if reservation.status == "EXPIRED":
+            return True
+        if reservation.status not in {"ACTIVE", "PARTIALLY_ISSUED"}:
+            return False
+        if reservation.expires_at is None or self._as_utc(reservation.expires_at) > self._as_utc(as_of):
+            return False
+
+        observed_version = reservation.version
+        key = self._expiry_idempotency_key(
+            actor.tenant_id,
+            reservation.id,
+            observed_version,
+        )
+        try:
+            self.expire(
+                session,
+                actor,
+                reservation.id,
+                command=ExpireCommand(
+                    observed_version=observed_version,
+                    as_of=as_of,
+                ),
+                idempotency_key=key,
+            )
+            return True
+        except ConflictError:
+            session.expire_all()
+            current = self.reservation_repository.get(
+                session,
+                actor.tenant_id,
+                reservation.id,
+            )
+            if current is not None and current.status == "EXPIRED":
+                return True
+            raise
+
+    @staticmethod
+    def _expiry_idempotency_key(
+        tenant_id: str,
+        reservation_id: int,
+        version: int,
+    ) -> str:
+        return f"reservation-expire:{tenant_id}:{reservation_id}:{version}"
 
     def _lock_and_validate(
         self,
