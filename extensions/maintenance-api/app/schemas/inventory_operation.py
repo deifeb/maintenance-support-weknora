@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -106,3 +107,14 @@ class InventoryMutationPlan(BaseModel):
 
         object.__setattr__(self, "mutations", ordered)
         return self
+
+
+class InventoryOperationPreviewRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    transaction_id: int = Field(gt=0)
+    operation_type: InventoryOperationType
+    status: Literal["PREVIEWED"] = "PREVIEWED"
+    transaction_version: int = Field(gt=0)
+    confirmation_token: str | None = None
+    confirmation_expires_at: datetime

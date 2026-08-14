@@ -31,6 +31,22 @@ class InventoryTransactionRepository:
             )
         )
 
+    def lock_transaction(
+        self,
+        session: Session,
+        tenant_id: str,
+        transaction_id: int,
+    ) -> InventoryTransaction | None:
+        return session.scalar(
+            select(InventoryTransaction)
+            .where(
+                InventoryTransaction.tenant_id == tenant_id,
+                InventoryTransaction.id == transaction_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     def get_idempotent(
         self,
         session: Session,

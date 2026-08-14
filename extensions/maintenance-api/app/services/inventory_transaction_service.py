@@ -45,6 +45,10 @@ from app.services.snapshot_service import snapshot_service
 
 OperationType = Literal["OPENING", "ADJUST"]
 NewCommandValidator = Callable[[InventoryBalance], None]
+StateTargetsValidator = Callable[
+    [dict[int, InventoryLot], dict[int, SerializedItem]],
+    None,
+]
 _IDEMPOTENCY_CONSTRAINT = "uq_inventory_tx_tenant_operation_idempotency"
 _SQLITE_IDEMPOTENCY_UNIQUE_ERROR = (
     "UNIQUE constraint failed: inventory_transactions.tenant_id, "
@@ -138,6 +142,53 @@ class InventoryTransactionService:
             terminal_status=terminal_status,
         )
 
+    def apply_plan_to_transaction(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        transaction: InventoryTransaction,
+        plan: InventoryMutationPlan,
+        required_role: MaintenanceRole,
+        terminal_status: InventoryTerminalStatus = "COMPLETED",
+        validate_state_targets: StateTargetsValidator | None = None,
+    ) -> InventoryTransactionRead:
+        if transaction.tenant_id != actor.tenant_id:
+            error = NotFoundError(
+                "inventory_transaction",
+                transaction.id,
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        if (
+            transaction.status != "PREVIEWED"
+            or transaction.operation_type != plan.operation_type
+        ):
+            conflict = ConflictError(
+                "inventory operation state conflict",
+                code="INVENTORY_OPERATION_STATE_CONFLICT",
+                details={
+                    "transaction_id": transaction.id,
+                    "status": transaction.status,
+                    "operation_type": transaction.operation_type,
+                    "conflict_object": "inventory_transaction",
+                    "retryable": False,
+                },
+            )
+            conflict.request_id = actor.request_id
+            raise conflict
+
+        return self._apply_plan(
+            session,
+            actor,
+            plan=plan,
+            idempotency_key=transaction.idempotency_key,
+            required_role=required_role,
+            terminal_status=terminal_status,
+            existing_transaction=transaction,
+            validate_state_targets=validate_state_targets,
+        )
     def _apply_quantity_operation(
         self,
         session: Session,
@@ -200,6 +251,8 @@ class InventoryTransactionService:
         terminal_status: InventoryTerminalStatus,
         request_hash_payload: dict[str, Any] | None = None,
         validate_new_command: NewCommandValidator | None = None,
+        existing_transaction: InventoryTransaction | None = None,
+        validate_state_targets: StateTargetsValidator | None = None,
     ) -> InventoryTransactionRead:
         self._require_role(actor, required_role)
         clean_reason = self._normalize_reason(plan.reason)
@@ -213,14 +266,19 @@ class InventoryTransactionService:
         self._ensure_savepoint_parent_transaction(session)
         try:
             with session.begin_nested():
-                existing = self.transaction_repository.get_idempotent(
-                    session,
-                    actor.tenant_id,
-                    operation_type,
-                    clean_key,
-                )
-                if existing is not None:
-                    return self._replay(actor, existing, request_hash)
+                if existing_transaction is None:
+                    existing = self.transaction_repository.get_idempotent(
+                        session,
+                        actor.tenant_id,
+                        operation_type,
+                        clean_key,
+                    )
+                    if existing is not None:
+                        return self._replay(
+                            actor,
+                            existing,
+                            request_hash,
+                        )
 
                 balance_ids = [item.balance_id for item in clean_plan.mutations]
                 locked = self.ledger_repository.lock_balances(
@@ -230,14 +288,19 @@ class InventoryTransactionService:
                 )
                 locked_by_id = {balance.id: balance for balance in locked}
 
-                existing = self.transaction_repository.get_idempotent(
-                    session,
-                    actor.tenant_id,
-                    operation_type,
-                    clean_key,
-                )
-                if existing is not None:
-                    return self._replay(actor, existing, request_hash)
+                if existing_transaction is None:
+                    existing = self.transaction_repository.get_idempotent(
+                        session,
+                        actor.tenant_id,
+                        operation_type,
+                        clean_key,
+                    )
+                    if existing is not None:
+                        return self._replay(
+                            actor,
+                            existing,
+                            request_hash,
+                        )
 
                 if validate_new_command is not None:
                     validate_new_command(locked_by_id[clean_plan.mutations[0].balance_id])
@@ -247,6 +310,11 @@ class InventoryTransactionService:
                     actor,
                     clean_plan.mutations,
                 )
+                if validate_state_targets is not None:
+                    validate_state_targets(
+                        lots_by_id,
+                        serial_items_by_id,
+                    )
                 prepared = self._prepare_mutations(
                     actor,
                     clean_plan.mutations,
@@ -262,17 +330,28 @@ class InventoryTransactionService:
                             setattr(target, field_name, value)
                         target.version += 1
 
-                transaction = self.transaction_repository.create_transaction(
-                    session,
-                    actor=actor,
-                    operation_type=operation_type,
-                    idempotency_key=clean_key,
-                    request_hash=request_hash,
-                    reason=clean_reason,
-                    status=terminal_status,
-                    reference_type=clean_plan.reference_type,
-                    reference_id=clean_plan.reference_id,
-                )
+                if existing_transaction is None:
+                    transaction = (
+                        self.transaction_repository.create_transaction(
+                            session,
+                            actor=actor,
+                            operation_type=operation_type,
+                            idempotency_key=clean_key,
+                            request_hash=request_hash,
+                            reason=clean_reason,
+                            status=terminal_status,
+                            reference_type=clean_plan.reference_type,
+                            reference_id=clean_plan.reference_id,
+                        )
+                    )
+                else:
+                    transaction = existing_transaction
+                    transaction.status = terminal_status
+                    transaction.reason = clean_reason
+                    transaction.reference_type = clean_plan.reference_type
+                    transaction.reference_id = clean_plan.reference_id
+                    transaction.version += 1
+                    session.flush()
                 entries = self.transaction_repository.append_entries(
                     session,
                     transaction=transaction,
@@ -294,6 +373,21 @@ class InventoryTransactionService:
                 response = self._read_transaction(transaction, entries)
                 snapshot = response.model_dump(mode="json")
                 extensions: dict[str, Any] = {}
+                if existing_transaction is not None:
+                    previous_snapshot = (
+                        existing_transaction.response_snapshot_json
+                    )
+                    if isinstance(previous_snapshot, dict):
+                        previous_extensions = (
+                            previous_snapshot.get("_extensions")
+                        )
+                        if isinstance(
+                            previous_extensions,
+                            dict,
+                        ):
+                            extensions.update(
+                                deepcopy(previous_extensions)
+                            )
                 if clean_plan.audit_context:
                     extensions["audit_context"] = deepcopy(clean_plan.audit_context)
                 if clean_plan.reference_type is not None or clean_plan.reference_id is not None:
@@ -311,6 +405,8 @@ class InventoryTransactionService:
                 )
                 return response
         except IntegrityError as exc:
+            if existing_transaction is not None:
+                raise
             if not self._is_idempotency_constraint_violation(exc):
                 raise
             winner = self.transaction_repository.get_idempotent(
