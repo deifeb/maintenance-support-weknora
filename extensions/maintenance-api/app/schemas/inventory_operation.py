@@ -22,7 +22,7 @@ InventoryOperationType = Literal[
     "STOCKTAKE_CONFIRM",
 ]
 InventoryTerminalStatus = Literal["COMPLETED", "PARTIALLY_COMPLETED"]
-InventoryStateValue = str | bool | None
+InventoryStateValue = str | int | bool | None
 InventoryAuditValue = str | int | bool | list | dict
 
 

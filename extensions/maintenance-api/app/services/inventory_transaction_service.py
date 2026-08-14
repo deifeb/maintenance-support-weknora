@@ -60,7 +60,8 @@ _ROLE_RANK = {
     MaintenanceRole.ADMIN: 2,
 }
 _LOT_STATE_FIELDS = frozenset({"is_frozen", "freeze_reason", "quality_status"})
-_SERIAL_STATE_FIELDS = frozenset({"status"})
+_SERIAL_STATE_FIELDS = frozenset({"status", "warehouse_id", "location_id"})
+_SERIAL_LOCATION_FIELDS = frozenset({"warehouse_id", "location_id"})
 
 
 class InventoryTransactionService:
@@ -523,12 +524,12 @@ class InventoryTransactionService:
         lots_by_id: dict[int, InventoryLot],
         serial_items_by_id: dict[int, SerializedItem],
     ) -> tuple[
-        list[tuple[InventoryLot | SerializedItem, dict[str, str | bool | None]]],
+        list[tuple[InventoryLot | SerializedItem, dict[str, str | int | bool | None]]],
         list[dict[str, dict[str, Any]]],
         int | None,
     ]:
         writes: list[
-            tuple[InventoryLot | SerializedItem, dict[str, str | bool | None]]
+            tuple[InventoryLot | SerializedItem, dict[str, str | int | bool | None]]
         ] = []
         snapshots: list[dict[str, dict[str, Any]]] = []
         serial_ids: list[int] = []
@@ -544,7 +545,16 @@ class InventoryTransactionService:
                 if serial_item_id is None:
                     raise AssertionError("validated state mutation has no target")
                 target = serial_items_by_id[serial_item_id]
-                self._require_serial_matches_balance(actor, balance, target)
+                requested_fields = set(state_mutation.state_before)
+                if requested_fields & _SERIAL_LOCATION_FIELDS:
+                    self._require_serial_relocation_matches_balance(
+                        actor,
+                        balance,
+                        target,
+                        state_mutation,
+                    )
+                else:
+                    self._require_serial_matches_balance(actor, balance, target)
                 target_type = "serialized_item"
                 target_id = serial_item_id
                 serial_ids.append(serial_item_id)
@@ -620,6 +630,94 @@ class InventoryTransactionService:
             )
             conflict.request_id = actor.request_id
             raise conflict
+
+    @staticmethod
+    def _require_serial_relocation_matches_balance(
+        actor: ActorContext,
+        balance: InventoryBalance,
+        target: InventoryLot | SerializedItem,
+        state_mutation: InventoryStateMutation,
+    ) -> None:
+        if not isinstance(target, SerializedItem):
+            conflict = ConflictError(
+                "serialized item does not match balance",
+                code="INVENTORY_STATE_TARGET_MISMATCH",
+                details={
+                    "balance_id": balance.id,
+                    "serial_item_id": getattr(target, "id", None),
+                    "conflict_object": "serialized_item",
+                    "retryable": False,
+                },
+            )
+            conflict.request_id = actor.request_id
+            raise conflict
+
+        requested_fields = set(state_mutation.state_before)
+        if not _SERIAL_LOCATION_FIELDS.issubset(requested_fields):
+            raise BusinessValidationError(
+                "serialized item relocation requires warehouse and location",
+                code="INVENTORY_STATE_FIELD_INVALID",
+                details={
+                    "target_type": "serialized_item",
+                    "target_id": target.id,
+                    "fields": sorted(requested_fields),
+                },
+            )
+
+        relocation_changed = any(
+            state_mutation.state_before[field_name]
+            != state_mutation.state_after[field_name]
+            for field_name in _SERIAL_LOCATION_FIELDS
+        )
+        if not relocation_changed:
+            raise BusinessValidationError(
+                "serialized item relocation must change warehouse or location",
+                code="INVENTORY_STATE_FIELD_INVALID",
+                details={
+                    "target_type": "serialized_item",
+                    "target_id": target.id,
+                    "fields": sorted(_SERIAL_LOCATION_FIELDS),
+                },
+            )
+
+        source_identity_matches = (
+            target.warehouse_id
+            == state_mutation.state_before["warehouse_id"]
+            and target.location_id
+            == state_mutation.state_before["location_id"]
+        )
+        target_balance_identity_matches = (
+            target.spare_part_id == balance.spare_part_id
+            and target.lot_id == balance.lot_id
+        )
+        destination_matches_balance = (
+            state_mutation.state_after["warehouse_id"]
+            == balance.warehouse_id
+            and state_mutation.state_after["location_id"]
+            == balance.location_id
+        )
+
+        if (
+            source_identity_matches
+            and target_balance_identity_matches
+            and destination_matches_balance
+        ):
+            return
+
+        conflict = ConflictError(
+            "serialized item relocation does not match source state or target balance",
+            code="INVENTORY_STATE_TARGET_MISMATCH",
+            details={
+                "balance_id": balance.id,
+                "serial_item_id": target.id,
+                "expected_target_warehouse_id": balance.warehouse_id,
+                "expected_target_location_id": balance.location_id,
+                "conflict_object": "serialized_item",
+                "retryable": False,
+            },
+        )
+        conflict.request_id = actor.request_id
+        raise conflict
 
     @staticmethod
     def _require_state_snapshot(
