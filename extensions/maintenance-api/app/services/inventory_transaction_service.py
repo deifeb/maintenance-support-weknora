@@ -190,6 +190,99 @@ class InventoryTransactionService:
             existing_transaction=transaction,
             validate_state_targets=validate_state_targets,
         )
+    def complete_preview_without_mutations(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        transaction: InventoryTransaction,
+        operation_type: str,
+        required_role: MaintenanceRole,
+        terminal_status: InventoryTerminalStatus,
+        reason: str,
+        reference_type: str | None = None,
+        reference_id: str | None = None,
+    ) -> InventoryTransactionRead:
+        self._require_role(actor, required_role)
+        if transaction.tenant_id != actor.tenant_id:
+            error = NotFoundError(
+                "inventory_transaction",
+                transaction.id,
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        if (
+            transaction.status != "PREVIEWED"
+            or transaction.operation_type != operation_type
+        ):
+            conflict = ConflictError(
+                "inventory operation state conflict",
+                code="INVENTORY_OPERATION_STATE_CONFLICT",
+                details={
+                    "transaction_id": transaction.id,
+                    "status": transaction.status,
+                    "operation_type": transaction.operation_type,
+                    "conflict_object": "inventory_transaction",
+                    "retryable": False,
+                },
+            )
+            conflict.request_id = actor.request_id
+            raise conflict
+
+        existing_entries = self.transaction_repository.list_entries(
+            session,
+            actor.tenant_id,
+            transaction.id,
+        )
+        if existing_entries:
+            conflict = ConflictError(
+                "zero-mutation terminalization requires zero ledger entries",
+                code="INVENTORY_OPERATION_STATE_CONFLICT",
+                details={
+                    "transaction_id": transaction.id,
+                    "entry_count": len(existing_entries),
+                    "conflict_object": "inventory_transaction",
+                    "retryable": False,
+                },
+            )
+            conflict.request_id = actor.request_id
+            raise conflict
+
+        clean_reason = self._normalize_reason(reason)
+        previous_snapshot = deepcopy(
+            transaction.response_snapshot_json
+        )
+        previous_extensions = (
+            previous_snapshot.get("_extensions")
+            if isinstance(previous_snapshot, dict)
+            else None
+        )
+
+        transaction.status = terminal_status
+        transaction.reason = clean_reason
+        transaction.reference_type = reference_type
+        transaction.reference_id = reference_id
+        transaction.version += 1
+        transaction.completed_at = utc_now()
+
+        response = self._read_transaction(
+            transaction,
+            [],
+        )
+        snapshot = response.model_dump(mode="json")
+        if isinstance(previous_extensions, dict):
+            snapshot["_extensions"] = deepcopy(
+                previous_extensions
+            )
+        self.transaction_repository.complete(
+            session,
+            transaction,
+            completed_at=transaction.completed_at,
+            response_snapshot=snapshot,
+        )
+        return response
+
     def _apply_quantity_operation(
         self,
         session: Session,
