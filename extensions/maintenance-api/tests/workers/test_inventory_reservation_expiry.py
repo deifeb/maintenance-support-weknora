@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import ModuleType
 
@@ -303,11 +303,12 @@ def test_manual_release_before_worker_does_not_double_unreserve(
     actor_contributor,
 ) -> None:
     expiry_api = _expiry_api()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)
     reservation, _, _ = _seed_expired_reservation(
         session,
         tenant_id=actor_contributor.tenant_id,
         suffix="MANUAL-WINS",
-        expires_at=datetime(2026, 8, 10, tzinfo=timezone.utc),
+        expires_at=expires_at,
     )
     service = InventoryReservationService()
     service.release(
@@ -321,7 +322,7 @@ def test_manual_release_before_worker_does_not_double_unreserve(
 
     result = expiry_api.expire_inventory_reservations(
         SessionLocal,
-        as_of=datetime(2026, 8, 11, tzinfo=timezone.utc),
+        as_of=expires_at + timedelta(days=1),
         batch_size=10,
     )
 
