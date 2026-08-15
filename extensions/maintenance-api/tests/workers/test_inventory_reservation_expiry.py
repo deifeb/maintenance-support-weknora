@@ -6,7 +6,7 @@ from decimal import Decimal
 from types import ModuleType
 
 import pytest
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, NotFoundError
 from app.db.session import SessionLocal
 from app.models import (
     InventoryBalance,
@@ -268,9 +268,12 @@ def test_repeated_worker_batch_is_idempotent(session) -> None:
         ) == 1
 
 
-def test_one_expiry_failure_does_not_stop_later_items(session) -> None:
+def test_one_expiry_failure_does_not_stop_later_items(
+    session,
+    monkeypatch,
+) -> None:
     expiry_api = _expiry_api()
-    broken, broken_line, _ = _seed_expired_reservation(
+    broken, _, _ = _seed_expired_reservation(
         session,
         tenant_id="tenant-a",
         suffix="FAIL-FIRST",
@@ -280,7 +283,36 @@ def test_one_expiry_failure_does_not_stop_later_items(session) -> None:
         tenant_id="tenant-a",
         suffix="FAIL-SECOND",
     )
-    broken_line.balance_id = 999999
+    original_expire = InventoryReservationService.expire
+
+    def fail_first_expire(
+        self,
+        service_session,
+        actor,
+        reservation_id,
+        *,
+        command,
+        idempotency_key,
+    ):
+        if reservation_id == broken.id:
+            raise NotFoundError(
+                "inventory_balance",
+                999999,
+            )
+        return original_expire(
+            self,
+            service_session,
+            actor,
+            reservation_id,
+            command=command,
+            idempotency_key=idempotency_key,
+        )
+
+    monkeypatch.setattr(
+        InventoryReservationService,
+        "expire",
+        fail_first_expire,
+    )
     session.commit()
 
     result = expiry_api.expire_inventory_reservations(

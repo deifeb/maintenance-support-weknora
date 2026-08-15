@@ -130,5 +130,5 @@ class InventoryTransactionRead(ORMModel):
     actor_roles: list[str] = Field(validation_alias="actor_roles_json")
     request_id: str
     version: int
-    completed_at: datetime
+    completed_at: datetime | None
     entries: list[InventoryLedgerEntryRead]

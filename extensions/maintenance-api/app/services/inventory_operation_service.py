@@ -207,11 +207,13 @@ class InventoryOperationService:
             payload
         )
         self._require_confirmation_token(
+            actor,
             transaction,
             confirmation_token,
         )
         self._require_confirmation_not_expired(
-            transaction
+            actor,
+            transaction,
         )
 
         preview_command = self._preview_command(
@@ -1452,6 +1454,7 @@ class InventoryOperationService:
 
     @staticmethod
     def _require_confirmation_token(
+        actor: ActorContext,
         transaction: InventoryTransaction,
         token: str,
     ) -> None:
@@ -1467,30 +1470,56 @@ class InventoryOperationService:
                 presented_hash,
             )
         ):
-            raise BusinessValidationError(
-                "confirmation token is invalid"
+            error = BusinessValidationError(
+                "confirmation token is invalid",
+                code="INVENTORY_CONFIRMATION_TOKEN_INVALID",
+                details={
+                    "conflict_object": "inventory_transaction",
+                    "object_id": transaction.id,
+                    "retryable": False,
+                },
             )
+            error.request_id = actor.request_id
+            raise error
 
     @classmethod
     def _require_confirmation_not_expired(
         cls,
+        actor: ActorContext,
         transaction: InventoryTransaction,
     ) -> None:
         expires_at = transaction.confirmation_expires_at
         if expires_at is None:
-            raise ConflictError(
+            error = ConflictError(
                 "confirmation expiry is unavailable",
+                code="INVENTORY_OPERATION_STATE_CONFLICT",
                 details={
-                    "transaction_id": transaction.id,
                     "conflict_object": "inventory_transaction",
+                    "object_id": transaction.id,
+                    "expected_version": None,
+                    "actual_version": transaction.version,
+                    "affected_lines": [],
+                    "retryable": False,
+                    "suggested_action": (
+                        "preview the inventory operation again"
+                    ),
+                },
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        if cls._as_utc(expires_at) <= utc_now():
+            error = BusinessValidationError(
+                "confirmation token has expired",
+                code="INVENTORY_CONFIRMATION_EXPIRED",
+                details={
+                    "conflict_object": "inventory_transaction",
+                    "object_id": transaction.id,
                     "retryable": False,
                 },
             )
-
-        if cls._as_utc(expires_at) <= utc_now():
-            raise BusinessValidationError(
-                "confirmation token has expired"
-            )
+            error.request_id = actor.request_id
+            raise error
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
