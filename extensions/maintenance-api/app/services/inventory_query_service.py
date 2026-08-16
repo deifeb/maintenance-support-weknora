@@ -5,7 +5,7 @@ from decimal import Decimal
 from math import ceil
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
@@ -43,6 +43,36 @@ from app.security.actor import ActorContext
 SUMMARY_PART_ID_CHUNK_SIZE = 500
 _ZERO = Decimal("0.0000")
 
+_TRANSACTION_SORT_FIELDS = {
+    "id": InventoryTransaction.id,
+    "operation_type": InventoryTransaction.operation_type,
+    "status": InventoryTransaction.status,
+    "completed_at": InventoryTransaction.completed_at,
+}
+_RESERVATION_SORT_FIELDS = {
+    "id": InventoryReservation.id,
+    "status": InventoryReservation.status,
+    "expires_at": InventoryReservation.expires_at,
+}
+_TRANSFER_SORT_FIELDS = {
+    "id": InventoryTransfer.id,
+    "status": InventoryTransfer.status,
+    "dispatched_at": InventoryTransfer.dispatched_at,
+    "completed_at": InventoryTransfer.completed_at,
+}
+_STOCKTAKE_SORT_FIELDS = {
+    "id": InventoryStocktake.id,
+    "status": InventoryStocktake.status,
+    "snapshot_at": InventoryStocktake.snapshot_at,
+    "confirmed_at": InventoryStocktake.confirmed_at,
+}
+
+_NULLABLE_TRANSACTION_SORTS = frozenset({"completed_at"})
+_NULLABLE_RESERVATION_SORTS = frozenset({"expires_at"})
+_NULLABLE_TRANSFER_SORTS = frozenset({"dispatched_at", "completed_at"})
+_NULLABLE_STOCKTAKE_SORTS = frozenset({"confirmed_at"})
+_SORT_ORDERS = frozenset({"asc", "desc"})
+
 
 class InventoryQueryService:
     def __init__(
@@ -63,6 +93,8 @@ class InventoryQueryService:
         location_id: int | None = None,
         lot_id: int | None = None,
         serial_item_id: int | None = None,
+        sort_by: str = "id",
+        sort_order: str = "asc",
     ) -> PageData[InventoryBalanceRead]:
         balances, total = self.repository.list_balances(
             session,
@@ -74,6 +106,8 @@ class InventoryQueryService:
             location_id=location_id,
             lot_id=lot_id,
             serial_item_id=serial_item_id,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
         serial_ids = self.repository.serial_item_ids_by_balance(
             session,
@@ -131,13 +165,40 @@ class InventoryQueryService:
         *,
         page: int,
         page_size: int,
+        operation_type: str | None = None,
+        status: str | None = None,
+        reference_type: str | None = None,
+        reference_id: str | None = None,
+        sort_by: str = "id",
+        sort_order: str = "asc",
     ) -> PageData[InventoryTransactionRead]:
+        conditions = []
+        if operation_type is not None:
+            conditions.append(
+                InventoryTransaction.operation_type == operation_type
+            )
+        if status is not None:
+            conditions.append(InventoryTransaction.status == status)
+        if reference_type is not None:
+            conditions.append(
+                InventoryTransaction.reference_type == reference_type
+            )
+        if reference_id is not None:
+            conditions.append(
+                InventoryTransaction.reference_id == reference_id
+            )
+
         rows, total = self._list_tenant_rows(
             session,
             InventoryTransaction,
             actor.tenant_id,
             page=page,
             page_size=page_size,
+            conditions=conditions,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            sort_fields=_TRANSACTION_SORT_FIELDS,
+            nullable_sort_fields=_NULLABLE_TRANSACTION_SORTS,
         )
         entries_by_transaction = self._group_child_rows(
             session,
@@ -196,13 +257,31 @@ class InventoryQueryService:
         *,
         page: int,
         page_size: int,
+        status: str | None = None,
+        owner_type: str | None = None,
+        owner_id: str | None = None,
+        sort_by: str = "id",
+        sort_order: str = "asc",
     ) -> PageData[InventoryReservationRead]:
+        conditions = []
+        if status is not None:
+            conditions.append(InventoryReservation.status == status)
+        if owner_type is not None:
+            conditions.append(InventoryReservation.owner_type == owner_type)
+        if owner_id is not None:
+            conditions.append(InventoryReservation.owner_id == owner_id)
+
         rows, total = self._list_tenant_rows(
             session,
             InventoryReservation,
             actor.tenant_id,
             page=page,
             page_size=page_size,
+            conditions=conditions,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            sort_fields=_RESERVATION_SORT_FIELDS,
+            nullable_sort_fields=_NULLABLE_RESERVATION_SORTS,
         )
         lines_by_reservation = self._group_child_rows(
             session,
@@ -261,13 +340,53 @@ class InventoryQueryService:
         *,
         page: int,
         page_size: int,
+        status: str | None = None,
+        source_warehouse_id: int | None = None,
+        source_location_id: int | None = None,
+        target_warehouse_id: int | None = None,
+        target_location_id: int | None = None,
+        reference_type: str | None = None,
+        reference_id: str | None = None,
+        sort_by: str = "id",
+        sort_order: str = "asc",
     ) -> PageData[TransferRead]:
+        conditions = []
+        if status is not None:
+            conditions.append(InventoryTransfer.status == status)
+        if source_warehouse_id is not None:
+            conditions.append(
+                InventoryTransfer.source_warehouse_id == source_warehouse_id
+            )
+        if source_location_id is not None:
+            conditions.append(
+                InventoryTransfer.source_location_id == source_location_id
+            )
+        if target_warehouse_id is not None:
+            conditions.append(
+                InventoryTransfer.target_warehouse_id == target_warehouse_id
+            )
+        if target_location_id is not None:
+            conditions.append(
+                InventoryTransfer.target_location_id == target_location_id
+            )
+        if reference_type is not None:
+            conditions.append(
+                InventoryTransfer.reference_type == reference_type
+            )
+        if reference_id is not None:
+            conditions.append(InventoryTransfer.reference_id == reference_id)
+
         rows, total = self._list_tenant_rows(
             session,
             InventoryTransfer,
             actor.tenant_id,
             page=page,
             page_size=page_size,
+            conditions=conditions,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            sort_fields=_TRANSFER_SORT_FIELDS,
+            nullable_sort_fields=_NULLABLE_TRANSFER_SORTS,
         )
         lines_by_transfer = self._group_child_rows(
             session,
@@ -326,13 +445,31 @@ class InventoryQueryService:
         *,
         page: int,
         page_size: int,
+        status: str | None = None,
+        warehouse_id: int | None = None,
+        location_id: int | None = None,
+        sort_by: str = "id",
+        sort_order: str = "asc",
     ) -> PageData[InventoryStocktakeRead]:
+        conditions = []
+        if status is not None:
+            conditions.append(InventoryStocktake.status == status)
+        if warehouse_id is not None:
+            conditions.append(InventoryStocktake.warehouse_id == warehouse_id)
+        if location_id is not None:
+            conditions.append(InventoryStocktake.location_id == location_id)
+
         rows, total = self._list_tenant_rows(
             session,
             InventoryStocktake,
             actor.tenant_id,
             page=page,
             page_size=page_size,
+            conditions=conditions,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            sort_fields=_STOCKTAKE_SORT_FIELDS,
+            nullable_sort_fields=_NULLABLE_STOCKTAKE_SORTS,
         )
         lines_by_stocktake = self._group_child_rows(
             session,
@@ -507,12 +644,40 @@ class InventoryQueryService:
         *,
         page: int,
         page_size: int,
+        conditions: Sequence[Any] = (),
+        sort_by: str = "id",
+        sort_order: str = "asc",
+        sort_fields: dict[str, Any],
+        nullable_sort_fields: frozenset[str] = frozenset(),
     ) -> tuple[list[Any], int]:
-        condition = model.tenant_id == tenant_id
+        sort_expression = sort_fields.get(sort_by)
+        if sort_expression is None:
+            raise ValueError(f"unsupported sort_by: {sort_by}")
+        if sort_order not in _SORT_ORDERS:
+            raise ValueError(f"unsupported sort_order: {sort_order}")
+
+        all_conditions = [model.tenant_id == tenant_id, *conditions]
+        ordering: list[Any] = []
+        if sort_by in nullable_sort_fields:
+            ordering.append(
+                case((sort_expression.is_(None), 1), else_=0).asc()
+            )
+
+        primary = (
+            sort_expression.desc()
+            if sort_order == "desc"
+            else sort_expression.asc()
+        )
+        ordering.append(primary)
+        if sort_by != "id":
+            ordering.append(
+                model.id.desc() if sort_order == "desc" else model.id.asc()
+            )
+
         statement = (
             select(model)
-            .where(condition)
-            .order_by(model.id)
+            .where(*all_conditions)
+            .order_by(*ordering)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -520,7 +685,7 @@ class InventoryQueryService:
             session.scalar(
                 select(func.count())
                 .select_from(model)
-                .where(condition)
+                .where(*all_conditions)
             )
             or 0
         )

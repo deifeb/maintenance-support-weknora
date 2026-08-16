@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Select, and_, func, or_, select
+from sqlalchemy import Select, and_, case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.exceptions import NotFoundError
@@ -50,6 +50,8 @@ class InventoryLedgerRepository:
         location_id: int | None = None,
         lot_id: int | None = None,
         serial_item_id: int | None = None,
+        sort_by: str = "id",
+        sort_order: str = "asc",
     ) -> tuple[list[InventoryBalance], int]:
         conditions = self._balance_conditions(
             tenant_id,
@@ -59,15 +61,59 @@ class InventoryLedgerRepository:
             lot_id=lot_id,
             serial_item_id=serial_item_id,
         )
+        available_quantity = (
+            InventoryBalance.on_hand_quantity
+            - InventoryBalance.reserved_quantity
+            - InventoryBalance.damaged_quantity
+            - InventoryBalance.quarantined_quantity
+        )
+        sort_fields = {
+            "id": InventoryBalance.id,
+            "warehouse_id": InventoryBalance.warehouse_id,
+            "spare_part_id": InventoryBalance.spare_part_id,
+            "location_id": InventoryBalance.location_id,
+            "lot_id": InventoryBalance.lot_id,
+            "on_hand_quantity": InventoryBalance.on_hand_quantity,
+            "reserved_quantity": InventoryBalance.reserved_quantity,
+            "available_quantity": available_quantity,
+        }
+        sort_expression = sort_fields.get(sort_by)
+        if sort_expression is None:
+            raise ValueError(f"unsupported sort_by: {sort_by}")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError(f"unsupported sort_order: {sort_order}")
+
+        ordering = []
+        if sort_by == "lot_id":
+            ordering.append(
+                case((sort_expression.is_(None), 1), else_=0).asc()
+            )
+        ordering.append(
+            sort_expression.desc()
+            if sort_order == "desc"
+            else sort_expression.asc()
+        )
+        if sort_by != "id":
+            ordering.append(
+                InventoryBalance.id.desc()
+                if sort_order == "desc"
+                else InventoryBalance.id.asc()
+            )
+
         statement = (
             select(InventoryBalance)
             .where(*conditions)
-            .order_by(InventoryBalance.id)
+            .order_by(*ordering)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
         total = int(
-            session.scalar(select(func.count()).select_from(InventoryBalance).where(*conditions)) or 0
+            session.scalar(
+                select(func.count())
+                .select_from(InventoryBalance)
+                .where(*conditions)
+            )
+            or 0
         )
         return list(session.scalars(statement).all()), total
 
