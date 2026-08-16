@@ -1074,3 +1074,176 @@ def test_balance_query_service_rejects_unknown_sort_order(
             sort_by="id",
             sort_order="sideways",
         )
+
+
+# Plan 05-4B Inventory Lot Concurrency Read Contract Amendment Task 1 RED
+
+
+def test_balance_list_exposes_matching_lot_concurrency_state(
+    session,
+    actor_context,
+) -> None:
+    balance, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-LIST",
+        with_serial=True,
+    )
+    assert balance.lot_id is not None
+    lot = session.get(InventoryLot, balance.lot_id)
+    assert lot is not None
+    lot.version = 7
+    lot.is_frozen = False
+    session.commit()
+
+    page = inventory_query_service.list_balances(
+        session,
+        actor_context(),
+        page=1,
+        page_size=20,
+        lot_id=lot.id,
+        sort_by="id",
+        sort_order="asc",
+    )
+
+    item = next(item for item in page.items if item.id == balance.id)
+    assert item.lot_id == lot.id
+    assert item.lot_version == 7
+    assert item.lot_is_frozen is False
+
+
+def test_balance_detail_exposes_matching_frozen_lot_concurrency_state(
+    session,
+    actor_context,
+) -> None:
+    balance, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-DETAIL",
+        with_serial=True,
+    )
+    assert balance.lot_id is not None
+    lot = session.get(InventoryLot, balance.lot_id)
+    assert lot is not None
+    lot.version = 9
+    lot.is_frozen = True
+    session.commit()
+
+    item = inventory_query_service.get_balance(
+        session,
+        actor_context(),
+        balance.id,
+    )
+
+    assert item.lot_id == lot.id
+    assert item.lot_version == 9
+    assert item.lot_is_frozen is True
+
+
+def test_balance_without_lot_exposes_null_lot_concurrency_state(
+    session,
+    actor_context,
+) -> None:
+    balance, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-NONE",
+    )
+    assert balance.lot_id is None
+    session.commit()
+
+    item = inventory_query_service.get_balance(
+        session,
+        actor_context(),
+        balance.id,
+    )
+
+    assert item.lot_id is None
+    assert item.lot_version is None
+    assert item.lot_is_frozen is None
+
+
+def test_balance_lot_concurrency_hydration_fails_closed_for_other_tenant(
+    session,
+    actor_context,
+) -> None:
+    local, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-TENANT-LOCAL",
+    )
+    foreign, _ = seed_balance(
+        session,
+        tenant_id="tenant-b",
+        suffix="LOT-CONCURRENCY-TENANT-FOREIGN",
+        with_serial=True,
+    )
+    assert local.lot_id is None
+    assert foreign.lot_id is not None
+    foreign_lot = session.get(InventoryLot, foreign.lot_id)
+    assert foreign_lot is not None
+    foreign_lot.version = 13
+    foreign_lot.is_frozen = True
+    local.lot_id = foreign_lot.id
+    session.commit()
+
+    item = inventory_query_service.get_balance(
+        session,
+        actor_context(tenant_id="tenant-a"),
+        local.id,
+    )
+
+    assert item.lot_id == foreign_lot.id
+    assert item.lot_version is None
+    assert item.lot_is_frozen is None
+
+
+def test_balance_lot_concurrency_hydration_fails_closed_for_spare_part_mismatch_without_changing_page(
+    session,
+    actor_context,
+) -> None:
+    mismatched, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-PART-MISMATCH",
+    )
+    matching, _ = seed_balance(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-PART-MATCH",
+        with_serial=True,
+    )
+    assert mismatched.lot_id is None
+    assert matching.lot_id is not None
+    lot = session.get(InventoryLot, matching.lot_id)
+    assert lot is not None
+    assert lot.spare_part_id == matching.spare_part_id
+    assert lot.spare_part_id != mismatched.spare_part_id
+    lot.version = 17
+    lot.is_frozen = False
+    mismatched.lot_id = lot.id
+    session.commit()
+
+    page = inventory_query_service.list_balances(
+        session,
+        actor_context(),
+        page=1,
+        page_size=2,
+        sort_by="id",
+        sort_order="asc",
+    )
+
+    assert page.total == 2
+    assert page.page == 1
+    assert page.page_size == 2
+    assert page.pages == 1
+    assert [item.id for item in page.items] == sorted(
+        [mismatched.id, matching.id]
+    )
+
+    mismatch_item = next(
+        item for item in page.items if item.id == mismatched.id
+    )
+    assert mismatch_item.lot_id == lot.id
+    assert mismatch_item.lot_version is None
+    assert mismatch_item.lot_is_frozen is None

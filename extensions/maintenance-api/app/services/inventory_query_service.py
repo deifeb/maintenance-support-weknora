@@ -109,19 +109,21 @@ class InventoryQueryService:
             sort_by=sort_by,
             sort_order=sort_order,
         )
+        lot_states = self.repository.lot_state_by_balance(
+            session,
+            actor.tenant_id,
+            balances,
+        )
         serial_ids = self.repository.serial_item_ids_by_balance(
             session,
             actor.tenant_id,
             balances,
         )
         items = [
-            InventoryBalanceRead.model_validate(balance).model_copy(
-                update={
-                    "serial_item_ids": serial_ids.get(balance.id, []),
-                    "serial_item_id": self._single_serial_id(
-                        serial_ids.get(balance.id, [])
-                    ),
-                }
+            self._balance_read(
+                balance,
+                serial_item_ids=serial_ids.get(balance.id, []),
+                lot_state=lot_states.get(balance.id),
             )
             for balance in balances
         ]
@@ -145,17 +147,21 @@ class InventoryQueryService:
                 balance_id,
             )
 
+        lot_states = self.repository.lot_state_by_balance(
+            session,
+            actor.tenant_id,
+            [balance],
+        )
         serial_ids = self.repository.serial_item_ids_by_balance(
             session,
             actor.tenant_id,
             [balance],
         )
         ids = serial_ids.get(balance.id, [])
-        return InventoryBalanceRead.model_validate(balance).model_copy(
-            update={
-                "serial_item_ids": ids,
-                "serial_item_id": self._single_serial_id(ids),
-            }
+        return self._balance_read(
+            balance,
+            serial_item_ids=ids,
+            lot_state=lot_states.get(balance.id),
         )
 
     def list_transactions(
@@ -891,6 +897,32 @@ class InventoryQueryService:
                 )
                 for line in sorted(lines, key=lambda item: item.id)
             ),
+        )
+
+    @staticmethod
+    def _balance_read(
+        balance: Any,
+        *,
+        serial_item_ids: list[int],
+        lot_state: tuple[int, bool] | None,
+    ) -> InventoryBalanceRead:
+        return InventoryBalanceRead.model_validate(balance).model_copy(
+            update={
+                "serial_item_ids": serial_item_ids,
+                "serial_item_id": InventoryQueryService._single_serial_id(
+                    serial_item_ids
+                ),
+                "lot_version": (
+                    lot_state[0]
+                    if lot_state is not None
+                    else None
+                ),
+                "lot_is_frozen": (
+                    lot_state[1]
+                    if lot_state is not None
+                    else None
+                ),
+            }
         )
 
     @staticmethod

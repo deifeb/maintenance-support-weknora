@@ -623,6 +623,51 @@ class InventoryLedgerRepository:
             .exists()
         )
 
+    def lot_state_by_balance(
+        self,
+        session: Session,
+        tenant_id: str,
+        balances: Sequence[InventoryBalance],
+    ) -> dict[int, tuple[int, bool]]:
+        balance_ids = sorted(
+            {
+                balance.id
+                for balance in balances
+                if balance.lot_id is not None
+            }
+        )
+        if not balance_ids:
+            return {}
+
+        rows = session.execute(
+            select(
+                InventoryBalance.id,
+                InventoryLot.version,
+                InventoryLot.is_frozen,
+            )
+            .join(
+                InventoryLot,
+                and_(
+                    InventoryLot.tenant_id == tenant_id,
+                    InventoryLot.id == InventoryBalance.lot_id,
+                    InventoryLot.spare_part_id
+                    == InventoryBalance.spare_part_id,
+                ),
+            )
+            .where(
+                InventoryBalance.tenant_id == tenant_id,
+                InventoryBalance.id.in_(balance_ids),
+            )
+            .order_by(InventoryBalance.id)
+        )
+        return {
+            int(balance_id): (
+                int(lot_version),
+                bool(lot_is_frozen),
+            )
+            for balance_id, lot_version, lot_is_frozen in rows
+        }
+
     def serial_item_ids_by_balance(
         self,
         session: Session,

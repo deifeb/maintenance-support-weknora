@@ -21,6 +21,8 @@ class InventoryBalanceRead(ORMModel):
     quarantined_quantity: Decimal
     in_transit_quantity: Decimal
     version: int
+    lot_version: int | None = Field(default=None, gt=0)
+    lot_is_frozen: bool | None = None
 
     @computed_field
     @property

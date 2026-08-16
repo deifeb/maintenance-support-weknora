@@ -912,3 +912,130 @@ def test_reservation_list_http_keeps_null_expiry_last(
         late.id,
         null_expiry.id,
     ]
+
+
+# Plan 05-4B Inventory Lot Concurrency Read Contract Amendment Task 1 RED
+
+
+def test_balance_list_http_exposes_lot_concurrency_state(
+    client,
+    session,
+    internal_auth_headers,
+) -> None:
+    facts = _seed_balance_facts(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-LIST",
+    )
+    lot = facts["lot"]
+    lot.version = 7
+    lot.is_frozen = False
+    session.commit()
+
+    response = client.get(
+        READ_LIST_PATHS["balances"],
+        params={
+            "warehouse_id": facts["warehouse"].id,
+            "spare_part_id": facts["spare_part"].id,
+            "location_id": facts["source_location"].id,
+            "lot_id": lot.id,
+            "page": 1,
+            "page_size": 20,
+            "sort_by": "id",
+            "sort_order": "asc",
+        },
+        headers=_headers(
+            internal_auth_headers,
+            role=MaintenanceRole.VIEWER,
+            request_id="lot-concurrency-list",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert item["id"] == facts["balance"].id
+    assert item["lot_id"] == lot.id
+    assert item["lot_version"] == 7
+    assert item["lot_is_frozen"] is False
+    assert "expiry_date" not in item
+    assert "quality_status" not in item
+    assert "freeze_reason" not in item
+
+
+def test_balance_detail_http_exposes_frozen_lot_concurrency_state(
+    client,
+    session,
+    internal_auth_headers,
+) -> None:
+    facts = _seed_balance_facts(
+        session,
+        tenant_id="tenant-a",
+        suffix="LOT-CONCURRENCY-DETAIL",
+    )
+    lot = facts["lot"]
+    lot.version = 9
+    lot.is_frozen = True
+    session.commit()
+
+    response = client.get(
+        READ_DETAIL_PATHS["balances"].format(
+            identifier=facts["balance"].id,
+        ),
+        headers=_headers(
+            internal_auth_headers,
+            role=MaintenanceRole.VIEWER,
+            request_id="lot-concurrency-detail",
+        ),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["id"] == facts["balance"].id
+    assert data["lot_id"] == lot.id
+    assert data["lot_version"] == 9
+    assert data["lot_is_frozen"] is True
+
+
+def test_balance_openapi_adds_only_lot_concurrency_read_fields(
+    client,
+) -> None:
+    openapi = client.app.openapi()
+    balance_schema = openapi["components"]["schemas"]["InventoryBalanceRead"]
+    properties = balance_schema["properties"]
+
+    assert "lot_version" in properties
+    assert "lot_is_frozen" in properties
+
+    lot_version_types = {
+        branch.get("type")
+        for branch in properties["lot_version"].get("anyOf", [])
+    }
+    lot_is_frozen_types = {
+        branch.get("type")
+        for branch in properties["lot_is_frozen"].get("anyOf", [])
+    }
+    assert lot_version_types == {"integer", "null"}
+    assert lot_is_frozen_types == {"boolean", "null"}
+
+    assert "/api/v1/inventory/lots/{lot_id}" not in openapi["paths"]
+
+    parameters = {
+        parameter["name"]: parameter
+        for parameter in openapi["paths"][
+            READ_LIST_PATHS["balances"]
+        ]["get"]["parameters"]
+        if parameter.get("in") == "query"
+    }
+    assert set(parameters) == EXPECTED_LIST_QUERY_PARAMS["balances"]
+    assert "lot_version" not in parameters
+    assert "lot_is_frozen" not in parameters
+
+    sort_values = _openapi_enum_values(
+        openapi,
+        parameters["sort_by"]["schema"],
+    )
+    assert sort_values == EXPECTED_QUERY_ENUMS["balances"]["sort_by"]
+    assert "lot_version" not in sort_values
+    assert "lot_is_frozen" not in sort_values
