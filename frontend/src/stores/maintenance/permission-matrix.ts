@@ -12,6 +12,10 @@ export interface MaintenancePermissions {
   transferInventory: boolean
   adjustInventory: boolean
   confirmHighRisk: boolean
+  freezeInventory: boolean
+  reverseInventory: boolean
+  createStocktake: boolean
+  confirmStocktake: boolean
   publishRules: boolean
   editDemandList: boolean
   publishDemandList: boolean
@@ -31,6 +35,10 @@ const DENIED_PERMISSIONS: Readonly<MaintenancePermissions> = {
   transferInventory: false,
   adjustInventory: false,
   confirmHighRisk: false,
+  freezeInventory: false,
+  reverseInventory: false,
+  createStocktake: false,
+  confirmStocktake: false,
   publishRules: false,
   editDemandList: false,
   publishDemandList: false,
@@ -50,6 +58,7 @@ const CONTRIBUTOR_PERMISSIONS: Readonly<MaintenancePermissions> = {
   handleReview: true,
   reserveInventory: true,
   issueReturnInventory: true,
+  createStocktake: true,
   editDemandList: true,
 }
 
@@ -58,6 +67,9 @@ const ADMIN_PERMISSIONS: Readonly<MaintenancePermissions> = {
   transferInventory: true,
   adjustInventory: true,
   confirmHighRisk: true,
+  freezeInventory: true,
+  reverseInventory: true,
+  confirmStocktake: true,
   publishRules: true,
   publishDemandList: true,
 }
@@ -107,6 +119,10 @@ export function permissionsForAuth(
     transferInventory: rolePermissions.transferInventory && canAdminister,
     adjustInventory: rolePermissions.adjustInventory && canAdminister,
     confirmHighRisk: rolePermissions.confirmHighRisk && canAdminister,
+    freezeInventory: rolePermissions.freezeInventory && canAdminister,
+    reverseInventory: rolePermissions.reverseInventory && canAdminister,
+    createStocktake: rolePermissions.createStocktake && canMaintain,
+    confirmStocktake: rolePermissions.confirmStocktake && canAdminister,
     publishRules: rolePermissions.publishRules && canAdminister,
     editDemandList: rolePermissions.editDemandList && canMaintain,
     publishDemandList: (
