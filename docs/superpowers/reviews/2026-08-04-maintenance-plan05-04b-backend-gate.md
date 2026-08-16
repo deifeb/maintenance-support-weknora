@@ -1,17 +1,21 @@
 # Plan 05-4B Backend Gate 1 Review
 
 Generated from fresh local Gate output at: 2026-08-15T20:23:36+08:00
+Updated with fresh Real PostgreSQL Gate H3-H1 evidence on 2026-08-16.
 
 ## Status
 
 - Backend Gate 1 status: closed
 - Local SQLite backend integration status: verified
-- Production deployment status: blocked until PostgreSQL gate passes
-- Real PostgreSQL Gate: NOT RUN
+- Real PostgreSQL Gate: VERIFIED
+- PostgreSQL deployment blocker: CLOSED
+- Production deployment status: PostgreSQL Gate blocker closed; later Plan 05-4B frontend/final closure remains separately gated
 - Frontend Inventory Gap: NOT STARTED
 - Branch: codex/maintenance-plan05-4b
-- HEAD: c6603ad90a6b5dee75576215770004ba9f1378f2
-- Staged changes at Gate completion: EMPTY
+- HEAD: 158a2787dc54e22bd1fa02702f17908ad419d3ea
+- Working tree at Real PostgreSQL Gate completion: CLEAN
+- Staged changes at Real PostgreSQL Gate completion: EMPTY
+- Local/tracking ahead-behind at Real PostgreSQL Gate completion: 0/0
 
 ## Gate Scope
 
@@ -152,6 +156,146 @@ Result:
 
 No historical result was substituted for this run.
 
+## Real PostgreSQL Gate Verification
+
+The isolated Real PostgreSQL Gate was executed after Backend Gate 1 on the same published branch/HEAD. The Gate used only the disposable database `maintenance_plan05_4b_pg_gate`; repository production and tracked test files were not modified by the PostgreSQL harness.
+
+### Runtime / Driver Proof
+
+Verified runtime facts:
+
+- PostgreSQL server: `17.11`
+- Server version number: `170011`
+- Server encoding: `UTF8`
+- SQLAlchemy dialect: `postgresql`
+- SQLAlchemy driver: `psycopg`
+- Psycopg version: `3.3.4`
+- Gate database: `maintenance_plan05_4b_pg_gate`
+- Runtime URL scheme: `postgresql+psycopg://`
+- SQLite fallback during this Gate: NO
+
+### Real PostgreSQL Alembic Round-Trip
+
+Observed single Alembic head:
+
+```text
+20260803_11 (head)
+```
+
+Real PostgreSQL migration sequence:
+
+```text
+upgrade -> 20260803_11
+downgrade 20260803_11 -> 20260803_10
+re-upgrade 20260803_10 -> 20260803_11
+```
+
+Result: PASS.
+
+Schema facts verified on PostgreSQL:
+
+- Plan 05-4B reservation / transfer / stocktake tables: `6`
+- PostgreSQL constraints observed on those six tables: `52`
+- Six Plan 05-4B tables absent after downgrade to `20260803_10`: VERIFIED
+- Final `alembic_version`: `20260803_11`
+
+### H3-H1 Confirmation-Error Semantic Preflight
+
+The three parameterized confirmation-error cases were executed first on real PostgreSQL.
+
+Result:
+
+```text
+3 passed, 1 warning
+```
+
+Temporary PostgreSQL fixture adaptation was permitted only for this exact semantic identity:
+
+```text
+test_confirm_execute_stable_confirmation_errors|code=INVENTORY_TRANSACTION_VERSION_CONFLICT|status=409
+```
+
+Evidence was transported through temporary harness evidence files and compared by exact string value, not parsed from pytest human-readable stdout.
+
+Verified:
+
+- exact target semantic identity: VERIFIED
+- non-target confirmation-error cases adapted: NO
+- SQLite-only skip count during this preflight: `0`
+
+### Real PostgreSQL Concurrency / Locking Gate
+
+Result:
+
+```text
+5 passed, 1 warning
+```
+
+Verified real PostgreSQL contracts include:
+
+- runtime dialect/database proof;
+- same-balance competition serializes to one winner plus stable `INVENTORY_VERSION_CONFLICT`;
+- concurrent same idempotency key resolves to one persisted receipt/replay;
+- opposite input ordering across two balances completes without deadlock through stable balance lock ordering;
+- cross-tenant balance mutation is rejected.
+
+### Focused Inventory Backend on Real PostgreSQL
+
+The approved 27-file Inventory backend selection was executed through the temporary PostgreSQL harness.
+
+Result:
+
+```text
+368 passed, 7 skipped, 1 warning
+```
+
+The seven skipped tests are the exact SQLite-only model contracts whose helper executes `PRAGMA foreign_keys = ON`. They remain covered by the existing SQLite backend Gate and were intentionally excluded from PostgreSQL runtime execution.
+
+H3-H1 evidence verified:
+
+- SQLite-only skip count: exactly `7`
+- PostgreSQL `varchar(64)` fixture adaptation identity: exact approved confirmation-error case only
+- unexpected PostgreSQL fixture adaptations: NONE
+- temporary read-only `app/` source mirror for static route checks: VERIFIED
+
+The focused run includes the four Inventory integration workflows and the ledger append-only repository contract. Final H3-H1 evidence records both integration workflows and ledger append-only as PASS on the real PostgreSQL harness.
+
+### Cleanup / Repository Integrity
+
+Before cleanup:
+
+- final Gate database business-row count across Inventory reservation/transfer/stocktake transaction/ledger facts: `0`
+- final Alembic revision: `20260803_11`
+- working tree: CLEAN
+- staged: EMPTY
+- local/tracking ahead-behind: `0/0`
+- `git diff --check`: PASS
+
+Cleanup then:
+
+- cleared Gate `statement_timeout` / `lock_timeout`;
+- verified prepared transactions: NONE;
+- found no Gate database sessions requiring termination;
+- executed `dropdb --force` successfully with exit code `0`;
+- verified `maintenance_plan05_4b_pg_gate`: ABSENT;
+- removed the temporary PostgreSQL pytest harness and temporary evidence files;
+- restored/cleared transient PostgreSQL credentials and environment.
+
+After cleanup:
+
+- Gate database: ABSENT
+- temporary PostgreSQL harness: ABSENT
+- working tree: CLEAN
+- staged: EMPTY
+- local/tracking ahead-behind: `0/0`
+- `git diff --check`: PASS
+- repository writes by PostgreSQL Gate harness: NO
+- commit: NO
+- push: NO
+- PR update: NO
+- merge: NO
+- Frontend Inventory Gap: NOT STARTED
+
 ## Contract Traceability
 
 - SQLite deterministic concurrency / fixed mutation ordering: mutation-plan, transaction-service, transfer and stocktake focused tests.
@@ -264,16 +408,21 @@ G1 fixed a cross-module validation-contract regression in `app/core/exceptions.p
 
 T1 updated only `TENANT_TABLES` in `tests/models/test_tenant_models.py` to include the six Plan 05-4B reservation, transfer, and stocktake tables already present in `Base.metadata`. T1 changed no production code.
 
-## Residual Risks / Unexecuted Verification
+## Residual Risks / Remaining Work
 
-1. Real PostgreSQL concurrency/locking Gate has NOT been executed.
-2. Therefore production deployment remains blocked.
-3. PostgreSQL DDL compilation is covered locally, but it is not a substitute for a real PostgreSQL runtime Gate.
-4. Frontend Inventory Gap Task 11+ has not started.
-5. No stage, commit, push, PR update, merge, or frontend work was performed by this Gate.
+1. Real PostgreSQL runtime, migration, concurrency/locking, idempotency, tenant isolation, integration, and ledger evidence is VERIFIED.
+2. The PostgreSQL deployment blocker is CLOSED.
+3. Frontend Inventory Gap Task 11+ has not started.
+4. Final Plan 05-4B frontend/integration closure remains separately gated and is not implied by PostgreSQL Gate completion.
+5. The PostgreSQL Gate harness intentionally skipped exactly seven SQLite-only `PRAGMA foreign_keys` model tests; those contracts remain covered by the existing SQLite backend Gate.
+6. No commit, push, PR update, merge, or frontend work was performed by the Real PostgreSQL Gate or this evidence review update.
 
 ## Gate Decision
 
-Backend Gate 1 is locally closed for SQLite-backed development and the API contract is frozen for the next approved frontend task.
+Backend Gate 1 remains closed and its API contract remains frozen.
 
-**Production deployment status: blocked until PostgreSQL gate passes.**
+The Real PostgreSQL Gate is VERIFIED on PostgreSQL 17.11 with psycopg 3.3.4. The required real PostgreSQL migration round-trip, concurrency/locking, idempotency, tenant-isolation, focused Inventory backend, integration, ledger, cleanup, and repository-integrity evidence has passed.
+
+**PostgreSQL deployment blocker: CLOSED.**
+
+Frontend Inventory Gap remains NOT STARTED. Frontend/final Plan 05-4B closure requires separate approval and verification.
