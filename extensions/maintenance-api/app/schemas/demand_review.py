@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.models.enums import (
     DemandReviewDecisionStatus,
@@ -19,6 +25,93 @@ class DemandReviewRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     expected_source_version: int = Field(ge=1)
+
+
+DecisionAction = Literal["ACCEPTED", "REJECTED", "EDIT_ACCEPTED"]
+
+
+def _normalize_reason(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _validate_decision_shape(
+    *,
+    action: DecisionAction,
+    final_quantity: Decimal | None,
+    reason: str | None,
+) -> None:
+    if action in {"ACCEPTED", "REJECTED"} and final_quantity is not None:
+        raise ValueError(f"{action} must not include final_quantity")
+    if action == "EDIT_ACCEPTED":
+        if final_quantity is None:
+            raise ValueError("EDIT_ACCEPTED requires final_quantity")
+        if reason is None:
+            raise ValueError("EDIT_ACCEPTED requires non-empty reason")
+
+
+class DemandReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_review_version: int = Field(ge=1)
+    expected_finding_version: int = Field(ge=1)
+    action: DecisionAction
+    final_quantity: DecimalString | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        return _normalize_reason(value)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "DemandReviewDecisionRequest":
+        _validate_decision_shape(
+            action=self.action,
+            final_quantity=self.final_quantity,
+            reason=self.reason,
+        )
+        return self
+
+
+class DemandReviewBatchDecisionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    finding_id: int = Field(gt=0)
+    expected_finding_version: int = Field(ge=1)
+    action: DecisionAction
+    final_quantity: DecimalString | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_reason(cls, value: str | None) -> str | None:
+        return _normalize_reason(value)
+
+    @model_validator(mode="after")
+    def validate_decision(self) -> "DemandReviewBatchDecisionItem":
+        _validate_decision_shape(
+            action=self.action,
+            final_quantity=self.final_quantity,
+            reason=self.reason,
+        )
+        return self
+
+
+class DemandReviewBatchDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_review_version: int = Field(ge=1)
+    decisions: tuple[DemandReviewBatchDecisionItem, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def reject_duplicate_findings(self) -> "DemandReviewBatchDecisionRequest":
+        finding_ids = [item.finding_id for item in self.decisions]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("duplicate finding_id in batch decision")
+        return self
 
 
 class DemandReviewSnapshot(BaseModel):

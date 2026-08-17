@@ -140,14 +140,28 @@ class DemandReviewRepository:
         session: Session,
         tenant_id: str,
         review_id: int,
+        *,
+        finding_ids: Sequence[int] | None = None,
     ) -> list[DemandReviewFinding]:
+        if finding_ids is None:
+            statement = self._finding_statement(
+                tenant_id,
+                review_id,
+            )
+        else:
+            statement = (
+                select(DemandReviewFinding)
+                .options(tenant_loader_criteria(tenant_id))
+                .execution_options(populate_existing=True)
+                .where(
+                    DemandReviewFinding.tenant_id == tenant_id,
+                    DemandReviewFinding.review_id == review_id,
+                    DemandReviewFinding.id.in_(tuple(finding_ids)),
+                )
+                .order_by(DemandReviewFinding.id.asc())
+            )
         return list(
-            session.scalars(
-                self._finding_statement(
-                    tenant_id,
-                    review_id,
-                ).with_for_update()
-            ).all()
+            session.scalars(statement.with_for_update()).all()
         )
 
     def create_review(
