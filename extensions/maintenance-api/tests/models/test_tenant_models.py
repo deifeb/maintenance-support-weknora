@@ -77,6 +77,10 @@ TENANT_TABLES = {
     "demand_lists",
     "demand_list_items",
     "demand_list_events",
+    "demand_list_reviews",
+    "demand_list_review_findings",
+    "demand_list_review_decisions",
+    "demand_list_review_events",
 }
 
 VERSIONED_TABLES = {
@@ -102,9 +106,15 @@ VERSIONED_TABLES = {
     "calculation_item_decisions",
     "demand_lists",
     "demand_list_items",
+    "demand_list_reviews",
+    "demand_list_review_findings",
 }
 
 TENANT_UNIQUE_INDEXES = {
+    ("demand_lists", frozenset({"tenant_id", "id"})),
+    ("demand_list_items", frozenset({"tenant_id", "id"})),
+    ("demand_list_reviews", frozenset({"tenant_id", "id"})),
+    ("demand_list_review_findings", frozenset({"tenant_id", "id"})),
     ("equipment_models", frozenset({"tenant_id", "code"})),
     ("parts", frozenset({"tenant_id", "code"})),
     ("spare_parts", frozenset({"tenant_id", "code"})),

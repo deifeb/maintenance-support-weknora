@@ -111,6 +111,50 @@ class DemandListEventType(StrEnum):
     VOIDED = "VOIDED"
 
 
+class DemandReviewStatus(StrEnum):
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    OPEN = "OPEN"
+    READY_TO_DERIVE = "READY_TO_DERIVE"
+    DERIVED = "DERIVED"
+    FAILED = "FAILED"
+    VOIDED = "VOIDED"
+
+
+class DemandReviewSeverity(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class DemandReviewDecisionStatus(StrEnum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    EDIT_ACCEPTED = "EDIT_ACCEPTED"
+
+
+class DemandReviewCommandType(StrEnum):
+    RUN = "RUN"
+    DECIDE_FINDING = "DECIDE_FINDING"
+    BATCH_DECIDE = "BATCH_DECIDE"
+    DERIVE = "DERIVE"
+    VOID = "VOID"
+
+
+class DemandReviewEventType(StrEnum):
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    OPENED = "OPENED"
+    FAILED = "FAILED"
+    DECIDED = "DECIDED"
+    BATCH_DECIDED = "BATCH_DECIDED"
+    READY_TO_DERIVE = "READY_TO_DERIVE"
+    DERIVED = "DERIVED"
+    VOIDED = "VOIDED"
+
+
 class RerunMode(StrEnum):
     NEW = "NEW"
     REPLAY_SNAPSHOT = "REPLAY_SNAPSHOT"
