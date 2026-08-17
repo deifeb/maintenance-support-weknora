@@ -13,12 +13,14 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    false,
     text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -38,6 +40,36 @@ TRANSACTION_STATUSES = (
     "FAILED",
     "EXPIRED",
     "REVERSED",
+)
+RESERVATION_STATUSES = (
+    "ACTIVE",
+    "PARTIALLY_ISSUED",
+    "FULFILLED",
+    "RELEASED",
+    "CANCELLED",
+    "EXPIRED",
+)
+TRANSFER_STATUSES = (
+    "DRAFT",
+    "DISPATCHED",
+    "PARTIALLY_RECEIVED",
+    "COMPLETED",
+    "CANCELLED",
+)
+STOCKTAKE_STATUSES = (
+    "DRAFT",
+    "COUNTING",
+    "REVIEWING",
+    "CONFIRMED",
+    "CONFLICTED",
+    "CANCELLED",
+)
+STOCKTAKE_LINE_RESOLUTIONS = (
+    "PENDING",
+    "ADJUSTED",
+    "CONFLICTED",
+    "RECOUNT_REQUIRED",
+    "BASELINE_ACCEPTED",
 )
 
 
@@ -351,3 +383,403 @@ class InventoryLedgerEntry(Base, TimestampMixin):
     state_after_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     before_balance_version: Mapped[int] = mapped_column(Integer, nullable=False)
     resulting_balance_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class InventoryReservation(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "inventory_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            name="uq_inventory_reservation_tenant_id",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'PARTIALLY_ISSUED', 'FULFILLED', "
+            "'RELEASED', 'CANCELLED', 'EXPIRED')",
+            name="ck_inventory_reservation_status",
+        ),
+        Index(
+            "ix_inventory_reservations_tenant_status_expires",
+            "tenant_id",
+            "status",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    allow_partial: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
+class InventoryReservationLine(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "inventory_reservation_lines"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "reservation_id"],
+            ["inventory_reservations.tenant_id", "inventory_reservations.id"],
+            name="fk_inventory_reservation_line_tenant_parent",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "requested_quantity >= 0",
+            name="ck_inventory_reservation_line_requested_nonnegative",
+        ),
+        CheckConstraint(
+            "reserved_quantity >= 0",
+            name="ck_inventory_reservation_line_reserved_nonnegative",
+        ),
+        CheckConstraint(
+            "issued_quantity >= 0",
+            name="ck_inventory_reservation_line_issued_nonnegative",
+        ),
+        CheckConstraint(
+            "released_quantity >= 0",
+            name="ck_inventory_reservation_line_released_nonnegative",
+        ),
+        CheckConstraint(
+            "ROUND(issued_quantity + released_quantity, 4) <= "
+            "ROUND(reserved_quantity, 4)",
+            name="ck_inventory_reservation_line_lifecycle",
+        ),
+        CheckConstraint(
+            "serial_item_id IS NULL OR ("
+            "requested_quantity IN (0, 1) AND "
+            "reserved_quantity IN (0, 1) AND "
+            "issued_quantity IN (0, 1) AND "
+            "released_quantity IN (0, 1))",
+            name="ck_inventory_reservation_line_serial_quantities",
+        ),
+        Index(
+            "ix_inventory_reservation_lines_tenant_reservation",
+            "tenant_id",
+            "reservation_id",
+        ),
+        Index(
+            "ix_inventory_reservation_lines_tenant_balance",
+            "tenant_id",
+            "balance_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    reservation_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    spare_part_id: Mapped[int] = mapped_column(
+        ForeignKey("spare_parts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    balance_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_balances.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT")
+    )
+    serial_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("serialized_items.id", ondelete="RESTRICT")
+    )
+    requested_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )
+    reserved_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )
+    issued_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0, server_default=text("0")
+    )
+    released_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0, server_default=text("0")
+    )
+    expected_balance_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    fefo_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    fefo_override_reason: Mapped[str | None] = mapped_column(String(500))
+    recommended_selection_json: Mapped[dict | None] = mapped_column(JSON)
+    actual_selection_json: Mapped[dict | None] = mapped_column(JSON)
+
+
+class InventoryTransfer(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "inventory_transfers"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            name="uq_inventory_transfer_tenant_id",
+        ),
+        CheckConstraint(
+            "status IN ('DRAFT', 'DISPATCHED', 'PARTIALLY_RECEIVED', "
+            "'COMPLETED', 'CANCELLED')",
+            name="ck_inventory_transfer_status",
+        ),
+        CheckConstraint(
+            "source_location_id <> target_location_id",
+            name="ck_inventory_transfer_distinct_locations",
+        ),
+        Index(
+            "ix_inventory_transfers_tenant_status",
+            "tenant_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="DRAFT")
+    source_warehouse_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouses.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_warehouse_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouses.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    reference_type: Mapped[str | None] = mapped_column(String(64))
+    reference_id: Mapped[str | None] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InventoryTransferLine(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "inventory_transfer_lines"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "transfer_id"],
+            ["inventory_transfers.tenant_id", "inventory_transfers.id"],
+            name="fk_inventory_transfer_line_tenant_parent",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "requested_quantity >= 0",
+            name="ck_inventory_transfer_line_requested_nonnegative",
+        ),
+        CheckConstraint(
+            "dispatched_quantity >= 0",
+            name="ck_inventory_transfer_line_dispatched_nonnegative",
+        ),
+        CheckConstraint(
+            "received_quantity >= 0",
+            name="ck_inventory_transfer_line_received_nonnegative",
+        ),
+        CheckConstraint(
+            "dispatched_quantity <= requested_quantity",
+            name="ck_inventory_transfer_line_dispatch_lifecycle",
+        ),
+        CheckConstraint(
+            "received_quantity <= dispatched_quantity",
+            name="ck_inventory_transfer_line_receive_lifecycle",
+        ),
+        CheckConstraint(
+            "serial_item_id IS NULL OR ("
+            "requested_quantity IN (0, 1) AND "
+            "dispatched_quantity IN (0, 1) AND "
+            "received_quantity IN (0, 1))",
+            name="ck_inventory_transfer_line_serial_quantities",
+        ),
+        Index(
+            "ix_inventory_transfer_lines_tenant_transfer",
+            "tenant_id",
+            "transfer_id",
+        ),
+        Index(
+            "ix_inventory_transfer_lines_source_balance",
+            "source_balance_id",
+        ),
+        Index(
+            "ix_inventory_transfer_lines_target_balance",
+            "target_balance_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    transfer_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    spare_part_id: Mapped[int] = mapped_column(
+        ForeignKey("spare_parts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_balance_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_balances.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    target_balance_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_balances.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT")
+    )
+    serial_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("serialized_items.id", ondelete="RESTRICT")
+    )
+    requested_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )
+    dispatched_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0, server_default=text("0")
+    )
+    received_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0, server_default=text("0")
+    )
+    expected_source_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_target_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class InventoryStocktake(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "stocktakes"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            name="uq_inventory_stocktake_tenant_id",
+        ),
+        CheckConstraint(
+            "status IN ('DRAFT', 'COUNTING', 'REVIEWING', 'CONFIRMED', "
+            "'CONFLICTED', 'CANCELLED')",
+            name="ck_inventory_stocktake_status",
+        ),
+        Index(
+            "ix_stocktakes_tenant_status",
+            "tenant_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    warehouse_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouses.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    location_id: Mapped[int] = mapped_column(
+        ForeignKey("warehouse_locations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="DRAFT")
+    snapshot_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    actor_user_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_roles_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InventoryStocktakeLine(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "stocktake_lines"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "stocktake_id"],
+            ["stocktakes.tenant_id", "stocktakes.id"],
+            name="fk_inventory_stocktake_line_tenant_parent",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "system_quantity >= 0",
+            name="ck_inventory_stocktake_line_system_nonnegative",
+        ),
+        CheckConstraint(
+            "counted_quantity IS NULL OR counted_quantity >= 0",
+            name="ck_inventory_stocktake_line_counted_nonnegative",
+        ),
+        CheckConstraint(
+            "resolution IN ('PENDING', 'ADJUSTED', 'CONFLICTED', "
+            "'RECOUNT_REQUIRED', 'BASELINE_ACCEPTED')",
+            name="ck_inventory_stocktake_line_resolution",
+        ),
+        CheckConstraint(
+            "(counted_quantity IS NULL AND variance_quantity IS NULL) OR "
+            "(counted_quantity IS NOT NULL AND "
+            "ROUND(variance_quantity, 4) = "
+            "ROUND(counted_quantity - system_quantity, 4))",
+            name="ck_inventory_stocktake_line_variance",
+        ),
+        Index(
+            "ix_stocktake_lines_tenant_stocktake",
+            "tenant_id",
+            "stocktake_id",
+        ),
+        Index("ix_stocktake_lines_balance", "balance_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    stocktake_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_id: Mapped[int] = mapped_column(
+        ForeignKey("inventory_balances.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    spare_part_id: Mapped[int] = mapped_column(
+        ForeignKey("spare_parts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    lot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_lots.id", ondelete="RESTRICT")
+    )
+    serial_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("serialized_items.id", ondelete="RESTRICT")
+    )
+    system_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )
+    counted_quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    variance_quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    snapshot_balance_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    confirmed_transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("inventory_transactions.id", ondelete="RESTRICT")
+    )
+    resolution: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="PENDING",
+        server_default=text("'PENDING'"),
+    )
+    conflict_details_json: Mapped[dict | None] = mapped_column(JSON)

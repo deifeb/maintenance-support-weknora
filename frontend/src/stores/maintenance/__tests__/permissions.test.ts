@@ -19,6 +19,10 @@ const denied: MaintenancePermissions = {
   transferInventory: false,
   adjustInventory: false,
   confirmHighRisk: false,
+  freezeInventory: false,
+  reverseInventory: false,
+  createStocktake: false,
+  confirmStocktake: false,
   publishRules: false,
   editDemandList: false,
   publishDemandList: false,
@@ -38,6 +42,7 @@ const contributor: MaintenancePermissions = {
   handleReview: true,
   reserveInventory: true,
   issueReturnInventory: true,
+  createStocktake: true,
   editDemandList: true,
 }
 
@@ -46,8 +51,27 @@ const admin: MaintenancePermissions = {
   transferInventory: true,
   adjustInventory: true,
   confirmHighRisk: true,
+  freezeInventory: true,
+  reverseInventory: true,
+  confirmStocktake: true,
   publishRules: true,
   publishDemandList: true,
+}
+
+function inventoryGapPermissions(
+  permissions: MaintenancePermissions,
+) {
+  return {
+    reserveInventory: permissions.reserveInventory,
+    issueReturnInventory: permissions.issueReturnInventory,
+    transferInventory: permissions.transferInventory,
+    adjustInventory: permissions.adjustInventory,
+    confirmHighRisk: permissions.confirmHighRisk,
+    freezeInventory: permissions.freezeInventory,
+    reverseInventory: permissions.reverseInventory,
+    createStocktake: permissions.createStocktake,
+    confirmStocktake: permissions.confirmStocktake,
+  }
 }
 
 test('viewer is read only', () => {
@@ -61,6 +85,61 @@ test('contributor can maintain ordinary workflows', () => {
 test('owner and admin map to maintenance admin', () => {
   for (const role of ['owner', 'admin'] as const) {
     assert.deepEqual(permissionsForRole(role), admin)
+  }
+})
+
+test('inventory gap permissions keep viewer read only', () => {
+  assert.deepEqual(
+    inventoryGapPermissions(permissionsForRole('viewer')),
+    {
+      reserveInventory: false,
+      issueReturnInventory: false,
+      transferInventory: false,
+      adjustInventory: false,
+      confirmHighRisk: false,
+      freezeInventory: false,
+      reverseInventory: false,
+      createStocktake: false,
+      confirmStocktake: false,
+    },
+  )
+})
+
+test('inventory gap contributor can create stocktakes only at contributor authority', () => {
+  assert.deepEqual(
+    inventoryGapPermissions(permissionsForRole('contributor')),
+    {
+      reserveInventory: true,
+      issueReturnInventory: true,
+      transferInventory: false,
+      adjustInventory: false,
+      confirmHighRisk: false,
+      freezeInventory: false,
+      reverseInventory: false,
+      createStocktake: true,
+      confirmStocktake: false,
+    },
+  )
+})
+
+test('inventory gap admin and owner receive high-risk authority', () => {
+  const expected = {
+    reserveInventory: true,
+    issueReturnInventory: true,
+    transferInventory: true,
+    adjustInventory: true,
+    confirmHighRisk: true,
+    freezeInventory: true,
+    reverseInventory: true,
+    createStocktake: true,
+    confirmStocktake: true,
+  }
+
+  for (const role of ['owner', 'admin'] as const) {
+    assert.deepEqual(
+      inventoryGapPermissions(permissionsForRole(role)),
+      expected,
+    )
   }
 })
 

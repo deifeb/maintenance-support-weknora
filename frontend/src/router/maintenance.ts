@@ -145,6 +145,36 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         meta: { ...maintenanceRouteMeta },
       },
       {
+        path: 'inventory-gap/balances/:balanceId',
+        name: 'maintenanceInventoryBalanceDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryBalanceDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/transactions/:transactionId',
+        name: 'maintenanceInventoryTransactionDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryTransactionDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/reservations/:reservationId',
+        name: 'maintenanceInventoryReservationDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryReservationDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/transfers/:transferId',
+        name: 'maintenanceInventoryTransferDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryTransferDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/stocktakes/:stocktakeId',
+        name: 'maintenanceInventoryStocktakeDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryStocktakeDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
         path: 'reviews',
         name: 'maintenanceReviews',
         component: () => import('@/views/maintenance/reviews/ReviewList.vue'),

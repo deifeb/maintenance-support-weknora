@@ -21,6 +21,8 @@ class InventoryBalanceRead(ORMModel):
     quarantined_quantity: Decimal
     in_transit_quantity: Decimal
     version: int
+    lot_version: int | None = Field(default=None, gt=0)
+    lot_is_frozen: bool | None = None
 
     @computed_field
     @property
@@ -105,8 +107,8 @@ class InventoryLedgerEntryRead(ORMModel):
     damaged_delta: Decimal
     quarantined_delta: Decimal
     in_transit_delta: Decimal
-    state_before_json: dict[str, str]
-    state_after_json: dict[str, str]
+    state_before_json: dict[str, Any]
+    state_after_json: dict[str, Any]
     before_balance_version: int
     resulting_balance_version: int
     created_at: datetime
@@ -130,5 +132,5 @@ class InventoryTransactionRead(ORMModel):
     actor_roles: list[str] = Field(validation_alias="actor_roles_json")
     request_id: str
     version: int
-    completed_at: datetime
+    completed_at: datetime | None
     entries: list[InventoryLedgerEntryRead]

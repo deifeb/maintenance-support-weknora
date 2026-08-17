@@ -31,6 +31,7 @@ EXPECTED_COUNTS = {
     "master_data": 67,
     "demand": 64,
     "ai": 26,
+    "inventory": 33,
 }
 MASTER_ROLE_BY_METHOD = {
     "get": "require_viewer",
@@ -115,6 +116,41 @@ DEMAND_ROLE_BY_FUNCTION = {
     "void_demand_list": "require_admin",
 }
 
+INVENTORY_ROLE_BY_FUNCTION = {
+    "list_balances": "require_viewer",
+    "get_balance": "require_viewer",
+    "list_transactions": "require_viewer",
+    "get_transaction": "require_viewer",
+    "list_reservations": "require_viewer",
+    "get_reservation": "require_viewer",
+    "list_transfers": "require_viewer",
+    "get_transfer": "require_viewer",
+    "list_stocktakes": "require_viewer",
+    "get_stocktake": "require_viewer",
+    "create_reservation": "require_contributor",
+    "issue_reservation": "require_contributor",
+    "release_reservation": "require_contributor",
+    "return_reservation": "require_contributor",
+    "cancel_reservation": "require_contributor",
+    "preview_operation": "require_admin",
+    "execute_operation": "require_admin",
+    "preview_reverse_operation": "require_admin",
+    "execute_reverse_operation": "require_admin",
+    "create_transfer": "require_admin",
+    "preview_transfer_dispatch": "require_admin",
+    "execute_transfer_dispatch": "require_admin",
+    "preview_transfer_receive": "require_admin",
+    "execute_transfer_receive": "require_admin",
+    "cancel_transfer": "require_admin",
+    "create_stocktake": "require_contributor",
+    "start_stocktake": "require_contributor",
+    "update_stocktake_line": "require_contributor",
+    "review_stocktake": "require_contributor",
+    "preview_stocktake_confirm": "require_admin",
+    "execute_stocktake_confirm": "require_admin",
+    "rebase_stocktake": "require_contributor",
+    "cancel_stocktake": "require_contributor",
+}
 
 def _files(domain: str) -> tuple[Path, ...]:
     return tuple(
@@ -230,6 +266,8 @@ def _expected_role(
         )
     if domain == "demand":
         return DEMAND_ROLE_BY_FUNCTION.get(function_name)
+    if domain == "inventory":
+        return INVENTORY_ROLE_BY_FUNCTION.get(function_name)
     return None
 
 
@@ -272,6 +310,7 @@ def _uses_session_get(
 def test_business_route_inventory_is_exact() -> None:
     counts: dict[str, int] = {}
     demand_functions: set[str] = set()
+    inventory_functions: set[str] = set()
 
     for domain in EXPECTED_COUNTS:
         count = 0
@@ -283,12 +322,20 @@ def test_business_route_inventory_is_exact() -> None:
                     function.name
                     for function, _, _ in rows
                 )
+            if domain == "inventory":
+                inventory_functions.update(
+                    function.name
+                    for function, _, _ in rows
+                )
         counts[domain] = count
 
     assert counts == EXPECTED_COUNTS
-    assert sum(counts.values()) == 157
+    assert sum(counts.values()) == 190
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
+    )
+    assert inventory_functions == set(
+        INVENTORY_ROLE_BY_FUNCTION
     )
 
 
@@ -363,3 +410,24 @@ def test_business_success_responses_include_actor_metadata(
                         )
 
     assert failures == [], "\n".join(failures)
+
+
+def test_inventory_read_routes_do_not_accept_tenant_id_argument() -> None:
+    failures: list[str] = []
+
+    for path in _files("inventory"):
+        for function, _, _ in _endpoints(path):
+            arguments = [
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            ]
+            if any(
+                argument.arg == "tenant_id"
+                for argument in arguments
+            ):
+                failures.append(
+                    f"{path.name}:{function.name}"
+                )
+
+    assert failures == []

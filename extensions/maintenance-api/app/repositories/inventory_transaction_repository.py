@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,6 +31,22 @@ class InventoryTransactionRepository:
             )
         )
 
+    def lock_transaction(
+        self,
+        session: Session,
+        tenant_id: str,
+        transaction_id: int,
+    ) -> InventoryTransaction | None:
+        return session.scalar(
+            select(InventoryTransaction)
+            .where(
+                InventoryTransaction.tenant_id == tenant_id,
+                InventoryTransaction.id == transaction_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     def get_idempotent(
         self,
         session: Session,
@@ -53,13 +71,18 @@ class InventoryTransactionRepository:
         idempotency_key: str,
         request_hash: str,
         reason: str,
+        status: str = "COMPLETED",
+        reference_type: str | None = None,
+        reference_id: str | None = None,
     ) -> InventoryTransaction:
         transaction = InventoryTransaction(
             tenant_id=actor.tenant_id,
             operation_type=operation_type,
-            status="COMPLETED",
+            status=status,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            reference_type=reference_type,
+            reference_id=reference_id,
             reason=reason,
             actor_user_id=actor.user_id,
             actor_roles_json=[actor.role.value],
@@ -77,10 +100,11 @@ class InventoryTransactionRepository:
         transaction: InventoryTransaction,
         balance: InventoryBalance,
         deltas: InventoryQuantityDelta,
-        state_before: dict[str, str],
-        state_after: dict[str, str],
+        state_before: dict[str, Any],
+        state_after: dict[str, Any],
         before_balance_version: int,
         resulting_balance_version: int,
+        serial_item_id: int | None = None,
     ) -> InventoryLedgerEntry:
         entry = InventoryLedgerEntry(
             tenant_id=transaction.tenant_id,
@@ -90,7 +114,7 @@ class InventoryTransactionRepository:
             warehouse_id=balance.warehouse_id,
             location_id=balance.location_id,
             lot_id=balance.lot_id,
-            serial_item_id=None,
+            serial_item_id=serial_item_id,
             on_hand_delta=deltas.on_hand,
             reserved_delta=deltas.reserved,
             damaged_delta=deltas.damaged,
@@ -104,6 +128,22 @@ class InventoryTransactionRepository:
         session.add(entry)
         session.flush()
         return entry
+
+    def append_entries(
+        self,
+        session: Session,
+        *,
+        transaction: InventoryTransaction,
+        entries: Sequence[dict[str, Any]],
+    ) -> list[InventoryLedgerEntry]:
+        return [
+            self.append_entry(
+                session,
+                transaction=transaction,
+                **entry_values,
+            )
+            for entry_values in entries
+        ]
 
     def list_entries(
         self,

@@ -10,7 +10,6 @@ from app.models.inventory_ledger import (
 )
 from sqlalchemy import CheckConstraint, UniqueConstraint
 
-
 LEDGER_TABLES = {
     "warehouse_locations",
     "inventory_policies",

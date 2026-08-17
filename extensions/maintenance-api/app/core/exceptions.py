@@ -120,6 +120,34 @@ def build_error_body(
     return {"success": False, "error": error}
 
 
+def _trusted_request_id(request: Request) -> str | None:
+    request_id = getattr(request.state, "request_id", None)
+    if isinstance(request_id, str) and request_id:
+        return request_id
+    return None
+
+
+def _missing_inventory_idempotency_key(
+    request: Request,
+    exc: RequestValidationError,
+) -> bool:
+    if not request.url.path.startswith("/api/v1/inventory/"):
+        return False
+
+    for error in exc.errors():
+        location = error.get("loc")
+        if (
+            error.get("type") == "missing"
+            and isinstance(location, (list, tuple))
+            and len(location) >= 2
+            and location[0] == "header"
+            and str(location[-1]).casefold()
+            == "idempotency-key"
+        ):
+            return True
+    return False
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppException)
     async def handle_app_exception(
@@ -144,7 +172,25 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        del request
+        request_id = _trusted_request_id(request)
+        if _missing_inventory_idempotency_key(
+            request,
+            exc,
+        ):
+            return JSONResponse(
+                status_code=422,
+                content=jsonable_encoder(
+                    build_error_body(
+                        code="IDEMPOTENCY_KEY_REQUIRED",
+                        message=(
+                            "Idempotency-Key header is required"
+                        ),
+                        details={"retryable": False},
+                        request_id=request_id,
+                    )
+                ),
+            )
+
         return JSONResponse(
             status_code=422,
             content=jsonable_encoder(
@@ -152,6 +198,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     code="VALIDATION_ERROR",
                     message="Request validation failed",
                     details=exc.errors(),
+                    request_id=request_id,
                 )
             ),
         )

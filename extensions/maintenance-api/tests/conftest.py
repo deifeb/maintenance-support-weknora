@@ -45,9 +45,20 @@ def reset_settings_cache() -> Generator[None, None, None]:
 @pytest.fixture(autouse=True)
 def clean_database() -> Generator[None, None, None]:
     yield
-    with engine.begin() as connection:
-        for table in reversed(Base.metadata.sorted_tables):
-            connection.execute(table.delete())
+    with engine.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql(
+                "PRAGMA foreign_keys = OFF"
+            )
+            connection.commit()
+
+        with connection.begin():
+            for table in reversed(
+                Base.metadata.sorted_tables
+            ):
+                connection.execute(table.delete())
+
+    engine.dispose()
 
 
 @pytest.fixture()
