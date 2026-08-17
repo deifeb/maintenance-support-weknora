@@ -10,6 +10,7 @@ import {
   type InventoryOperationExecuteRequest,
   type InventoryOperationPreviewRead,
   type InventoryOperationPreviewRequest,
+  type InventoryReversePreviewRequest,
   type InventoryPage,
   type InventoryReserveRequest,
   type InventoryReservationIssueRequest,
@@ -69,6 +70,8 @@ export type InventoryCommandKind =
   | 'reservation.cancel'
   | 'operation.preview'
   | 'operation.execute'
+  | 'operation.reverse.preview'
+  | 'operation.reverse.execute'
   | 'transfer.create'
   | 'transfer.dispatch.preview'
   | 'transfer.dispatch.execute'
@@ -86,6 +89,7 @@ export type InventoryCommandKind =
 
 export type InventoryPreviewKind =
   | 'operation.preview'
+  | 'operation.reverse.preview'
   | 'transfer.dispatch.preview'
   | 'transfer.receive.preview'
   | 'stocktake.confirm.preview'
@@ -650,6 +654,49 @@ export function createInventoryState(
     }
   }
 
+  function previewReverse(
+    transactionId: number,
+    request: InventoryReversePreviewRequest,
+  ): Promise<InventoryOperationPreviewRead> {
+    return runPreview(
+      'operation.reverse.preview',
+      transactionId,
+      [transactionId, request],
+      (key) => api.previewReverse(
+        transactionId,
+        request,
+        key,
+      ),
+    )
+  }
+
+  async function executeReverse(): Promise<InventoryTransactionRead> {
+    const preview = currentPreview('operation.reverse.preview')
+    const request: InventoryOperationExecuteRequest = {
+      expected_transaction_version: preview.transactionVersion,
+      confirmation_token: preview.confirmationToken as string,
+    }
+    try {
+      const response = await runCommand(
+        'operation.reverse.execute',
+        [preview.scope, request],
+        (key) => api.executeReverse(
+          preview.scope,
+          request,
+          key,
+        ),
+      )
+      await fetchTransactionDetail(preview.scope)
+      await fetchTransactions({ ...transactions.query })
+      return response.data
+    } catch (value) {
+      if (command.current.phase === 'conflicted') {
+        await fetchTransactionDetail(preview.scope)
+      }
+      throw value
+    }
+  }
+
   async function createTransfer(
     request: InventoryTransferCreateRequest,
   ): Promise<InventoryTransferRead> {
@@ -884,6 +931,8 @@ export function createInventoryState(
     cancelReservation,
     previewOperation,
     executeOperation,
+    previewReverse,
+    executeReverse,
     createTransfer,
     previewTransferDispatch,
     executeTransferDispatch,

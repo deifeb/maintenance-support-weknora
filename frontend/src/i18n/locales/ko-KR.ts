@@ -1,4 +1,7 @@
 import { maintenanceCalculationLocales } from './maintenance-calculation'
+import {
+  maintenanceInventoryLocales,
+} from './maintenance-inventory'
 
 export default {
   menu: {
@@ -49,6 +52,7 @@ export default {
   },
   maintenance: {
     calculation: maintenanceCalculationLocales['ko-KR'],
+    inventory: maintenanceInventoryLocales['ko-KR'],
     placeholder: "이 기능은 해당 구현 단계에서 활성화됩니다",
     pages: {
       dashboard: "대시보드",

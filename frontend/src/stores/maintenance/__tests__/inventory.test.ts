@@ -1449,3 +1449,344 @@ test('transfer and stocktake commands map to typed APIs, preserve preview metada
   assert.ok(refreshes.includes('stocktakes'))
   assert.ok(refreshes.includes('balances'))
 })
+type ReversePreviewCommand = {
+  expected_transaction_version: number
+  reason: string
+}
+
+type ReverseStoreContract = {
+  previewReverse: (
+    transactionId: number,
+    request: ReversePreviewCommand,
+  ) => Promise<InventoryOperationPreviewRead>
+  executeReverse: () => Promise<InventoryTransactionRead>
+}
+
+function requireReverseStoreMethod<
+  K extends keyof ReverseStoreContract,
+>(
+  state: ReturnType<typeof createInventoryState>,
+  method: K,
+): ReverseStoreContract[K] {
+  const candidate = (
+    state as unknown as Partial<ReverseStoreContract>
+  )[method]
+  assert.equal(
+    typeof candidate,
+    'function',
+    `inventory Store is missing ${String(method)}()`,
+  )
+  return candidate as ReverseStoreContract[K]
+}
+
+test('reverse preview maps to typed API and stores source transaction scope with backend preview metadata', async () => {
+  const previewCalls: Array<{
+    transactionId: number
+    request: ReversePreviewCommand
+    key: string
+  }> = []
+  const api = writeApiStub({
+    previewReverse: async (transactionId, request, key) => {
+      previewCalls.push({ transactionId, request, key })
+      return result(previewResult({
+        transaction_id: 701,
+        operation_type: 'REVERSE',
+        transaction_version: 7,
+        confirmation_token: 'reverse-token-701',
+        confirmation_expires_at: '2026-08-16T12:05:00Z',
+      }))
+    },
+  })
+  const state = createInventoryState(
+    api,
+    keyFactory('reverse-preview-key'),
+    () => new Date('2026-08-16T12:00:00Z'),
+  )
+  const previewReverse = requireReverseStoreMethod(
+    state,
+    'previewReverse',
+  )
+
+  const command = {
+    expected_transaction_version: 4,
+    reason: 'Reverse incorrect issue',
+  }
+  await previewReverse(51, command)
+
+  assert.deepEqual(previewCalls, [{
+    transactionId: 51,
+    request: command,
+    key: 'reverse-preview-key',
+  }])
+  assert.equal(state.commandState.phase, 'previewed')
+  assert.equal(
+    state.commandState.phase === 'previewed'
+      ? state.commandState.kind
+      : '',
+    'operation.reverse.preview',
+  )
+  assert.equal(
+    state.commandState.phase === 'previewed'
+      ? state.commandState.scope
+      : 0,
+    51,
+  )
+  assert.equal(
+    state.commandState.phase === 'previewed'
+      ? state.commandState.transactionId
+      : 0,
+    701,
+  )
+  assert.equal(
+    state.commandState.phase === 'previewed'
+      ? state.commandState.transactionVersion
+      : 0,
+    7,
+  )
+  assert.equal(
+    state.commandState.phase === 'previewed'
+      ? state.commandState.confirmationToken
+      : '',
+    'reverse-token-701',
+  )
+})
+
+test('reverse execute accepts no caller authority and consumes stored preview with a distinct key', async () => {
+  const executeCalls: Array<{
+    transactionId: number
+    request: InventoryOperationExecuteRequest
+    key: string
+  }> = []
+  const refreshes: string[] = []
+  const api = writeApiStub({
+    previewReverse: async () => result(previewResult({
+      transaction_id: 711,
+      operation_type: 'REVERSE',
+      transaction_version: 9,
+      confirmation_token: 'reverse-token-711',
+      confirmation_expires_at: '2026-08-16T12:05:00Z',
+    })),
+    executeReverse: async (transactionId, request, key) => {
+      executeCalls.push({ transactionId, request, key })
+      return result(transaction({
+        id: 712,
+        operation_type: 'REVERSE',
+        version: 10,
+      }))
+    },
+    getTransaction: async (id) => {
+      refreshes.push(`detail:${id}`)
+      return result(transaction({
+        id,
+        status: 'REVERSED',
+        version: 5,
+      }))
+    },
+    listTransactions: async () => {
+      refreshes.push('list')
+      return result(pageData([]))
+    },
+  })
+  const state = createInventoryState(
+    api,
+    keyFactory('reverse-preview-key', 'reverse-execute-key'),
+    () => new Date('2026-08-16T12:00:00Z'),
+  )
+
+  const executeReverse = requireReverseStoreMethod(
+    state,
+    'executeReverse',
+  )
+  assert.equal(
+    executeReverse.length,
+    0,
+    'executeReverse() must not accept caller token or transaction authority',
+  )
+  const previewReverse = requireReverseStoreMethod(
+    state,
+    'previewReverse',
+  )
+
+  await previewReverse(61, {
+    expected_transaction_version: 4,
+    reason: 'Reverse source transaction 61',
+  })
+  await executeReverse()
+
+  assert.deepEqual(executeCalls, [{
+    transactionId: 61,
+    request: {
+      expected_transaction_version: 9,
+      confirmation_token: 'reverse-token-711',
+    },
+    key: 'reverse-execute-key',
+  }])
+  assert.notEqual(
+    'reverse-preview-key',
+    executeCalls[0]!.key,
+  )
+  assert.deepEqual(refreshes, ['detail:61', 'list'])
+})
+
+test('reverse preview with null or expired token fails closed without consuming an execute key', async () => {
+  for (const previewOverride of [
+    {
+      confirmation_token: null,
+      confirmation_expires_at: '2026-08-16T12:05:00Z',
+    },
+    {
+      confirmation_token: 'expired-reverse-token',
+      confirmation_expires_at: '2026-08-16T11:59:59Z',
+    },
+  ]) {
+    const generatedKeys: string[] = []
+    const executeCalls: unknown[] = []
+    const api = writeApiStub({
+      previewReverse: async () => result(previewResult({
+        transaction_id: 721,
+        operation_type: 'REVERSE',
+        transaction_version: 8,
+        ...previewOverride,
+      })),
+      executeReverse: async (...args) => {
+        executeCalls.push(args)
+        return result(transaction({
+          id: 722,
+          operation_type: 'REVERSE',
+        }))
+      },
+    })
+    const state = createInventoryState(
+      api,
+      () => {
+        const key = `reverse-key-${generatedKeys.length + 1}`
+        generatedKeys.push(key)
+        return key
+      },
+      () => new Date('2026-08-16T12:00:00Z'),
+    )
+    const previewReverse = requireReverseStoreMethod(
+      state,
+      'previewReverse',
+    )
+    const executeReverse = requireReverseStoreMethod(
+      state,
+      'executeReverse',
+    )
+
+    await previewReverse(71, {
+      expected_transaction_version: 4,
+      reason: 'Reverse with guarded preview',
+    })
+
+    assert.equal(state.canExecutePreview, false)
+    assert.equal(generatedKeys.length, 1)
+    await assert.rejects(() => executeReverse())
+    assert.equal(generatedKeys.length, 1)
+    assert.equal(executeCalls.length, 0)
+  }
+})
+
+test('reverse execute conflict retires stale preview, reloads source transaction, and requires a fresh preview key', async () => {
+  const previewCalls: Array<{
+    transactionId: number
+    request: ReversePreviewCommand
+    key: string
+  }> = []
+  const executeCalls: string[] = []
+  const detailReads: number[] = []
+  let executeAttempt = 0
+  const reverseConflict = {
+    status: 409,
+    code: 'INVENTORY_OPERATION_STATE_CONFLICT',
+    message: 'source transaction changed',
+    retryable: false,
+    details: {
+      conflict_object: 'inventory_transaction',
+      expected_version: 4,
+      actual_version: 5,
+      suggested_action: 'reload source transaction and preview again',
+    },
+  }
+  const api = writeApiStub({
+    previewReverse: async (transactionId, request, key) => {
+      previewCalls.push({ transactionId, request, key })
+      return result(previewResult({
+        transaction_id: previewCalls.length === 1 ? 731 : 732,
+        operation_type: 'REVERSE',
+        transaction_version: previewCalls.length === 1 ? 8 : 9,
+        confirmation_token: previewCalls.length === 1
+          ? 'stale-reverse-token'
+          : 'fresh-reverse-token',
+        confirmation_expires_at: '2026-08-16T12:05:00Z',
+      }))
+    },
+    executeReverse: async (_transactionId, _request, key) => {
+      executeCalls.push(key)
+      executeAttempt += 1
+      if (executeAttempt === 1) throw reverseConflict
+      return result(transaction({
+        id: 733,
+        operation_type: 'REVERSE',
+      }))
+    },
+    getTransaction: async (id) => {
+      detailReads.push(id)
+      return result(transaction({
+        id,
+        version: 5,
+      }))
+    },
+  })
+  const state = createInventoryState(
+    api,
+    keyFactory(
+      'reverse-preview-1',
+      'reverse-execute-1',
+      'reverse-preview-2',
+      'reverse-execute-2',
+    ),
+    () => new Date('2026-08-16T12:00:00Z'),
+  )
+  const previewReverse = requireReverseStoreMethod(
+    state,
+    'previewReverse',
+  )
+  const executeReverse = requireReverseStoreMethod(
+    state,
+    'executeReverse',
+  )
+
+  await previewReverse(81, {
+    expected_transaction_version: 4,
+    reason: 'Initial reverse',
+  })
+  await assert.rejects(() => executeReverse())
+
+  assert.equal(state.commandState.phase, 'conflicted')
+  assert.equal(state.canExecutePreview, false)
+  assert.deepEqual(detailReads, [81])
+  assert.equal(state.transactionDetail.item?.id, 81)
+  assert.equal(state.transactionDetail.item?.version, 5)
+  assert.deepEqual(executeCalls, ['reverse-execute-1'])
+
+  await previewReverse(81, {
+    expected_transaction_version: 5,
+    reason: 'Corrected reverse after reload',
+  })
+
+  assert.equal(previewCalls.length, 2)
+  assert.equal(previewCalls[0]!.key, 'reverse-preview-1')
+  assert.equal(previewCalls[1]!.key, 'reverse-preview-2')
+  assert.equal(
+    previewCalls[1]!.request.expected_transaction_version,
+    5,
+  )
+  assert.equal(
+    state.commandState.phase === 'previewed'
+      ? state.commandState.scope
+      : 0,
+    81,
+  )
+  assert.equal(executeCalls.length, 1)
+})

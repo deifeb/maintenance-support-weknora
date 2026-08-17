@@ -1,4 +1,7 @@
 import { maintenanceCalculationLocales } from './maintenance-calculation'
+import {
+  maintenanceInventoryLocales,
+} from './maintenance-inventory'
 
 export default {
   menu: {
@@ -49,6 +52,7 @@ export default {
   },
   maintenance: {
     calculation: maintenanceCalculationLocales['zh-CN'],
+    inventory: maintenanceInventoryLocales['zh-CN'],
     placeholder: "该功能将在对应实施阶段启用",
     pages: {
       dashboard: "概览",

@@ -1,4 +1,7 @@
 import { maintenanceCalculationLocales } from './maintenance-calculation'
+import {
+  maintenanceInventoryLocales,
+} from './maintenance-inventory'
 
 export default {
   menu: {
@@ -49,6 +52,7 @@ export default {
   },
   maintenance: {
     calculation: maintenanceCalculationLocales['ru-RU'],
+    inventory: maintenanceInventoryLocales['ru-RU'],
     placeholder: 'Эта функция будет включена на соответствующем этапе реализации',
     pages: {
       dashboard: 'Обзор',
