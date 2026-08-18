@@ -32,6 +32,7 @@ EXPECTED_COUNTS = {
     "demand": 64,
     "ai": 26,
     "inventory": 33,
+    "reviews": 7,
 }
 MASTER_ROLE_BY_METHOD = {
     "get": "require_viewer",
@@ -114,6 +115,16 @@ DEMAND_ROLE_BY_FUNCTION = {
     "publish_demand_list": "require_admin",
     "derive_demand_list": "require_admin",
     "void_demand_list": "require_admin",
+}
+
+REVIEW_ROLE_BY_FUNCTION = {
+    "list_demand_list_reviews": "require_viewer",
+    "run_demand_list_review": "require_contributor",
+    "get_demand_list_review": "require_viewer",
+    "decide_demand_review_finding": "require_contributor",
+    "batch_decide_demand_review_findings": "require_contributor",
+    "derive_demand_list_from_review": "require_admin",
+    "void_demand_list_review": "require_admin",
 }
 
 INVENTORY_ROLE_BY_FUNCTION = {
@@ -268,6 +279,8 @@ def _expected_role(
         return DEMAND_ROLE_BY_FUNCTION.get(function_name)
     if domain == "inventory":
         return INVENTORY_ROLE_BY_FUNCTION.get(function_name)
+    if domain == "reviews":
+        return REVIEW_ROLE_BY_FUNCTION.get(function_name)
     return None
 
 
@@ -311,6 +324,7 @@ def test_business_route_inventory_is_exact() -> None:
     counts: dict[str, int] = {}
     demand_functions: set[str] = set()
     inventory_functions: set[str] = set()
+    review_functions: set[str] = set()
 
     for domain in EXPECTED_COUNTS:
         count = 0
@@ -327,15 +341,23 @@ def test_business_route_inventory_is_exact() -> None:
                     function.name
                     for function, _, _ in rows
                 )
+            if domain == "reviews":
+                review_functions.update(
+                    function.name
+                    for function, _, _ in rows
+                )
         counts[domain] = count
 
     assert counts == EXPECTED_COUNTS
-    assert sum(counts.values()) == 190
+    assert sum(counts.values()) == 197
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
     )
     assert inventory_functions == set(
         INVENTORY_ROLE_BY_FUNCTION
+    )
+    assert review_functions == set(
+        REVIEW_ROLE_BY_FUNCTION
     )
 
 

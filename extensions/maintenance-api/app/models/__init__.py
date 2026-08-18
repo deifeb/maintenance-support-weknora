@@ -42,6 +42,12 @@ from app.models.demand_list import (
     DemandListEvent,
     DemandListItem,
 )
+from app.models.demand_review import (
+    DemandReview,
+    DemandReviewDecision,
+    DemandReviewEvent,
+    DemandReviewFinding,
+)
 from app.models.demand_scenario import (
     DemandAgeGroup,
     DemandCommonShockRule,
@@ -122,6 +128,10 @@ __all__ = [
     "DemandList",
     "DemandListItem",
     "DemandListEvent",
+    "DemandReview",
+    "DemandReviewFinding",
+    "DemandReviewDecision",
+    "DemandReviewEvent",
     "DemandScenarioTemplate",
     "DemandScenarioVersion",
     "DemandScenarioStage",

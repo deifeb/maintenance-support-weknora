@@ -264,8 +264,8 @@ def test_inventory_operations_revision_chain() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
     revision = script.get_revision(REVISION)
+    assert revision.revision == REVISION
     assert revision.down_revision == PREVIOUS_REVISION
-    assert script.get_heads() == [REVISION]
 
 
 def test_inventory_operations_upgrade_constraints_and_round_trip(
@@ -328,7 +328,11 @@ def test_inventory_operations_upgrade_constraints_and_round_trip(
 
     command.upgrade(config, REVISION)
     assert OPERATION_TABLES <= set(inspect(engine).get_table_names())
-    assert ScriptDirectory.from_config(config).get_current_head() == REVISION
+    with engine.connect() as connection:
+        current_revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+    assert current_revision == REVISION
     assert _facts_hash(engine) == before_hash
 
     engine.dispose()
