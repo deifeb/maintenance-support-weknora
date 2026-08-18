@@ -31,13 +31,19 @@ from app.repositories.demand_list_repository import (
     DemandListRepository,
 )
 from app.repositories.demand_review_repository import DemandReviewRepository
+from app.schemas.common import PageData
 from app.schemas.demand_review import (
     DemandReviewBatchDecisionItem,
     DemandReviewBatchDecisionRequest,
+    DemandReviewDecisionRead,
     DemandReviewDecisionRequest,
     DemandReviewDeriveRead,
+    DemandReviewEventRead,
     DemandReviewFindingRead,
+    DemandReviewPublicRead,
     DemandReviewRead,
+    DemandReviewSummaryRead,
+    DemandReviewTransitionRequest,
 )
 from app.security.actor import ActorContext, MaintenanceRole
 from app.security.permissions import require_role
@@ -257,6 +263,186 @@ class DemandReviewService:
         )
 
     @staticmethod
+    def _summary_read(
+        row: DemandReview,
+    ) -> DemandReviewSummaryRead:
+        return DemandReviewSummaryRead(
+            id=row.id,
+            source_demand_list_id=row.source_demand_list_id,
+            source_demand_list_version=row.source_demand_list_version,
+            source_lineage_id=row.source_lineage_id,
+            source_version_number=row.source_version_number,
+            status=row.status,
+            rule_set_version=row.rule_set_version,
+            input_hash=row.input_hash,
+            total_finding_count=row.total_finding_count,
+            blocking_finding_count=row.blocking_finding_count,
+            pending_finding_count=row.pending_finding_count,
+            pending_blocking_finding_count=(
+                row.pending_blocking_finding_count
+            ),
+            derived_demand_list_id=row.derived_demand_list_id,
+            version=row.version,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    @staticmethod
+    def _decision_read(
+        row: DemandReviewDecision,
+    ) -> DemandReviewDecisionRead:
+        return DemandReviewDecisionRead(
+            id=row.id,
+            finding_id=row.finding_id,
+            action=DemandReviewDecisionStatus(row.action),
+            suggested_quantity=row.suggested_quantity,
+            final_quantity=row.final_quantity,
+            reason=row.reason,
+            actor_user_id=row.actor_user_id,
+            actor_roles=tuple(row.actor_roles_json),
+            request_id=row.request_id,
+            review_version_before=row.review_version_before,
+            review_version_after=row.review_version_after,
+            finding_version_before=row.finding_version_before,
+            finding_version_after=row.finding_version_after,
+            before_snapshot=row.before_snapshot_json,
+            after_snapshot=row.after_snapshot_json,
+            occurred_at=row.occurred_at,
+        )
+
+    @staticmethod
+    def _event_read(
+        row: DemandReviewEvent,
+    ) -> DemandReviewEventRead:
+        return DemandReviewEventRead(
+            id=row.id,
+            event_type=row.event_type,
+            command_type=row.command_type,
+            actor_user_id=row.actor_user_id,
+            actor_roles=tuple(row.actor_roles_json),
+            request_id=row.request_id,
+            before_summary=row.before_summary_json,
+            after_summary=row.after_summary_json,
+            error_code=row.error_code,
+            occurred_at=row.occurred_at,
+        )
+
+    def _public_read(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review: DemandReview,
+    ) -> DemandReviewPublicRead:
+        summary = self._summary_read(review)
+        findings = self.repository.list_findings(
+            session,
+            actor.tenant_id,
+            review.id,
+        )
+        decisions = self.repository.list_decisions(
+            session,
+            actor.tenant_id,
+            review.id,
+        )
+        events = self.repository.list_events(
+            session,
+            actor.tenant_id,
+            review.id,
+        )
+        return DemandReviewPublicRead(
+            **summary.model_dump(),
+            failure_code=review.failure_code,
+            failure_summary=review.failure_summary,
+            findings=tuple(
+                self._finding_read(row)
+                for row in findings
+            ),
+            decisions=tuple(
+                self._decision_read(row)
+                for row in decisions
+            ),
+            events=tuple(
+                self._event_read(row)
+                for row in events
+            ),
+        )
+
+    def list(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        status: DemandReviewStatus | None = None,
+        source_demand_list_id: int | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> PageData[DemandReviewSummaryRead]:
+        require_role(actor, MaintenanceRole.VIEWER)
+        if page < 1 or page_size < 1 or page_size > 200:
+            raise BusinessValidationError(
+                "invalid demand review pagination",
+                code="REVIEW_LIST_INVALID",
+            )
+        if sort_by not in {
+            "id",
+            "status",
+            "created_at",
+            "updated_at",
+        } or sort_order not in {"asc", "desc"}:
+            raise BusinessValidationError(
+                "invalid demand review sort",
+                code="REVIEW_LIST_INVALID",
+            )
+
+        rows, total = self.repository.list_page(
+            session,
+            actor.tenant_id,
+            page=page,
+            page_size=page_size,
+            status=status,
+            source_demand_list_id=source_demand_list_id,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        pages = (
+            (total + page_size - 1) // page_size
+            if total
+            else 0
+        )
+        return PageData[DemandReviewSummaryRead](
+            items=[
+                self._summary_read(row)
+                for row in rows
+            ],
+            page=page,
+            page_size=page_size,
+            total=total,
+            pages=pages,
+        )
+
+    def get(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+    ) -> DemandReviewPublicRead:
+        require_role(actor, MaintenanceRole.VIEWER)
+        review = self.repository.get(
+            session,
+            actor.tenant_id,
+            review_id,
+        )
+        if review is None:
+            raise NotFoundError("demand_review", review_id)
+        return self._public_read(
+            session,
+            actor,
+            review,
+        )
+
+    @staticmethod
     def _refresh_counts(
         review: DemandReview,
         findings: list[DemandReviewFinding],
@@ -277,6 +463,20 @@ class DemandReviewService:
             if finding.blocking
             and finding.decision_status
             is DemandReviewDecisionStatus.PENDING
+        )
+
+    @staticmethod
+    def _void_request_hash(
+        *,
+        review_id: int,
+        expected_review_version: int,
+    ) -> str:
+        return snapshot_service.canonical_hash(
+            {
+                "command": "VOID",
+                "review_id": review_id,
+                "expected_review_version": expected_review_version,
+            }
         )
 
     @staticmethod
@@ -1156,6 +1356,113 @@ class DemandReviewService:
                 session,
                 actor.tenant_id,
                 command_type=DemandReviewCommandType.BATCH_DECIDE,
+                idempotency_key=clean_key,
+            )
+            if winner is None:
+                raise exc
+            return self._replay(winner, request_hash)
+        except Exception:
+            session.rollback()
+            raise
+
+    def void(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+        *,
+        expected_review_version: int,
+        idempotency_key: str,
+    ) -> DemandReviewRead:
+        require_role(actor, MaintenanceRole.ADMIN)
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        try:
+            request = DemandReviewTransitionRequest(
+                expected_review_version=expected_review_version,
+            )
+        except ValidationError as exc:
+            raise BusinessValidationError(
+                "invalid demand review transition",
+                code="REVIEW_VERSION_INVALID",
+            ) from exc
+
+        request_hash = self._void_request_hash(
+            review_id=review_id,
+            expected_review_version=request.expected_review_version,
+        )
+        existing = self.repository.find_command_event(
+            session,
+            actor.tenant_id,
+            command_type=DemandReviewCommandType.VOID,
+            idempotency_key=clean_key,
+        )
+        if existing is not None:
+            return self._replay(existing, request_hash)
+
+        try:
+            review = self.repository.get_for_update(
+                session,
+                actor.tenant_id,
+                review_id,
+            )
+            if review is None:
+                raise NotFoundError("demand_review", review_id)
+            self._require_review_version(
+                review,
+                request.expected_review_version,
+            )
+            if review.status not in {
+                DemandReviewStatus.OPEN,
+                DemandReviewStatus.READY_TO_DERIVE,
+            }:
+                raise ConflictError(
+                    "demand review cannot be voided in its current state",
+                    code="REVIEW_STATE_CONFLICT",
+                    details={
+                        "conflict_object": "demand_review",
+                        "actual_status": review.status.value,
+                        "retryable": False,
+                    },
+                )
+
+            before_summary = self._review_summary(review)
+            review.status = DemandReviewStatus.VOIDED
+            review.version += 1
+            session.flush()
+
+            event = self.repository.append_event(
+                session,
+                actor.tenant_id,
+                review_id=review.id,
+                data={
+                    "event_type": DemandReviewEventType.VOIDED,
+                    "command_type": DemandReviewCommandType.VOID,
+                    "actor_user_id": actor.user_id,
+                    "actor_roles_json": [actor.role.value],
+                    "request_id": actor.request_id,
+                    "idempotency_key": clean_key,
+                    "request_hash": request_hash,
+                    "before_summary_json": before_summary,
+                    "after_summary_json": self._review_summary(review),
+                },
+            )
+            response = self._read_model(
+                session,
+                actor,
+                review,
+            )
+            event.response_snapshot_json = response.model_dump(
+                mode="json"
+            )
+            session.flush()
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            session.rollback()
+            winner = self.repository.find_command_event(
+                session,
+                actor.tenant_id,
+                command_type=DemandReviewCommandType.VOID,
                 idempotency_key=clean_key,
             )
             if winner is None:

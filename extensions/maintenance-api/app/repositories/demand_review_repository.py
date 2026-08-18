@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from app.models.demand_review import (
 from app.models.enums import (
     DemandReviewCommandType,
     DemandReviewSeverity,
+    DemandReviewStatus,
 )
 from app.repositories.base import tenant_loader_criteria
 
@@ -67,18 +68,54 @@ class DemandReviewRepository:
         *,
         page: int = 1,
         page_size: int = 20,
+        status: DemandReviewStatus | None = None,
+        source_demand_list_id: int | None = None,
+        sort_by: Literal[
+            "id",
+            "status",
+            "created_at",
+            "updated_at",
+        ] = "created_at",
+        sort_order: Literal["asc", "desc"] = "desc",
     ) -> tuple[list[DemandReview], int]:
-        conditions = (DemandReview.tenant_id == tenant_id,)
+        conditions = [DemandReview.tenant_id == tenant_id]
+        if status is not None:
+            conditions.append(DemandReview.status == status)
+        if source_demand_list_id is not None:
+            conditions.append(
+                DemandReview.source_demand_list_id
+                == source_demand_list_id
+            )
+
+        sort_column = {
+            "id": DemandReview.id,
+            "status": DemandReview.status,
+            "created_at": DemandReview.created_at,
+            "updated_at": DemandReview.updated_at,
+        }[sort_by]
+        primary_order = (
+            sort_column.asc()
+            if sort_order == "asc"
+            else sort_column.desc()
+        )
+        id_order = (
+            DemandReview.id.asc()
+            if sort_order == "asc"
+            else DemandReview.id.desc()
+        )
+        order_by = (
+            (primary_order,)
+            if sort_by == "id"
+            else (primary_order, id_order)
+        )
+
         rows = list(
             session.scalars(
                 select(DemandReview)
                 .options(tenant_loader_criteria(tenant_id))
                 .execution_options(populate_existing=True)
                 .where(*conditions)
-                .order_by(
-                    DemandReview.created_at.desc(),
-                    DemandReview.id.desc(),
-                )
+                .order_by(*order_by)
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             ).all()
@@ -264,6 +301,50 @@ class DemandReviewRepository:
                 DemandReviewEvent.command_type == command_type,
                 DemandReviewEvent.idempotency_key == idempotency_key,
             )
+        )
+
+    def list_decisions(
+        self,
+        session: Session,
+        tenant_id: str,
+        review_id: int,
+    ) -> list[DemandReviewDecision]:
+        return list(
+            session.scalars(
+                select(DemandReviewDecision)
+                .options(tenant_loader_criteria(tenant_id))
+                .execution_options(populate_existing=True)
+                .where(
+                    DemandReviewDecision.tenant_id == tenant_id,
+                    DemandReviewDecision.review_id == review_id,
+                )
+                .order_by(
+                    DemandReviewDecision.occurred_at.asc(),
+                    DemandReviewDecision.id.asc(),
+                )
+            ).all()
+        )
+
+    def list_events(
+        self,
+        session: Session,
+        tenant_id: str,
+        review_id: int,
+    ) -> list[DemandReviewEvent]:
+        return list(
+            session.scalars(
+                select(DemandReviewEvent)
+                .options(tenant_loader_criteria(tenant_id))
+                .execution_options(populate_existing=True)
+                .where(
+                    DemandReviewEvent.tenant_id == tenant_id,
+                    DemandReviewEvent.review_id == review_id,
+                )
+                .order_by(
+                    DemandReviewEvent.occurred_at.asc(),
+                    DemandReviewEvent.id.asc(),
+                )
+            ).all()
         )
 
     def delete_findings(

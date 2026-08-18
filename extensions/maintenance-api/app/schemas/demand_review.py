@@ -13,7 +13,9 @@ from pydantic import (
 )
 
 from app.models.enums import (
+    DemandReviewCommandType,
     DemandReviewDecisionStatus,
+    DemandReviewEventType,
     DemandReviewSeverity,
     DemandReviewStatus,
 )
@@ -26,6 +28,12 @@ class DemandReviewRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     expected_source_version: int = Field(ge=1)
+
+
+class DemandReviewTransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_review_version: int = Field(ge=1)
 
 
 DecisionAction = Literal["ACCEPTED", "REJECTED", "EDIT_ACCEPTED"]
@@ -161,6 +169,73 @@ class DemandReviewFindingRead(BaseModel):
     suggestion_snapshot: dict[str, Any]
     decision_status: DemandReviewDecisionStatus
     version: int
+
+
+class DemandReviewSummaryRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int
+    source_demand_list_id: int
+    source_demand_list_version: int
+    source_lineage_id: str
+    source_version_number: int
+    status: DemandReviewStatus
+    rule_set_version: str
+    input_hash: str
+    total_finding_count: int
+    blocking_finding_count: int
+    pending_finding_count: int
+    pending_blocking_finding_count: int
+    derived_demand_list_id: int | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class DemandReviewDecisionRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int
+    finding_id: int
+    action: DemandReviewDecisionStatus
+    suggested_quantity: Decimal | None
+    final_quantity: Decimal | None
+    reason: str | None
+    actor_user_id: str
+    actor_roles: tuple[str, ...]
+    request_id: str
+    review_version_before: int
+    review_version_after: int
+    finding_version_before: int
+    finding_version_after: int
+    before_snapshot: dict[str, Any]
+    after_snapshot: dict[str, Any]
+    occurred_at: datetime
+
+
+class DemandReviewEventRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int
+    event_type: DemandReviewEventType
+    command_type: DemandReviewCommandType | None
+    actor_user_id: str
+    actor_roles: tuple[str, ...]
+    request_id: str
+    before_summary: dict[str, Any] | None
+    after_summary: dict[str, Any] | None
+    error_code: str | None
+    occurred_at: datetime
+
+
+class DemandReviewPublicRead(DemandReviewSummaryRead):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    failure_code: str | None
+    failure_summary: str | None
+    findings: tuple[DemandReviewFindingRead, ...]
+    decisions: tuple[DemandReviewDecisionRead, ...]
+    events: tuple[DemandReviewEventRead, ...]
 
 
 class DemandReviewRead(BaseModel):
