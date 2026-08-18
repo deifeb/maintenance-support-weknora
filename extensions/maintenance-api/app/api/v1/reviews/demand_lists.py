@@ -130,17 +130,12 @@ def run_demand_list_review(
     actor: ContributorDep,
     idempotency_key: IdempotencyKeyDep,
 ):
-    internal = demand_review_service.run(
+    result = demand_review_service.run_public(
         session,
         actor,
         demand_list_id,
         expected_source_version=payload.expected_source_version,
         idempotency_key=idempotency_key,
-    )
-    result = demand_review_service.get(
-        session,
-        actor,
-        internal.id,
     )
     return success_response(
         result,
@@ -187,7 +182,7 @@ def decide_demand_review_finding(
     actor: ContributorDep,
     idempotency_key: IdempotencyKeyDep,
 ):
-    demand_review_service.decide_finding(
+    result = demand_review_service.decide_finding_public(
         session,
         actor,
         review_id,
@@ -198,11 +193,6 @@ def decide_demand_review_finding(
         final_quantity=payload.final_quantity,
         reason=payload.reason,
         idempotency_key=idempotency_key,
-    )
-    result = demand_review_service.get(
-        session,
-        actor,
-        review_id,
     )
     return success_response(
         result,
@@ -225,18 +215,13 @@ def batch_decide_demand_review_findings(
     actor: ContributorDep,
     idempotency_key: IdempotencyKeyDep,
 ):
-    demand_review_service.batch_decide(
+    result = demand_review_service.batch_decide_public(
         session,
         actor,
         review_id,
         expected_review_version=payload.expected_review_version,
         commands=payload.decisions,
         idempotency_key=idempotency_key,
-    )
-    result = demand_review_service.get(
-        session,
-        actor,
-        review_id,
     )
     return success_response(
         result,
@@ -259,17 +244,12 @@ def derive_demand_list_from_review(
     actor: AdminDep,
     idempotency_key: IdempotencyKeyDep,
 ):
-    demand_review_service.derive(
+    result = demand_review_service.derive_public(
         session,
         actor,
         review_id,
         expected_review_version=payload.expected_review_version,
         idempotency_key=idempotency_key,
-    )
-    result = demand_review_service.get(
-        session,
-        actor,
-        review_id,
     )
     return success_response(
         result,
@@ -292,17 +272,12 @@ def void_demand_list_review(
     actor: AdminDep,
     idempotency_key: IdempotencyKeyDep,
 ):
-    demand_review_service.void(
+    result = demand_review_service.void_public(
         session,
         actor,
         review_id,
         expected_review_version=payload.expected_review_version,
         idempotency_key=idempotency_key,
-    )
-    result = demand_review_service.get(
-        session,
-        actor,
-        review_id,
     )
     return success_response(
         result,

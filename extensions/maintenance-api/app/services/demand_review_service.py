@@ -114,6 +114,61 @@ class DemandReviewService:
         )
 
     @staticmethod
+    def _idempotent_response_unavailable() -> ConflictError:
+        return ConflictError(
+            "idempotent response is unavailable",
+            code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+            details={
+                "conflict_object": "demand_review",
+                "retryable": False,
+            },
+        )
+
+    @staticmethod
+    def _snapshot_section(
+        event: DemandReviewEvent,
+        section: str,
+    ) -> Any:
+        snapshot = event.response_snapshot_json
+        if (
+            isinstance(snapshot, dict)
+            and snapshot.get("_format")
+            == "demand_review_command_response_v2"
+        ):
+            return snapshot.get(section)
+        if section == "internal":
+            return snapshot
+        return None
+
+    @staticmethod
+    def _response_envelope(
+        internal: DemandReviewRead | DemandReviewDeriveRead,
+        public: DemandReviewPublicRead,
+    ) -> dict[str, Any]:
+        return {
+            "_format": "demand_review_command_response_v2",
+            "internal": internal.model_dump(mode="json"),
+            "public": public.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _public_replay(
+        event: DemandReviewEvent,
+    ) -> DemandReviewPublicRead:
+        payload = DemandReviewService._snapshot_section(
+            event,
+            "public",
+        )
+        if payload is None:
+            raise DemandReviewService._idempotent_response_unavailable()
+        try:
+            return DemandReviewPublicRead.model_validate(payload)
+        except ValidationError as exc:
+            raise (
+                DemandReviewService._idempotent_response_unavailable()
+            ) from exc
+
+    @staticmethod
     def _replay(
         event: DemandReviewEvent,
         request_hash: str,
@@ -127,27 +182,17 @@ class DemandReviewService:
                     "retryable": False,
                 },
             )
-        if event.response_snapshot_json is None:
-            raise ConflictError(
-                "idempotent response is unavailable",
-                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
-                details={
-                    "conflict_object": "demand_review",
-                    "retryable": False,
-                },
-            )
+        payload = DemandReviewService._snapshot_section(
+            event,
+            "internal",
+        )
+        if payload is None:
+            raise DemandReviewService._idempotent_response_unavailable()
         try:
-            return DemandReviewRead.model_validate(
-                event.response_snapshot_json
-            )
+            return DemandReviewRead.model_validate(payload)
         except ValidationError as exc:
-            raise ConflictError(
-                "idempotent response is unavailable",
-                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
-                details={
-                    "conflict_object": "demand_review",
-                    "retryable": False,
-                },
+            raise (
+                DemandReviewService._idempotent_response_unavailable()
             ) from exc
 
     @staticmethod
@@ -442,6 +487,156 @@ class DemandReviewService:
             review,
         )
 
+    def _public_command_response(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        command_type: DemandReviewCommandType,
+        idempotency_key: str,
+    ) -> DemandReviewPublicRead:
+        event = self.repository.find_command_event(
+            session,
+            actor.tenant_id,
+            command_type=command_type,
+            idempotency_key=idempotency_key,
+        )
+        if event is None:
+            raise self._idempotent_response_unavailable()
+        return self._public_replay(event)
+
+    def run_public(
+        self,
+        session: Session,
+        actor: ActorContext,
+        demand_list_id: int,
+        *,
+        expected_source_version: int,
+        idempotency_key: str,
+    ) -> DemandReviewPublicRead:
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        self.run(
+            session,
+            actor,
+            demand_list_id,
+            expected_source_version=expected_source_version,
+            idempotency_key=clean_key,
+        )
+        return self._public_command_response(
+            session,
+            actor,
+            command_type=DemandReviewCommandType.RUN,
+            idempotency_key=clean_key,
+        )
+
+    def decide_finding_public(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+        finding_id: int,
+        *,
+        expected_review_version: int,
+        expected_finding_version: int,
+        action: DemandReviewDecisionStatus,
+        final_quantity: Decimal | None,
+        reason: str | None,
+        idempotency_key: str,
+    ) -> DemandReviewPublicRead:
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        self.decide_finding(
+            session,
+            actor,
+            review_id,
+            finding_id,
+            expected_review_version=expected_review_version,
+            expected_finding_version=expected_finding_version,
+            action=action,
+            final_quantity=final_quantity,
+            reason=reason,
+            idempotency_key=clean_key,
+        )
+        return self._public_command_response(
+            session,
+            actor,
+            command_type=DemandReviewCommandType.DECIDE_FINDING,
+            idempotency_key=clean_key,
+        )
+
+    def batch_decide_public(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+        *,
+        expected_review_version: int,
+        commands: tuple[DemandReviewBatchDecisionItem, ...],
+        idempotency_key: str,
+    ) -> DemandReviewPublicRead:
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        self.batch_decide(
+            session,
+            actor,
+            review_id,
+            expected_review_version=expected_review_version,
+            commands=commands,
+            idempotency_key=clean_key,
+        )
+        return self._public_command_response(
+            session,
+            actor,
+            command_type=DemandReviewCommandType.BATCH_DECIDE,
+            idempotency_key=clean_key,
+        )
+
+    def derive_public(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+        *,
+        expected_review_version: int,
+        idempotency_key: str,
+    ) -> DemandReviewPublicRead:
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        self.derive(
+            session,
+            actor,
+            review_id,
+            expected_review_version=expected_review_version,
+            idempotency_key=clean_key,
+        )
+        return self._public_command_response(
+            session,
+            actor,
+            command_type=DemandReviewCommandType.DERIVE,
+            idempotency_key=clean_key,
+        )
+
+    def void_public(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+        *,
+        expected_review_version: int,
+        idempotency_key: str,
+    ) -> DemandReviewPublicRead:
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        self.void(
+            session,
+            actor,
+            review_id,
+            expected_review_version=expected_review_version,
+            idempotency_key=clean_key,
+        )
+        return self._public_command_response(
+            session,
+            actor,
+            command_type=DemandReviewCommandType.VOID,
+            idempotency_key=clean_key,
+        )
+
     @staticmethod
     def _refresh_counts(
         review: DemandReview,
@@ -507,27 +702,17 @@ class DemandReviewService:
                     "retryable": False,
                 },
             )
-        if event.response_snapshot_json is None:
-            raise ConflictError(
-                "idempotent response is unavailable",
-                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
-                details={
-                    "conflict_object": "demand_review",
-                    "retryable": False,
-                },
-            )
+        payload = DemandReviewService._snapshot_section(
+            event,
+            "internal",
+        )
+        if payload is None:
+            raise DemandReviewService._idempotent_response_unavailable()
         try:
-            return DemandReviewDeriveRead.model_validate(
-                event.response_snapshot_json
-            )
+            return DemandReviewDeriveRead.model_validate(payload)
         except ValidationError as exc:
-            raise ConflictError(
-                "idempotent response is unavailable",
-                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
-                details={
-                    "conflict_object": "demand_review",
-                    "retryable": False,
-                },
+            raise (
+                DemandReviewService._idempotent_response_unavailable()
             ) from exc
 
     @staticmethod
@@ -1116,7 +1301,15 @@ class DemandReviewService:
             },
         )
         response = self._read_model(session, actor, review)
-        event.response_snapshot_json = response.model_dump(mode="json")
+        public_response = self._public_read(
+            session,
+            actor,
+            review,
+        )
+        event.response_snapshot_json = self._response_envelope(
+            response,
+            public_response,
+        )
         session.flush()
         session.commit()
         return response
@@ -1451,8 +1644,14 @@ class DemandReviewService:
                 actor,
                 review,
             )
-            event.response_snapshot_json = response.model_dump(
-                mode="json"
+            public_response = self._public_read(
+                session,
+                actor,
+                review,
+            )
+            event.response_snapshot_json = self._response_envelope(
+                response,
+                public_response,
             )
             session.flush()
             session.commit()
@@ -1652,8 +1851,14 @@ class DemandReviewService:
                         )
                     ),
                 )
-                event.response_snapshot_json = response.model_dump(
-                    mode="json"
+                public_response = self._public_read(
+                    session,
+                    actor,
+                    review,
+                )
+                event.response_snapshot_json = self._response_envelope(
+                    response,
+                    public_response,
                 )
                 session.flush()
 
@@ -1694,22 +1899,32 @@ class DemandReviewService:
         if existing is not None:
             return self._replay(existing, request_hash)
 
-        source = self._load_source(
-            session,
-            actor,
-            demand_list_id,
-        )
-        self._require_source_authority(source)
-        self._require_source_version(
-            source,
-            expected_source_version,
-        )
-        items = self.item_repository.list_for_demand_list(
+        source = self.demand_list_repository.get_for_update(
             session,
             actor.tenant_id,
-            source.id,
+            demand_list_id,
         )
-        events = list(source.events)
+        if source is None:
+            session.rollback()
+            raise NotFoundError(
+                "demand_list",
+                demand_list_id,
+            )
+        try:
+            self._require_source_authority(source)
+            self._require_source_version(
+                source,
+                expected_source_version,
+            )
+            items = self.item_repository.list_for_demand_list(
+                session,
+                actor.tenant_id,
+                source.id,
+            )
+            events = list(source.events)
+        except Exception:
+            session.rollback()
+            raise
 
         try:
             review = self.repository.create_review(
@@ -1865,8 +2080,14 @@ class DemandReviewService:
                 actor,
                 review,
             )
-            final_event.response_snapshot_json = response.model_dump(
-                mode="json"
+            public_response = self._public_read(
+                session,
+                actor,
+                review,
+            )
+            final_event.response_snapshot_json = self._response_envelope(
+                response,
+                public_response,
             )
             session.flush()
             session.commit()
