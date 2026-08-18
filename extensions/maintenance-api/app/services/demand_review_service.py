@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.core.exceptions import (
 )
 from app.models.demand_review import (
     DemandReview,
+    DemandReviewDecision,
     DemandReviewEvent,
     DemandReviewFinding,
 )
@@ -33,11 +35,16 @@ from app.schemas.demand_review import (
     DemandReviewBatchDecisionItem,
     DemandReviewBatchDecisionRequest,
     DemandReviewDecisionRequest,
+    DemandReviewDeriveRead,
     DemandReviewFindingRead,
     DemandReviewRead,
 )
 from app.security.actor import ActorContext, MaintenanceRole
 from app.security.permissions import require_role
+from app.services.demand_list_service import (
+    DemandListDerivedItemOverride,
+    DemandListService,
+)
 from app.services.demand_review_rules import run_rules
 from app.services.demand_review_snapshot import DemandReviewSnapshotBuilder
 from app.services.snapshot_service import snapshot_service
@@ -51,6 +58,7 @@ class DemandReviewService:
         demand_list_repository: DemandListRepository | None = None,
         item_repository: DemandListItemRepository | None = None,
         snapshot_builder: DemandReviewSnapshotBuilder | None = None,
+        demand_list_service: DemandListService | None = None,
     ) -> None:
         self.repository = repository or DemandReviewRepository()
         self.demand_list_repository = (
@@ -61,6 +69,13 @@ class DemandReviewService:
         )
         self.snapshot_builder = (
             snapshot_builder or DemandReviewSnapshotBuilder()
+        )
+        self.demand_list_service = (
+            demand_list_service
+            or DemandListService(
+                repository=self.demand_list_repository,
+                item_repository=self.item_repository,
+            )
         )
 
     @staticmethod
@@ -263,6 +278,286 @@ class DemandReviewService:
             and finding.decision_status
             is DemandReviewDecisionStatus.PENDING
         )
+
+    @staticmethod
+    def _derive_request_hash(
+        *,
+        review_id: int,
+        expected_review_version: int,
+    ) -> str:
+        return snapshot_service.canonical_hash(
+            {
+                "command": "DERIVE",
+                "review_id": review_id,
+                "expected_review_version": expected_review_version,
+            }
+        )
+
+    @staticmethod
+    def _derive_replay(
+        event: DemandReviewEvent,
+        request_hash: str,
+    ) -> DemandReviewDeriveRead:
+        if event.request_hash != request_hash:
+            raise ConflictError(
+                "idempotency key was reused",
+                code="IDEMPOTENCY_KEY_REUSED",
+                details={
+                    "conflict_object": "demand_review",
+                    "retryable": False,
+                },
+            )
+        if event.response_snapshot_json is None:
+            raise ConflictError(
+                "idempotent response is unavailable",
+                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={
+                    "conflict_object": "demand_review",
+                    "retryable": False,
+                },
+            )
+        try:
+            return DemandReviewDeriveRead.model_validate(
+                event.response_snapshot_json
+            )
+        except ValidationError as exc:
+            raise ConflictError(
+                "idempotent response is unavailable",
+                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={
+                    "conflict_object": "demand_review",
+                    "retryable": False,
+                },
+            ) from exc
+
+    @staticmethod
+    def _derivation_conflict(
+        review: DemandReview,
+        source: Any,
+        *,
+        reason: str,
+    ) -> ConflictError:
+        return ConflictError(
+            "demand review derivation conflict",
+            code="REVIEW_DERIVATION_CONFLICT",
+            details={
+                "reason": reason,
+                "expected_status": DemandListStatus.PUBLISHED.value,
+                "actual_status": source.status.value,
+                "expected_current": True,
+                "actual_current": bool(source.is_current),
+                "expected_source_version": (
+                    review.source_demand_list_version
+                ),
+                "actual_source_version": source.version,
+                "conflict_object": "source_demand_list",
+                "retryable": False,
+            },
+        )
+
+    @classmethod
+    def _require_derivation_source(
+        cls,
+        review: DemandReview,
+        source: Any,
+    ) -> None:
+        if source.status is not DemandListStatus.PUBLISHED:
+            raise cls._derivation_conflict(
+                review,
+                source,
+                reason="source_not_published",
+            )
+        if not source.is_current:
+            raise cls._derivation_conflict(
+                review,
+                source,
+                reason="source_not_current",
+            )
+        if source.version != review.source_demand_list_version:
+            raise cls._derivation_conflict(
+                review,
+                source,
+                reason="source_version_changed",
+            )
+
+    @staticmethod
+    def _derive_quantity(
+        finding: DemandReviewFinding,
+        decision: DemandReviewDecision,
+    ) -> Decimal | None:
+        if not DemandReviewService._quantity_effect(finding):
+            return None
+        if finding.source_demand_list_item_id is None:
+            raise ConflictError(
+                "demand review derivation conflict",
+                code="REVIEW_DERIVATION_CONFLICT",
+                details={
+                    "reason": "quantity_effect_missing_source_item",
+                    "finding_id": finding.id,
+                    "conflict_object": "demand_review_finding",
+                    "retryable": False,
+                },
+            )
+        expected_effect_key = (
+            f"FINAL_QUANTITY:{finding.source_demand_list_item_id}"
+        )
+        if finding.effect_key != expected_effect_key:
+            raise ConflictError(
+                "demand review derivation conflict",
+                code="REVIEW_DERIVATION_CONFLICT",
+                details={
+                    "reason": "quantity_effect_key_invalid",
+                    "finding_id": finding.id,
+                    "effect_key": finding.effect_key,
+                    "conflict_object": "demand_review_finding",
+                    "retryable": False,
+                },
+            )
+
+        raw_quantity: Any
+        if (
+            finding.decision_status
+            is DemandReviewDecisionStatus.ACCEPTED
+        ):
+            raw_quantity = finding.suggestion_snapshot_json.get(
+                "final_quantity"
+            )
+        elif (
+            finding.decision_status
+            is DemandReviewDecisionStatus.EDIT_ACCEPTED
+        ):
+            raw_quantity = decision.final_quantity
+        else:
+            return None
+
+        try:
+            quantity = Decimal(str(raw_quantity))
+        except (TypeError, ValueError, ArithmeticError) as exc:
+            raise ConflictError(
+                "demand review derivation conflict",
+                code="REVIEW_DERIVATION_CONFLICT",
+                details={
+                    "reason": "quantity_effect_value_invalid",
+                    "finding_id": finding.id,
+                    "conflict_object": "demand_review_finding",
+                    "retryable": False,
+                },
+            ) from exc
+
+        if not quantity.is_finite() or quantity < 0:
+            raise ConflictError(
+                "demand review derivation conflict",
+                code="REVIEW_DERIVATION_CONFLICT",
+                details={
+                    "reason": "quantity_effect_value_invalid",
+                    "finding_id": finding.id,
+                    "conflict_object": "demand_review_finding",
+                    "retryable": False,
+                },
+            )
+        return quantity
+
+    def _derive_item_overrides(
+        self,
+        session: Session,
+        review: DemandReview,
+        findings: list[DemandReviewFinding],
+    ) -> dict[int, DemandListDerivedItemOverride]:
+        decision_rows = list(
+            session.scalars(
+                select(DemandReviewDecision)
+                .where(
+                    DemandReviewDecision.tenant_id == review.tenant_id,
+                    DemandReviewDecision.review_id == review.id,
+                )
+                .order_by(
+                    DemandReviewDecision.finding_id.asc(),
+                    DemandReviewDecision.id.asc(),
+                )
+            ).all()
+        )
+        latest_by_finding: dict[int, DemandReviewDecision] = {}
+        for decision in decision_rows:
+            latest_by_finding[decision.finding_id] = decision
+
+        overrides: dict[int, DemandListDerivedItemOverride] = {}
+        for finding in findings:
+            if (
+                finding.decision_status
+                is DemandReviewDecisionStatus.PENDING
+            ):
+                if finding.blocking:
+                    raise ConflictError(
+                        "demand review has unresolved findings",
+                        code="REVIEW_FINDINGS_UNRESOLVED",
+                        details={
+                            "review_id": review.id,
+                            "finding_id": finding.id,
+                            "conflict_object": "demand_review",
+                            "retryable": False,
+                        },
+                    )
+                continue
+
+            decision = latest_by_finding.get(finding.id)
+            if decision is None:
+                raise ConflictError(
+                    "demand review derivation conflict",
+                    code="REVIEW_DERIVATION_CONFLICT",
+                    details={
+                        "reason": "resolved_finding_has_no_decision",
+                        "finding_id": finding.id,
+                        "conflict_object": "demand_review_finding",
+                        "retryable": False,
+                    },
+                )
+            if decision.action != finding.decision_status.value:
+                raise ConflictError(
+                    "demand review derivation conflict",
+                    code="REVIEW_DERIVATION_CONFLICT",
+                    details={
+                        "reason": "decision_projection_mismatch",
+                        "finding_id": finding.id,
+                        "conflict_object": "demand_review_finding",
+                        "retryable": False,
+                    },
+                )
+
+            quantity = self._derive_quantity(finding, decision)
+            if quantity is None:
+                continue
+
+            source_item_id = finding.source_demand_list_item_id
+            assert source_item_id is not None
+            if source_item_id in overrides:
+                raise ConflictError(
+                    "demand review derivation conflict",
+                    code="REVIEW_DERIVATION_CONFLICT",
+                    details={
+                        "reason": "duplicate_quantity_effect",
+                        "finding_id": finding.id,
+                        "source_demand_list_item_id": source_item_id,
+                        "conflict_object": "demand_review_finding",
+                        "retryable": False,
+                    },
+                )
+
+            reason = (
+                (decision.reason or "").strip()
+                or str(
+                    finding.suggestion_snapshot_json.get("reason")
+                    or ""
+                ).strip()
+                or "formal demand review quantity"
+            )
+            overrides[source_item_id] = DemandListDerivedItemOverride(
+                final_quantity=quantity,
+                reason=reason,
+                review_id=review.id,
+                finding_id=finding.id,
+                decision_id=decision.id,
+            )
+        return overrides
 
     @staticmethod
     def _failure_summary(error: Exception) -> str:
@@ -869,6 +1164,204 @@ class DemandReviewService:
         except Exception:
             session.rollback()
             raise
+
+    def derive(
+        self,
+        session: Session,
+        actor: ActorContext,
+        review_id: int,
+        *,
+        expected_review_version: int,
+        idempotency_key: str,
+    ) -> DemandReviewDeriveRead:
+        require_role(actor, MaintenanceRole.ADMIN)
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        if expected_review_version < 1:
+            raise BusinessValidationError(
+                "expected review version is invalid",
+                code="REVIEW_VERSION_INVALID",
+            )
+        request_hash = self._derive_request_hash(
+            review_id=review_id,
+            expected_review_version=expected_review_version,
+        )
+        existing = self.repository.find_command_event(
+            session,
+            actor.tenant_id,
+            command_type=DemandReviewCommandType.DERIVE,
+            idempotency_key=clean_key,
+        )
+        if existing is not None:
+            return self._derive_replay(existing, request_hash)
+
+        try:
+            with session.begin_nested():
+                review = self.repository.get_for_update(
+                    session,
+                    actor.tenant_id,
+                    review_id,
+                )
+                if review is None:
+                    raise NotFoundError("demand_review", review_id)
+                self._require_review_version(
+                    review,
+                    expected_review_version,
+                )
+                if review.status is not DemandReviewStatus.READY_TO_DERIVE:
+                    raise ConflictError(
+                        "demand review is not ready to derive",
+                        code="REVIEW_STATE_CONFLICT",
+                        details={
+                            "conflict_object": "demand_review",
+                            "actual_status": review.status.value,
+                            "retryable": False,
+                        },
+                    )
+                if review.pending_blocking_finding_count != 0:
+                    raise ConflictError(
+                        "demand review has unresolved findings",
+                        code="REVIEW_FINDINGS_UNRESOLVED",
+                        details={
+                            "review_id": review.id,
+                            "pending_blocking_finding_count": (
+                                review.pending_blocking_finding_count
+                            ),
+                            "conflict_object": "demand_review",
+                            "retryable": False,
+                        },
+                    )
+
+                source = self.demand_list_repository.get_for_update(
+                    session,
+                    actor.tenant_id,
+                    review.source_demand_list_id,
+                )
+                if source is None:
+                    raise NotFoundError(
+                        "demand_list",
+                        review.source_demand_list_id,
+                    )
+                self._require_derivation_source(review, source)
+
+                current_findings = self.repository.list_findings(
+                    session,
+                    actor.tenant_id,
+                    review.id,
+                )
+                finding_ids = tuple(
+                    sorted(finding.id for finding in current_findings)
+                )
+                findings = (
+                    self.repository.findings_for_update(
+                        session,
+                        actor.tenant_id,
+                        review.id,
+                        finding_ids=finding_ids,
+                    )
+                    if finding_ids
+                    else []
+                )
+                if any(
+                    finding.blocking
+                    and finding.decision_status
+                    is DemandReviewDecisionStatus.PENDING
+                    for finding in findings
+                ):
+                    raise ConflictError(
+                        "demand review has unresolved findings",
+                        code="REVIEW_FINDINGS_UNRESOLVED",
+                        details={
+                            "review_id": review.id,
+                            "conflict_object": "demand_review",
+                            "retryable": False,
+                        },
+                    )
+
+                overrides = self._derive_item_overrides(
+                    session,
+                    review,
+                    findings,
+                )
+                before_summary = {
+                    **self._review_summary(review),
+                    "derived_demand_list_id": (
+                        review.derived_demand_list_id
+                    ),
+                }
+                derived, _ = (
+                    self.demand_list_service
+                    .create_derived_draft_in_transaction(
+                        session,
+                        actor,
+                        review.source_demand_list_id,
+                        expected_source_version=(
+                            review.source_demand_list_version
+                        ),
+                        require_current=True,
+                        item_overrides=overrides,
+                        derivation_context={
+                            "origin": "formal_review",
+                            "review_id": review.id,
+                        },
+                    )
+                )
+
+                review.status = DemandReviewStatus.DERIVED
+                review.derived_demand_list_id = derived.id
+                review.version += 1
+                session.flush()
+
+                after_summary = {
+                    **self._review_summary(review),
+                    "derived_demand_list_id": derived.id,
+                }
+                event = self.repository.append_event(
+                    session,
+                    actor.tenant_id,
+                    review_id=review.id,
+                    data={
+                        "event_type": DemandReviewEventType.DERIVED,
+                        "command_type": DemandReviewCommandType.DERIVE,
+                        "actor_user_id": actor.user_id,
+                        "actor_roles_json": [actor.role.value],
+                        "request_id": actor.request_id,
+                        "idempotency_key": clean_key,
+                        "request_hash": request_hash,
+                        "before_summary_json": before_summary,
+                        "after_summary_json": after_summary,
+                    },
+                )
+                response = DemandReviewDeriveRead(
+                    review=self._read_model(
+                        session,
+                        actor,
+                        review,
+                    ),
+                    derived_demand_list=(
+                        self.demand_list_service.get(
+                            session,
+                            actor,
+                            derived.id,
+                        )
+                    ),
+                )
+                event.response_snapshot_json = response.model_dump(
+                    mode="json"
+                )
+                session.flush()
+
+            session.commit()
+            return response
+        except IntegrityError as exc:
+            winner = self.repository.find_command_event(
+                session,
+                actor.tenant_id,
+                command_type=DemandReviewCommandType.DERIVE,
+                idempotency_key=clean_key,
+            )
+            if winner is None:
+                raise exc
+            return self._derive_replay(winner, request_hash)
 
     def run(
         self,

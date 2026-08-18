@@ -17,6 +17,7 @@ from app.models.enums import (
     DemandReviewSeverity,
     DemandReviewStatus,
 )
+from app.schemas.demand_list import DemandListRead
 
 DecimalString = Annotated[Decimal, Field(ge=0)]
 
@@ -184,3 +185,9 @@ class DemandReviewRead(BaseModel):
     failure_summary: str | None
     version: int
     findings: tuple[DemandReviewFindingRead, ...]
+
+class DemandReviewDeriveRead(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review: DemandReviewRead
+    derived_demand_list: DemandListRead

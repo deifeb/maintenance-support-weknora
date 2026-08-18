@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -34,6 +36,7 @@ from app.models.demand_list import (
     DemandListItem,
 )
 from app.models.enums import (
+    CalculationDecisionType,
     CalculationStatus,
     DemandListEventType,
     DemandListStatus,
@@ -100,6 +103,15 @@ def _snapshot_json(value: Any) -> Any:
             for item in value
         ]
     return deepcopy(value)
+
+
+@dataclass(frozen=True)
+class DemandListDerivedItemOverride:
+    final_quantity: Decimal
+    reason: str
+    review_id: int
+    finding_id: int
+    decision_id: int
 
 
 class DemandListService:
@@ -271,6 +283,246 @@ class DemandListService:
                 source_item.inventory_snapshot_json
             ),
         )
+
+    @staticmethod
+    def _derivation_source_conflict(
+        source: DemandList,
+        *,
+        expected_source_version: int,
+        require_current: bool,
+        reason: str,
+    ) -> ConflictError:
+        return ConflictError(
+            "demand review derivation conflict",
+            code="REVIEW_DERIVATION_CONFLICT",
+            details={
+                "reason": reason,
+                "expected_status": DemandListStatus.PUBLISHED.value,
+                "actual_status": source.status.value,
+                "expected_current": require_current,
+                "actual_current": bool(source.is_current),
+                "expected_source_version": expected_source_version,
+                "actual_source_version": source.version,
+                "conflict_object": "source_demand_list",
+                "retryable": False,
+            },
+        )
+
+    def _require_derived_source(
+        self,
+        source: DemandList,
+        *,
+        expected_source_version: int,
+        require_current: bool,
+        formal_review: bool,
+    ) -> None:
+        if formal_review:
+            if source.status is not DemandListStatus.PUBLISHED:
+                raise self._derivation_source_conflict(
+                    source,
+                    expected_source_version=expected_source_version,
+                    require_current=require_current,
+                    reason="source_not_published",
+                )
+            if require_current and not source.is_current:
+                raise self._derivation_source_conflict(
+                    source,
+                    expected_source_version=expected_source_version,
+                    require_current=require_current,
+                    reason="source_not_current",
+                )
+            if source.version != expected_source_version:
+                raise self._derivation_source_conflict(
+                    source,
+                    expected_source_version=expected_source_version,
+                    require_current=require_current,
+                    reason="source_version_changed",
+                )
+            return
+
+        self._require_version(source, expected_source_version)
+        self._require_status(
+            source,
+            action="derive",
+            expected_status=DemandListStatus.PUBLISHED,
+        )
+        if require_current and not source.is_current:
+            raise self._derivation_source_conflict(
+                source,
+                expected_source_version=expected_source_version,
+                require_current=True,
+                reason="source_not_current",
+            )
+
+    def _apply_derived_item_override(
+        self,
+        session: Session,
+        source_item: DemandListItem,
+        derived_item: DemandListItem,
+        override: DemandListDerivedItemOverride,
+    ) -> None:
+        quantity = override.final_quantity.quantize(
+            _SNAPSHOT_DECIMAL_QUANTUM
+        )
+        (
+            source_child_id,
+            selected_child_id,
+            selected_quantity,
+            candidates,
+        ) = self._risk_evidence(source_item)
+        evaluation = evaluate_decision_risk(
+            source_child_id=source_child_id,
+            selected_child_id=selected_child_id,
+            source_quantity=source_item.original_quantity,
+            selected_quantity=selected_quantity,
+            final_quantity=quantity,
+            criticality_level=source_item.criticality_level_snapshot,
+            successful_candidates=candidates,
+        )
+
+        decision_snapshot = deepcopy(
+            source_item.decision_snapshot_json or {}
+        )
+        decision_snapshot["demand_review"] = {
+            "review_id": override.review_id,
+            "finding_id": override.finding_id,
+            "decision_id": override.decision_id,
+        }
+
+        derived_item.final_quantity = quantity
+        derived_item.decision_type = (
+            CalculationDecisionType.MANUAL_QUANTITY
+        )
+        derived_item.decision_reason = override.reason
+        derived_item.decision_risk = evaluation.risk
+        derived_item.requires_admin_confirmation = (
+            evaluation.requires_admin_confirmation
+        )
+        derived_item.confirmed_by_admin = (
+            evaluation.requires_admin_confirmation
+        )
+        derived_item.risk_rule_version = evaluation.rule_version
+        derived_item.decision_snapshot_json = decision_snapshot
+        session.flush()
+
+    def create_derived_draft_in_transaction(
+        self,
+        session: Session,
+        actor: ActorContext,
+        source_demand_list_id: int,
+        *,
+        expected_source_version: int,
+        require_current: bool,
+        item_overrides: Mapping[
+            int,
+            DemandListDerivedItemOverride,
+        ],
+        derivation_context: Mapping[str, Any],
+        event_idempotency_key: str | None = None,
+        event_request_hash: str | None = None,
+    ) -> tuple[DemandList, DemandListEvent]:
+        source = self._load_locked_list(
+            session,
+            actor,
+            source_demand_list_id,
+        )
+        formal_review = (
+            derivation_context.get("origin") == "formal_review"
+        )
+        self._require_derived_source(
+            source,
+            expected_source_version=expected_source_version,
+            require_current=require_current,
+            formal_review=formal_review,
+        )
+        source_items = self._items(
+            session,
+            actor,
+            source.id,
+        )
+        source_item_ids = {item.id for item in source_items}
+        unknown_override_ids = sorted(
+            set(item_overrides) - source_item_ids
+        )
+        if unknown_override_ids:
+            raise ConflictError(
+                "demand review derivation conflict",
+                code="REVIEW_DERIVATION_CONFLICT",
+                details={
+                    "reason": "override_source_item_not_found",
+                    "source_demand_list_item_ids": unknown_override_ids,
+                    "conflict_object": "source_demand_list",
+                    "retryable": False,
+                },
+            )
+
+        derived = self.repository.create_version(
+            session,
+            actor.tenant_id,
+            {
+                "name": source.name,
+                "description": source.description,
+                "lineage_id": source.lineage_id,
+                "derived_from_id": source.id,
+                "scenario_version_id": source.scenario_version_id,
+                "calculation_group_id": source.calculation_group_id,
+                "status": DemandListStatus.DRAFT,
+                "is_current": False,
+                "created_by_user_id": actor.user_id,
+                "created_by_request_id": actor.request_id,
+            },
+        )
+        session.flush()
+
+        for source_item in source_items:
+            derived_item = self._copy_item_to_derived(
+                session,
+                actor,
+                source_item,
+                derived.id,
+            )
+            override = item_overrides.get(source_item.id)
+            if override is not None:
+                self._apply_derived_item_override(
+                    session,
+                    source_item,
+                    derived_item,
+                    override,
+                )
+
+        before = {
+            "source_demand_list_id": source.id,
+            "lineage_id": source.lineage_id,
+            "source_version_number": source.version_number,
+            "source_status": source.status.value,
+            "source_is_current": source.is_current,
+            "source_version": source.version,
+        }
+        after = {
+            "derived_from_id": source.id,
+            "lineage_id": source.lineage_id,
+            "source_version_number": source.version_number,
+            "new_version_number": derived.version_number,
+            "copied_item_count": len(source_items),
+            "status": derived.status.value,
+            "version": derived.version,
+        }
+        event = self.repository.append_event(
+            session,
+            actor.tenant_id,
+            demand_list_id=derived.id,
+            event_type=DemandListEventType.DERIVED,
+            actor_user_id=actor.user_id,
+            actor_roles=[actor.role.value],
+            request_id=actor.request_id,
+            idempotency_key=event_idempotency_key,
+            request_hash=event_request_hash,
+            before_summary=before,
+            after_summary=after,
+            response_snapshot={"id": derived.id},
+        )
+        session.flush()
+        return derived, event
 
     @staticmethod
     def _normalize_confirmation_note(
@@ -1436,102 +1688,20 @@ class DemandListService:
             )
 
         try:
-            source = self._load_locked_list(
-                session,
-                actor,
-                demand_list_id,
-            )
-            self._require_version(
-                source,
-                expected_version,
-            )
-            self._require_status(
-                source,
-                action="derive",
-                expected_status=(
-                    DemandListStatus.PUBLISHED
-                ),
-            )
-            source_items = self._items(
-                session,
-                actor,
-                source.id,
-            )
-
-            derived = self.repository.create_version(
-                session,
-                actor.tenant_id,
-                {
-                    "name": source.name,
-                    "description": source.description,
-                    "lineage_id": source.lineage_id,
-                    "derived_from_id": source.id,
-                    "scenario_version_id": (
-                        source.scenario_version_id
-                    ),
-                    "calculation_group_id": (
-                        source.calculation_group_id
-                    ),
-                    "status": DemandListStatus.DRAFT,
-                    "is_current": False,
-                    "created_by_user_id": (
-                        actor.user_id
-                    ),
-                    "created_by_request_id": (
-                        actor.request_id
-                    ),
-                },
-            )
-            session.flush()
-
-            for source_item in source_items:
-                self._copy_item_to_derived(
+            derived, event = (
+                self.create_derived_draft_in_transaction(
                     session,
                     actor,
-                    source_item,
-                    derived.id,
+                    demand_list_id,
+                    expected_source_version=expected_version,
+                    require_current=False,
+                    item_overrides={},
+                    derivation_context={
+                        "origin": "demand_list_derive",
+                    },
+                    event_idempotency_key=clean_key,
+                    event_request_hash=request_hash,
                 )
-
-            before = {
-                "source_demand_list_id": source.id,
-                "lineage_id": source.lineage_id,
-                "source_version_number": (
-                    source.version_number
-                ),
-                "source_status": source.status.value,
-                "source_is_current": source.is_current,
-                "source_version": source.version,
-            }
-            after = {
-                "derived_from_id": source.id,
-                "lineage_id": source.lineage_id,
-                "source_version_number": (
-                    source.version_number
-                ),
-                "new_version_number": (
-                    derived.version_number
-                ),
-                "copied_item_count": len(
-                    source_items
-                ),
-                "status": derived.status.value,
-                "version": derived.version,
-            }
-            event = self.repository.append_event(
-                session,
-                actor.tenant_id,
-                demand_list_id=derived.id,
-                event_type=DemandListEventType.DERIVED,
-                actor_user_id=actor.user_id,
-                actor_roles=[actor.role.value],
-                request_id=actor.request_id,
-                idempotency_key=clean_key,
-                request_hash=request_hash,
-                before_summary=before,
-                after_summary=after,
-                response_snapshot={
-                    "id": derived.id,
-                },
             )
             response = (
                 self._response_with_event_snapshot(
@@ -1555,7 +1725,6 @@ class DemandListService:
         except Exception:
             session.rollback()
             raise
-
     def publish(
         self,
         session: Session,
