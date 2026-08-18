@@ -12,6 +12,7 @@ export interface MaintenancePermissions {
   transferInventory: boolean
   adjustInventory: boolean
   confirmHighRisk: boolean
+  finalizeReview: boolean
   freezeInventory: boolean
   reverseInventory: boolean
   createStocktake: boolean
@@ -35,6 +36,7 @@ const DENIED_PERMISSIONS: Readonly<MaintenancePermissions> = {
   transferInventory: false,
   adjustInventory: false,
   confirmHighRisk: false,
+  finalizeReview: false,
   freezeInventory: false,
   reverseInventory: false,
   createStocktake: false,
@@ -67,6 +69,7 @@ const ADMIN_PERMISSIONS: Readonly<MaintenancePermissions> = {
   transferInventory: true,
   adjustInventory: true,
   confirmHighRisk: true,
+  finalizeReview: true,
   freezeInventory: true,
   reverseInventory: true,
   confirmStocktake: true,
@@ -119,6 +122,7 @@ export function permissionsForAuth(
     transferInventory: rolePermissions.transferInventory && canAdminister,
     adjustInventory: rolePermissions.adjustInventory && canAdminister,
     confirmHighRisk: rolePermissions.confirmHighRisk && canAdminister,
+    finalizeReview: rolePermissions.finalizeReview && canAdminister,
     freezeInventory: rolePermissions.freezeInventory && canAdminister,
     reverseInventory: rolePermissions.reverseInventory && canAdminister,
     createStocktake: rolePermissions.createStocktake && canMaintain,
