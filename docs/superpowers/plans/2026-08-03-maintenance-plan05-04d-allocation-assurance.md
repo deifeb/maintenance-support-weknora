@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- 进入条件：05-4C Closure Review 获批，Alembic head 是 `20260803_10`。本阶段 revision 是 `20260803_11`，`down_revision = "20260803_10"`。
+- 进入条件：05-4C Closure Review 获批，Alembic head 是 `20260803_12`。本阶段 revision 是 `20260803_13`，`down_revision = "20260803_12"`。
 - rule 状态：`DRAFT -> SIMULATED -> PUBLISHED -> RETIRED`。修改 SIMULATED/PUBLISHED 规则必须创建同 lineage 的新 DRAFT；不能原地改历史版本。
 - simulation 状态：`PENDING -> RUNNING -> COMPLETED | FAILED | CANCELLED`；使用持久化 row + 后台 executor + REST polling，不新增 SSE。GET rules 返回 `latest_simulation` 供轮询。
 - plan 状态：`DRAFT -> PREVIEWED -> CONFIRMED -> EXECUTING -> COMPLETED | PARTIALLY_COMPLETED | FAILED`；DRAFT/PREVIEWED/CONFIRMED 可转 VOIDED。
@@ -29,7 +29,7 @@
 
 - Create: `extensions/maintenance-api/app/models/allocation.py`
 - Modify: `extensions/maintenance-api/app/models/__init__.py`
-- Create: `extensions/maintenance-api/alembic/versions/20260803_11_allocation_assurance.py`
+- Create: `extensions/maintenance-api/alembic/versions/20260803_13_allocation_assurance.py`
 - Create: `extensions/maintenance-api/tests/migrations/test_allocation_migration.py`
 - Create: `extensions/maintenance-api/tests/models/test_allocation_models.py`
 
@@ -57,7 +57,7 @@ cd extensions/maintenance-api
 .\.venv\Scripts\python.exe -m pytest tests/migrations/test_allocation_migration.py tests/models/test_allocation_models.py -q
 ```
 
-- [ ] **Step 3: 写最小模型与 `20260803_11`**
+- [ ] **Step 3: 写最小模型与 `20260803_13`**
 
 Rule 保存 lineage/version/status/scope/effective interval/hard rules/weights/normalization/change reason/publish audit/version。Simulation 保存 candidate/baseline rule、sample/source refs、input snapshot/fingerprint、status、blockers、timestamps/error/version；results 保存 demand item/candidate、baseline/candidate ranks/scores/delta/reasons。Plan 保存 source list/version、rule、inventory fingerprint/status/version；line 保存 part、recommended balance/lot/serial、demand/allocated/gap、risks/manual override、expected balance version、reservation/result；event 保存完整审计 envelope。
 
@@ -65,18 +65,18 @@ Rule 保存 lineage/version/status/scope/effective interval/hard rules/weights/n
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/migrations/test_allocation_migration.py tests/models/test_allocation_models.py -q
-.\.venv\Scripts\python.exe -m alembic upgrade 20260803_11
-.\.venv\Scripts\python.exe -m alembic downgrade 20260803_10
+.\.venv\Scripts\python.exe -m alembic upgrade 20260803_13
+.\.venv\Scripts\python.exe -m alembic downgrade 20260803_12
 .\.venv\Scripts\python.exe -m alembic upgrade head
 .\.venv\Scripts\python.exe -m alembic heads
 ```
 
-预期：唯一 head `20260803_11`。
+预期：唯一 head `20260803_13`。
 
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add extensions/maintenance-api/app/models/allocation.py extensions/maintenance-api/app/models/__init__.py extensions/maintenance-api/alembic/versions/20260803_11_allocation_assurance.py extensions/maintenance-api/tests/migrations/test_allocation_migration.py extensions/maintenance-api/tests/models/test_allocation_models.py
+git add extensions/maintenance-api/app/models/allocation.py extensions/maintenance-api/app/models/__init__.py extensions/maintenance-api/alembic/versions/20260803_13_allocation_assurance.py extensions/maintenance-api/tests/migrations/test_allocation_migration.py extensions/maintenance-api/tests/models/test_allocation_models.py
 git commit -m "feat(maintenance): add allocation assurance schema"
 ```
 
@@ -464,7 +464,7 @@ pnpm --dir frontend typecheck
 pnpm --dir frontend build
 ```
 
-预期：唯一 head/current `20260803_11`；旧运行时库存引用为零；全部后端/前端测试、typecheck、production build 使用新鲜输出通过。
+预期：唯一 head/current `20260803_13`；旧运行时库存引用为零；全部后端/前端测试、typecheck、production build 使用新鲜输出通过。
 
 - [ ] **Step 5: 审查并编写双层 Closure Review**
 
