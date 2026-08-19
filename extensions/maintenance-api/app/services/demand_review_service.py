@@ -1991,6 +1991,7 @@ class DemandReviewService:
                     review.source_snapshot_json = snapshot.model_dump(
                         mode="json"
                     )
+                    session.flush()
 
                     persisted: list[DemandReviewFinding] = []
                     for draft in drafts:
