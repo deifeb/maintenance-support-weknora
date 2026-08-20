@@ -226,6 +226,12 @@ class InventoryBalance(Base, TenantScopedMixin, VersionedMixin, TimestampMixin):
             name="uq_inventory_balance_identity",
         ),
         Index(
+            "uq_inventory_balances_tenant_id_id",
+            "tenant_id",
+            "id",
+            unique=True,
+        ),
+        Index(
             "uq_inventory_balance_default_identity",
             "tenant_id",
             "warehouse_id",

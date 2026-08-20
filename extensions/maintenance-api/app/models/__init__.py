@@ -24,6 +24,14 @@ from app.models.ai_session import (
     AISession,
     AISessionSnapshot,
 )
+from app.models.allocation import (
+    AllocationPlan,
+    AllocationPlanEvent,
+    AllocationPlanLine,
+    AllocationRuleVersion,
+    AllocationSimulation,
+    AllocationSimulationResult,
+)
 from app.models.calculation_group import (
     CalculationGroup,
     CalculationGroupChild,
@@ -95,6 +103,12 @@ from app.models.supplier import Supplier, SupplierOffer
 __all__ = [
     "VersionedMixin",
     "TenantScopedMixin",
+    "AllocationRuleVersion",
+    "AllocationSimulation",
+    "AllocationSimulationResult",
+    "AllocationPlan",
+    "AllocationPlanLine",
+    "AllocationPlanEvent",
     "EquipmentModel",
     "ConfigurationVersion",
     "ConfigurationItem",

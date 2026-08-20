@@ -308,8 +308,6 @@ def test_demand_review_revision_chain_is_exact() -> None:
     assert revision.revision == REVISION
     assert revision.down_revision == PREVIOUS_REVISION
 
-    script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [REVISION]
 
 
 def test_demand_review_upgrade_roundtrip_preserves_source_facts(
@@ -374,7 +372,11 @@ def test_demand_review_upgrade_roundtrip_preserves_source_facts(
     reupgraded = inspect(engine)
     _assert_review_schema(reupgraded)
     assert _source_fact_hash(engine) == before_hash
-    assert ScriptDirectory.from_config(config).get_current_head() == REVISION
+    with engine.connect() as connection:
+        current_revision = connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+    assert current_revision == REVISION
 
     engine.dispose()
     get_settings.cache_clear()
