@@ -16,6 +16,9 @@ from app.workers import (
     recover_interrupted_ai_tasks,
     recover_interrupted_calculations,
 )
+from app.workers.allocation_simulation_executor import (
+    allocation_simulation_executor,
+)
 from app.workers.import_executor import (
     import_task_executor,
     recover_stale_import_tasks,
@@ -41,6 +44,7 @@ async def lifespan(application: FastAPI):
     ai_task_executor.shutdown(wait=False)
     demand_task_executor.shutdown(wait=False)
     calculation_group_executor.shutdown(wait=False)
+    allocation_simulation_executor.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:

@@ -69,6 +69,7 @@ class Settings(BaseSettings):
         le=1_000_000,
     )
     demand_worker_count: int = 2
+    allocation_simulation_worker_count: int = Field(default=2, ge=1, le=16)
     demand_sync_timeout_seconds: int = 5
     demand_max_pending_tasks: int = 20
     demand_max_monte_carlo_runs: int = 50_000
