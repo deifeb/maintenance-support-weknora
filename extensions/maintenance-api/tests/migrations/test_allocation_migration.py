@@ -12,8 +12,10 @@ from app.core.config import get_settings
 from sqlalchemy import create_engine, inspect, text
 
 FEATURE_MISSING = "PLAN05_4D_TASK1_FEATURE_MISSING"
+AMENDMENT_REQUIRED = "PLAN05_4D_TASK4_AMENDMENT_REQUIRED"
 REVISION = "20260803_13"
 PREVIOUS_REVISION = "20260803_12"
+AMENDMENT_REVISION = "20260825_14"
 BALANCE_PARENT_INDEX = "uq_inventory_balances_tenant_id_id"
 
 ALLOCATION_TABLES = {
@@ -74,6 +76,22 @@ def _revision(config: Config):
         _feature_missing(
             "Alembic revision "
             "20260803_13_allocation_assurance.py does not exist"
+        )
+    return revision
+
+
+def _amendment_revision(config: Config):
+    script = ScriptDirectory.from_config(config)
+    try:
+        revision = script.get_revision(AMENDMENT_REVISION)
+    except Exception:
+        revision = None
+    if revision is None:
+        pytest.fail(
+            f"{AMENDMENT_REQUIRED}: Alembic revision "
+            "20260825_14_allocation_plan_gap_balance_version.py "
+            "does not exist",
+            pytrace=False,
         )
     return revision
 
@@ -454,12 +472,15 @@ def _assert_allocation_schema(inspector) -> None:
 def test_allocation_revision_chain_is_exact() -> None:
     config = Config("alembic.ini")
     revision = _revision(config)
+    amendment = _amendment_revision(config)
 
     assert revision.revision == REVISION
     assert revision.down_revision == PREVIOUS_REVISION
+    assert amendment.revision == AMENDMENT_REVISION
+    assert amendment.down_revision == REVISION
 
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [AMENDMENT_REVISION]
 
 
 def test_allocation_upgrade_roundtrip_preserves_demand_review_inventory_facts(
@@ -521,6 +542,61 @@ def test_allocation_upgrade_roundtrip_preserves_demand_review_inventory_facts(
         _assert_allocation_schema(reupgraded)
         assert _source_fact_hash(engine) == before_hash
 
+        current_revision = engine.connect().execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one()
+        assert current_revision == REVISION
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+def test_gap_balance_version_amendment_is_reversible(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config, url = _config(
+        tmp_path / "allocation-gap-balance-version.db",
+        monkeypatch,
+    )
+    _revision(config)
+    _amendment_revision(config)
+
+    command.upgrade(config, AMENDMENT_REVISION)
+    engine = create_engine(url)
+    try:
+        upgraded = inspect(engine)
+        columns = {
+            column["name"]: column
+            for column in upgraded.get_columns("allocation_plan_lines")
+        }
+        assert columns["recommended_balance_id"]["nullable"] is True
+        assert columns["expected_balance_version"]["nullable"] is True, (
+            f"{AMENDMENT_REQUIRED}: expected_balance_version must be nullable"
+        )
+        checks = _check_sql(upgraded, "allocation_plan_lines")
+        assert any(
+            "EXPECTED_BALANCE_VERSION >= 1" in sql
+            or "EXPECTED_BALANCE_VERSION>=1" in sql
+            for sql in checks
+        )
+        assert any(
+            "RECOMMENDED_BALANCE_ID IS NULL" in sql
+            and "EXPECTED_BALANCE_VERSION IS NULL" in sql
+            and "RECOMMENDED_BALANCE_ID IS NOT NULL" in sql
+            and "EXPECTED_BALANCE_VERSION IS NOT NULL" in sql
+            for sql in checks
+        ), (
+            f"{AMENDMENT_REQUIRED}: migration must enforce "
+            "balance/version nullability pairing"
+        )
+
+        command.downgrade(config, REVISION)
+        downgraded = inspect(engine)
+        downgraded_columns = {
+            column["name"]: column
+            for column in downgraded.get_columns("allocation_plan_lines")
+        }
+        assert downgraded_columns["expected_balance_version"]["nullable"] is False
         current_revision = engine.connect().execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()

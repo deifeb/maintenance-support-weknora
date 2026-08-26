@@ -30,6 +30,8 @@ PLAN_STATUSES = (
     "VOIDED",
 )
 
+AMENDMENT_REQUIRED = "PLAN05_4D_TASK4_AMENDMENT_REQUIRED"
+
 
 def _feature_missing(message: str) -> None:
     pytest.fail(f"{FEATURE_MISSING}: {message}", pytrace=False)
@@ -366,6 +368,30 @@ def test_allocation_plan_metadata_is_tenant_safe_auditable_and_idempotent() -> N
     _assert_allowed_values(plan, "status", PLAN_STATUSES)
     _assert_version_check(plan)
     _assert_version_check(line)
+
+    assert line.c.expected_balance_version.nullable is True, (
+        f"{AMENDMENT_REQUIRED}: gap-only lines require nullable "
+        "expected_balance_version"
+    )
+    line_checks = _check_sql(line)
+    assert any(
+        "EXPECTED_BALANCE_VERSION >= 1" in sql
+        or "EXPECTED_BALANCE_VERSION>=1" in sql
+        for sql in line_checks
+    ), (
+        f"{AMENDMENT_REQUIRED}: non-null expected balance versions "
+        "must remain >= 1"
+    )
+    assert any(
+        "RECOMMENDED_BALANCE_ID IS NULL" in sql
+        and "EXPECTED_BALANCE_VERSION IS NULL" in sql
+        and "RECOMMENDED_BALANCE_ID IS NOT NULL" in sql
+        and "EXPECTED_BALANCE_VERSION IS NOT NULL" in sql
+        for sql in line_checks
+    ), (
+        f"{AMENDMENT_REQUIRED}: recommended balance and expected "
+        "balance version must be null/non-null together"
+    )
 
     plan_fks = _foreign_key_sets(plan)
     assert (

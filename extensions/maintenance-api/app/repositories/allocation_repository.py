@@ -6,7 +6,12 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import AllocationRuleVersion
+from app.models import (
+    AllocationPlan,
+    AllocationPlanEvent,
+    AllocationPlanLine,
+    AllocationRuleVersion,
+)
 from app.repositories.base import tenant_loader_criteria
 from app.services.snapshot_service import snapshot_service
 
@@ -154,3 +159,92 @@ class AllocationRepository:
             for rule in candidates
             if snapshot_service.canonical_json(rule.scope_json) == target_scope
         ]
+    def get_plan_by_idempotency_key(
+        self,
+        session: Session,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> AllocationPlan | None:
+        return session.scalar(
+            select(AllocationPlan)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AllocationPlan.tenant_id == tenant_id,
+                AllocationPlan.idempotency_key == idempotency_key,
+            )
+        )
+
+    def get_plan_for_update(
+        self,
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+    ) -> AllocationPlan | None:
+        return session.scalar(
+            select(AllocationPlan)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AllocationPlan.tenant_id == tenant_id,
+                AllocationPlan.id == plan_id,
+            )
+            .with_for_update()
+        )
+
+    def get_plan_line_for_update(
+        self,
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+        line_id: int,
+    ) -> AllocationPlanLine | None:
+        return session.scalar(
+            select(AllocationPlanLine)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AllocationPlanLine.tenant_id == tenant_id,
+                AllocationPlanLine.plan_id == plan_id,
+                AllocationPlanLine.id == line_id,
+            )
+            .with_for_update()
+        )
+
+    def list_plan_lines(
+        self,
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+    ) -> list[AllocationPlanLine]:
+        return list(
+            session.scalars(
+                select(AllocationPlanLine)
+                .options(tenant_loader_criteria(tenant_id))
+                .execution_options(populate_existing=True)
+                .where(
+                    AllocationPlanLine.tenant_id == tenant_id,
+                    AllocationPlanLine.plan_id == plan_id,
+                )
+                .order_by(AllocationPlanLine.id.asc())
+            ).all()
+        )
+
+    def get_plan_created_event(
+        self,
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+    ) -> AllocationPlanEvent | None:
+        return session.scalar(
+            select(AllocationPlanEvent)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AllocationPlanEvent.tenant_id == tenant_id,
+                AllocationPlanEvent.plan_id == plan_id,
+                AllocationPlanEvent.event_type == "PLAN_CREATED",
+            )
+            .order_by(AllocationPlanEvent.id.asc())
+            .limit(1)
+        )
