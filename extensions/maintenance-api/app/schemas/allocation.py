@@ -108,3 +108,37 @@ class AllocationRuleRetireCommand(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     expected_version: int = Field(gt=0)
+
+class AllocationPlanLineEditCommand(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    expected_plan_version: int = Field(gt=0)
+    expected_line_version: int = Field(gt=0)
+    allocated_quantity: Decimal
+    reason: str = Field(min_length=1, max_length=4000)
+
+    _validate_allocated_quantity = field_validator(
+        "allocated_quantity",
+        mode="before",
+    )(_decimal_value)
+
+    @field_validator("allocated_quantity")
+    @classmethod
+    def validate_allocated_quantity(cls, value: Decimal) -> Decimal:
+        if value < 0:
+            raise ValueError("allocated_quantity must be non-negative")
+        return value
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("reason cannot be blank")
+        return normalized
+
+
+class AllocationPlanPreviewCommand(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    expected_version: int = Field(gt=0)

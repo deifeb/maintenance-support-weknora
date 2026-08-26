@@ -290,6 +290,13 @@ class AllocationPlanLine(Base, TenantScopedMixin, VersionedMixin, TimestampMixin
             "expected_balance_version >= 1",
             name="ck_allocation_plan_line_expected_balance_version",
         ),
+        CheckConstraint(
+            "(recommended_balance_id IS NULL "
+            "AND expected_balance_version IS NULL) "
+            "OR (recommended_balance_id IS NOT NULL "
+            "AND expected_balance_version IS NOT NULL)",
+            name="ck_allocation_plan_line_balance_version_pair",
+        ),
         Index("ix_allocation_plan_lines_tenant_plan", "tenant_id", "plan_id"),
     )
 
@@ -305,7 +312,7 @@ class AllocationPlanLine(Base, TenantScopedMixin, VersionedMixin, TimestampMixin
     gap_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     risks_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
     manual_override_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    expected_balance_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_balance_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reservation_id: Mapped[int | None] = mapped_column(Integer)
     result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
