@@ -591,3 +591,387 @@ def test_generation_gap_only_line_has_no_fake_recommended_identity(
     assert "no_eligible" in str(line.risks_json).lower() or "no eligible" in str(
         line.risks_json
     ).lower()
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+
+def _task6_plan_contract():
+    service_api = _service_api()
+    schema_api = importlib.import_module("app.schemas.allocation")
+    required_methods = ("list_read", "get_read", "void", "regenerate")
+    required_schema = (
+        "AllocationPlanCreateCommand",
+        "AllocationPlanVoidCommand",
+        "AllocationPlanRegenerateCommand",
+        "AllocationPlanSummaryRead",
+        "AllocationPlanLineRead",
+        "AllocationPlanRead",
+        "AllocationPlanRegenerationResult",
+    )
+    missing_methods = [
+        name for name in required_methods
+        if not hasattr(service_api.AllocationPlanService, name)
+    ]
+    missing_schema = [name for name in required_schema if not hasattr(schema_api, name)]
+    if missing_methods or missing_schema:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: plan API support missing; "
+            f"methods={missing_methods}, schema={missing_schema}",
+            pytrace=False,
+        )
+    return service_api, schema_api
+
+
+# PLAN05_4D_TASK6_GREEN_C_TEST_CONTRACT
+def test_task6_plan_service_exposes_read_void_and_regenerate_surface(
+    session,
+    actor_contributor,
+) -> None:
+    from inspect import signature
+
+    service_api, _ = _task6_plan_contract()
+    methods = service_api.AllocationPlanService
+    expected = {
+        "list_read": {
+            "session",
+            "actor",
+            "page",
+            "page_size",
+            "status",
+            "source_demand_list_id",
+            "rule_id",
+        },
+        "get_read": {"session", "actor", "plan_id"},
+        "void": {"session", "actor", "plan_id", "command"},
+        "regenerate": {
+            "session",
+            "actor",
+            "source_plan_id",
+            "command",
+            "idempotency_key",
+        },
+    }
+    for name, required in expected.items():
+        actual = set(signature(getattr(methods, name)).parameters)
+        assert required <= actual, (
+            f"{TASK6_FEATURE_MISSING}: {name} parameters missing "
+            f"{sorted(required - actual)}"
+        )
+
+    service = service_api.AllocationPlanService()
+    context = _seed_context(session, suffix="task6-read")
+    before_inventory = _inventory_facts(
+        session,
+        actor_contributor.tenant_id,
+    )
+    plan = service.create(
+        session,
+        actor_contributor,
+        context["source"].id,
+        idempotency_key="task6-read-create",
+    )
+
+    read = service.get_read(
+        session,
+        actor_contributor,
+        plan.id,
+    )
+    assert read.id == plan.id
+    assert read.status == "DRAFT"
+    assert read.version == plan.version
+    assert read.source_demand_list_id == context["source"].id
+    assert read.source_demand_list_version == context["source"].version
+    assert read.rule_id == context["rules"][0].id
+    assert read.inventory_fingerprint == plan.inventory_fingerprint
+    assert tuple(line.id for line in read.lines) == tuple(
+        sorted(line.id for line in read.lines)
+    )
+    assert read.lines
+    assert read.lines[0].plan_id == plan.id
+    assert read.lines[0].demand_list_item_id == context["item"].id
+
+    items, total = service.list_read(
+        session,
+        actor_contributor,
+        page=1,
+        page_size=20,
+        status="DRAFT",
+        source_demand_list_id=context["source"].id,
+        rule_id=context["rules"][0].id,
+    )
+    assert total == 1
+    assert [item.id for item in items] == [plan.id]
+    assert items[0].status == "DRAFT"
+    assert items[0].source_demand_list_id == context["source"].id
+    assert _inventory_facts(
+        session,
+        actor_contributor.tenant_id,
+    ) == before_inventory
+
+
+def test_task6_plan_create_rejects_stale_expected_source_version(
+    session,
+    actor_contributor,
+) -> None:
+    from inspect import signature
+
+    service = _service_api().AllocationPlanService()
+    if "expected_source_version" not in signature(service.create).parameters:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: AllocationPlanService.create must accept "
+            "expected_source_version",
+            pytrace=False,
+        )
+    context = _seed_context(session, suffix="task6-source-version")
+    with pytest.raises(AppException) as raised:
+        service.create(
+            session,
+            actor_contributor,
+            context["source"].id,
+            expected_source_version=context["source"].version + 1,
+            idempotency_key="task6-source-version",
+        )
+    assert raised.value.code == "ALLOCATION_SOURCE_NOT_CURRENT"
+    assert raised.value.details["expected_version"] == context["source"].version + 1
+    assert raised.value.details["actual_version"] == context["source"].version
+
+
+def test_task6_plan_void_is_state_idempotent_and_has_zero_inventory_side_effect(
+    session,
+    actor_contributor,
+) -> None:
+    _, schema_api = _task6_plan_contract()
+    service = _service_api().AllocationPlanService()
+    context = _seed_context(session, suffix="task6-void")
+    plan = service.create(
+        session,
+        actor_contributor,
+        context["source"].id,
+        idempotency_key="task6-void-create",
+    )
+    before_inventory = _inventory_facts(session, actor_contributor.tenant_id)
+    start_version = plan.version
+    command = schema_api.AllocationPlanVoidCommand(expected_version=start_version)
+
+    result = service.void(
+        session,
+        actor_contributor,
+        plan.id,
+        command=command,
+    )
+    session.flush()
+    session.refresh(plan)
+    after_first = _inventory_facts(session, actor_contributor.tenant_id)
+
+    assert result.status == "VOIDED"
+    assert result.plan_id == plan.id
+    assert plan.status == "VOIDED"
+    assert plan.version == start_version + 1
+    assert after_first == before_inventory
+
+    replay = service.void(
+        session,
+        actor_contributor,
+        plan.id,
+        command=command,
+    )
+    session.refresh(plan)
+    assert replay.model_dump(mode="json") == result.model_dump(mode="json")
+    assert plan.version == start_version + 1
+    assert _inventory_facts(session, actor_contributor.tenant_id) == before_inventory
+
+
+    terminal_context = _seed_context(
+        session,
+        suffix="task6-void-terminal",
+    )
+    terminal_plan = service.create(
+        session,
+        actor_contributor,
+        terminal_context["source"].id,
+        idempotency_key="task6-void-terminal-create",
+    )
+    terminal_plan.status = "COMPLETED"
+    session.flush()
+    terminal_before_inventory = _inventory_facts(
+        session,
+        actor_contributor.tenant_id,
+    )
+
+    with pytest.raises(AppException) as terminal_error:
+        service.void(
+            session,
+            actor_contributor,
+            terminal_plan.id,
+            command=schema_api.AllocationPlanVoidCommand(
+                expected_version=terminal_plan.version,
+            ),
+        )
+    assert terminal_error.value.code == "ALLOCATION_PLAN_STATE_CONFLICT"
+    session.refresh(terminal_plan)
+    assert terminal_plan.status == "COMPLETED"
+    assert _inventory_facts(
+        session,
+        actor_contributor.tenant_id,
+    ) == terminal_before_inventory
+
+
+def test_task6_plan_regenerate_creates_fresh_draft_and_replays_same_key(
+    session,
+    actor_contributor,
+) -> None:
+    _, schema_api = _task6_plan_contract()
+    service = _service_api().AllocationPlanService()
+    context = _seed_context(session, suffix="task6-regenerate")
+    source_plan = service.create(
+        session,
+        actor_contributor,
+        context["source"].id,
+        idempotency_key="task6-regenerate-source",
+    )
+    source_snapshot = {
+        "status": source_plan.status,
+        "version": source_plan.version,
+        "inventory_fingerprint": source_plan.inventory_fingerprint,
+    }
+
+    context["top"].on_hand_quantity += Decimal("1.0000")
+    context["top"].version += 1
+    session.flush()
+    before_inventory = _inventory_facts(session, actor_contributor.tenant_id)
+
+    command = schema_api.AllocationPlanRegenerateCommand(
+        expected_version=source_plan.version,
+    )
+    first = service.regenerate(
+        session,
+        actor_contributor,
+        source_plan.id,
+        command=command,
+        idempotency_key="task6-regenerate-action",
+    )
+    session.flush()
+    regenerated = session.get(AllocationPlan, first.new_plan_id)
+    assert regenerated is not None
+    assert first.source_plan_id == source_plan.id
+    assert first.new_plan_id != source_plan.id
+    assert regenerated.status == "DRAFT"
+    assert regenerated.source_demand_list_id == source_plan.source_demand_list_id
+    assert regenerated.inventory_fingerprint != source_plan.inventory_fingerprint
+
+    session.refresh(source_plan)
+    assert source_plan.status == source_snapshot["status"]
+    assert source_plan.version == source_snapshot["version"]
+    assert source_plan.inventory_fingerprint == source_snapshot["inventory_fingerprint"]
+    assert _inventory_facts(session, actor_contributor.tenant_id) == before_inventory
+
+    replay = service.regenerate(
+        session,
+        actor_contributor,
+        source_plan.id,
+        command=command,
+        idempotency_key="task6-regenerate-action",
+    )
+    assert replay.model_dump(mode="json") == first.model_dump(mode="json")
+
+    with pytest.raises(AppException) as reused:
+        service.regenerate(
+            session,
+            actor_contributor,
+            source_plan.id,
+            command=schema_api.AllocationPlanRegenerateCommand(
+                expected_version=source_plan.version + 1,
+            ),
+            idempotency_key="task6-regenerate-action",
+        )
+    assert reused.value.code == "IDEMPOTENCY_KEY_REUSED"
+
+
+    fallback = _seed_context(
+        session,
+        suffix="task6-regenerate-current-source",
+    )
+    fallback_source_plan = service.create(
+        session,
+        actor_contributor,
+        fallback["source"].id,
+        idempotency_key="task6-regenerate-current-source-plan",
+    )
+    fallback_plan_snapshot = {
+        "status": fallback_source_plan.status,
+        "version": fallback_source_plan.version,
+        "source_demand_list_id": fallback_source_plan.source_demand_list_id,
+        "source_demand_list_version": fallback_source_plan.source_demand_list_version,
+        "inventory_fingerprint": fallback_source_plan.inventory_fingerprint,
+    }
+
+    old_source = fallback["source"]
+    old_source.is_current = False
+    current_source = DemandList(
+        tenant_id=old_source.tenant_id,
+        name=f"{old_source.name} current",
+        lineage_id=old_source.lineage_id,
+        version_number=old_source.version_number + 1,
+        scenario_version_id=old_source.scenario_version_id,
+        calculation_group_id=old_source.calculation_group_id,
+        status=DemandListStatus.PUBLISHED,
+        is_current=True,
+        created_by_user_id="seed-user",
+        created_by_request_id="task6-regenerate-current-source",
+    )
+    session.add(current_source)
+    session.flush()
+    current_item = DemandListItem(
+        tenant_id=current_source.tenant_id,
+        demand_list_id=current_source.id,
+        spare_part_id=fallback["item"].spare_part_id,
+        spare_part_code_snapshot=fallback["item"].spare_part_code_snapshot,
+        spare_part_name_snapshot=fallback["item"].spare_part_name_snapshot,
+        spare_part_unit_snapshot=fallback["item"].spare_part_unit_snapshot,
+        criticality_level_snapshot=(
+            fallback["item"].criticality_level_snapshot
+        ),
+        original_quantity=fallback["item"].original_quantity,
+        final_quantity=fallback["item"].final_quantity,
+        source_snapshot_json={"regenerated": True},
+    )
+    session.add(current_item)
+    session.flush()
+
+    fallback_result = service.regenerate(
+        session,
+        actor_contributor,
+        fallback_source_plan.id,
+        command=schema_api.AllocationPlanRegenerateCommand(
+            expected_version=fallback_source_plan.version,
+        ),
+        idempotency_key="task6-regenerate-current-source-action",
+    )
+    regenerated_current = session.get(
+        AllocationPlan,
+        fallback_result.new_plan_id,
+    )
+    assert regenerated_current is not None
+    assert regenerated_current.status == "DRAFT"
+    assert regenerated_current.source_demand_list_id == current_source.id
+    assert (
+        regenerated_current.source_demand_list_version
+        == current_source.version
+    )
+
+    session.refresh(fallback_source_plan)
+    assert fallback_source_plan.status == fallback_plan_snapshot["status"]
+    assert fallback_source_plan.version == fallback_plan_snapshot["version"]
+    assert (
+        fallback_source_plan.source_demand_list_id
+        == fallback_plan_snapshot["source_demand_list_id"]
+    )
+    assert (
+        fallback_source_plan.source_demand_list_version
+        == fallback_plan_snapshot["source_demand_list_version"]
+    )
+    assert (
+        fallback_source_plan.inventory_fingerprint
+        == fallback_plan_snapshot["inventory_fingerprint"]
+    )

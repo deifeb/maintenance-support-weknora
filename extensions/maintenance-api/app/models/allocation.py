@@ -59,6 +59,12 @@ class AllocationRuleVersion(Base, TenantScopedMixin, VersionedMixin, TimestampMi
             "effective_from",
             "effective_to",
         ),
+        Index(
+            "uq_allocation_rule_versions_tenant_publish_idempotency",
+            "tenant_id",
+            "publish_idempotency_key",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -85,6 +91,10 @@ class AllocationRuleVersion(Base, TenantScopedMixin, VersionedMixin, TimestampMi
     published_by_user_id: Mapped[str | None] = mapped_column(String(128))
     published_by_request_id: Mapped[str | None] = mapped_column(String(128))
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # PLAN05_4D_TASK6_GREEN_A: strict publish idempotency receipt.
+    publish_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    publish_request_hash: Mapped[str | None] = mapped_column(String(64))
+    publish_response_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class AllocationSimulation(Base, TenantScopedMixin, VersionedMixin, TimestampMixin):

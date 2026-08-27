@@ -56,7 +56,7 @@ def _normalization(value: Any) -> dict[str, dict[str, Decimal]]:
 
 
 class RuleSnapshot(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     scope: dict[str, Any]
     effective_from: datetime | None = None
@@ -99,18 +99,177 @@ class AllocationRuleDraftCommand(RuleSnapshot):
 
 
 class AllocationRulePublishCommand(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_version: int = Field(gt=0)
 
 
 class AllocationRuleRetireCommand(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_version: int = Field(gt=0)
 
-class AllocationPlanLineEditCommand(BaseModel):
+# PLAN05_4D_TASK6_GREEN_A: stored/replayed rule publish response contract.
+class AllocationRuleActionResult(BaseModel):
     model_config = ConfigDict(frozen=True)
+
+    rule_id: int
+    status: str
+    version: int
+    version_number: int
+
+# PLAN05_4D_TASK6_GREEN_B: public simulation submit/read contracts.
+SimulationProgressPhase = Literal["QUEUED", "RUNNING", "TERMINAL"]
+
+
+class AllocationSimulationSubmitCommand(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_rule_version: int = Field(gt=0)
+    baseline_rule_id: int | None = Field(default=None, gt=0)
+    source_demand_list_id: int = Field(gt=0)
+    sample_ref: str | None = Field(default=None, max_length=128)
+
+
+class AllocationSimulationProgressRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    phase: SimulationProgressPhase
+    percent: int | None
+
+    @model_validator(mode="after")
+    def validate_phase_percent(self) -> AllocationSimulationProgressRead:
+        expected = {
+            "QUEUED": 0,
+            "RUNNING": None,
+            "TERMINAL": 100,
+        }[self.phase]
+        if self.percent != expected:
+            raise ValueError(
+                f"{self.phase} progress requires percent={expected!r}"
+            )
+        return self
+
+
+class AllocationSimulationResultsSummaryRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total_rows: int = Field(ge=0)
+    demand_item_count: int = Field(ge=0)
+    high_priority_regression: Decimal = Field(ge=0)
+
+    _validate_high_priority_regression = field_validator(
+        "high_priority_regression",
+        mode="before",
+    )(_decimal_value)
+
+
+class AllocationSimulationSummaryRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    status: str
+    version: int
+    progress: AllocationSimulationProgressRead
+    blockers: list[dict[str, Any]]
+    results_summary: AllocationSimulationResultsSummaryRead
+    completed_at: datetime | None = None
+    error_code: str | None = None
+    error_summary: str | None = None
+
+# PLAN05_4D_TASK6_GREEN_D: public rule read contract.
+class AllocationRuleRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    lineage_id: str
+    version_number: int
+    status: str
+    scope: dict[str, Any]
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    hard_rules: dict[str, Any]
+    weights: dict[str, Decimal]
+    normalization: dict[str, dict[str, Decimal]]
+    change_reason: str
+    published_by_user_id: str | None = None
+    published_by_request_id: str | None = None
+    published_at: datetime | None = None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    latest_simulation: AllocationSimulationSummaryRead | None = None
+
+# PLAN05_4D_TASK6_GREEN_C: public plan request/read contracts.
+class AllocationPlanCreateCommand(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_demand_list_id: int = Field(gt=0)
+    expected_source_version: int = Field(gt=0)
+
+
+class AllocationPlanVoidCommand(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_version: int = Field(gt=0)
+
+
+class AllocationPlanRegenerateCommand(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_version: int = Field(gt=0)
+
+
+class AllocationPlanSummaryRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    source_demand_list_id: int
+    source_demand_list_version: int
+    rule_id: int
+    inventory_fingerprint: str
+    status: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AllocationPlanLineRead(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: int
+    plan_id: int
+    demand_list_item_id: int
+    spare_part_id: int
+    recommended_balance_id: int | None = None
+    recommended_lot_id: int | None = None
+    recommended_serial_item_id: int | None = None
+    demand_quantity: Decimal
+    allocated_quantity: Decimal
+    gap_quantity: Decimal
+    risks: list[dict[str, Any]]
+    manual_override: dict[str, Any] | None = None
+    expected_balance_version: int | None = None
+    reservation_id: int | None = None
+    result: dict[str, Any] | None = None
+    version: int
+
+
+class AllocationPlanRead(AllocationPlanSummaryRead):
+    lines: tuple[AllocationPlanLineRead, ...]
+
+
+class AllocationPlanRegenerationResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_plan_id: int
+    new_plan_id: int
+    event_id: int
+    status: str
+    version: int
+
+class AllocationPlanLineEditCommand(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_plan_version: int = Field(gt=0)
     expected_line_version: int = Field(gt=0)
@@ -139,19 +298,19 @@ class AllocationPlanLineEditCommand(BaseModel):
 
 
 class AllocationPlanPreviewCommand(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_version: int = Field(gt=0)
 
 
 class AllocationPlanConfirmCommand(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_version: int = Field(gt=0)
 
 
 class AllocationPlanExecuteCommand(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_version: int = Field(gt=0)
 

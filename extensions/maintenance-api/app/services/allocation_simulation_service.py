@@ -27,7 +27,12 @@ from app.models import (
     SparePart,
     WarehouseLocation,
 )
-from app.schemas.allocation import RuleSnapshot
+from app.schemas.allocation import (
+    AllocationSimulationProgressRead,
+    AllocationSimulationResultsSummaryRead,
+    AllocationSimulationSummaryRead,
+    RuleSnapshot,
+)
 from app.security.actor import ActorContext, MaintenanceRole
 from app.services.allocation_rule_service import AllocationRuleService
 from app.services.allocation_scoring import RankedCandidate, rank_candidates
@@ -55,10 +60,15 @@ class SimulationSummary:
     id: int
     tenant_id: str
     status: str
+    version: int
     rule_hash: str
+    progress: AllocationSimulationProgressRead
     blockers: list[dict[str, Any]]
+    results_summary: AllocationSimulationResultsSummaryRead
     high_priority_regression: Decimal
     completed_at: datetime | None
+    error_code: str | None
+    error_summary: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,12 +95,14 @@ class AllocationSimulationService:
         source_demand_list_id: int,
         sample_ref: str | None,
         idempotency_key: str,
+        expected_rule_version: int | None = None,
     ) -> AllocationSimulation:
         self._require_contributor(actor)
         clean_key = self._normalize_idempotency_key(actor, idempotency_key)
         request_hash = snapshot_service.canonical_hash(
             {
                 "candidate_rule_id": candidate_rule_id,
+                "expected_rule_version": expected_rule_version,
                 "baseline_rule_id": baseline_rule_id,
                 "source_demand_list_id": source_demand_list_id,
                 "sample_ref": sample_ref,
@@ -118,6 +130,21 @@ class AllocationSimulationService:
             actor,
             candidate_rule_id,
         )
+        if (
+            expected_rule_version is not None
+            and candidate_rule.version != expected_rule_version
+        ):
+            self._raise_conflict(
+                actor,
+                "allocation rule version conflict",
+                code="ALLOCATION_RULE_VERSION_CONFLICT",
+                details={
+                    "expected_version": expected_rule_version,
+                    "actual_version": candidate_rule.version,
+                    "retryable": False,
+                },
+            )
+
         baseline_rule = (
             self._require_rule(session, actor, baseline_rule_id)
             if baseline_rule_id is not None
@@ -351,6 +378,54 @@ class AllocationSimulationService:
             return None
         return self._summary(session, simulation)
 
+    # PLAN05_4D_TASK6_GREEN_B: public latest simulation read.
+    def latest_read_for_rule(
+        self,
+        session: Session,
+        tenant_id: str,
+        rule_id: int,
+    ) -> AllocationSimulationSummaryRead | None:
+        summary = self.latest_for_rule(
+            session,
+            tenant_id,
+            rule_id,
+        )
+        if summary is None:
+            return None
+        return AllocationSimulationSummaryRead(
+            id=summary.id,
+            status=summary.status,
+            version=summary.version,
+            progress=summary.progress,
+            blockers=list(summary.blockers),
+            results_summary=summary.results_summary,
+            completed_at=summary.completed_at,
+            error_code=summary.error_code,
+            error_summary=summary.error_summary,
+        )
+
+    # PLAN05_4D_TASK6_GREEN_D: exact submitted-resource read.
+    def read(
+        self,
+        session: Session,
+        simulation: AllocationSimulation,
+    ) -> AllocationSimulationSummaryRead:
+        summary = self._summary(
+            session,
+            simulation,
+        )
+        return AllocationSimulationSummaryRead(
+            id=summary.id,
+            status=summary.status,
+            version=summary.version,
+            progress=summary.progress,
+            blockers=list(summary.blockers),
+            results_summary=summary.results_summary,
+            completed_at=summary.completed_at,
+            error_code=summary.error_code,
+            error_summary=summary.error_summary,
+        )
+
     def _summary(
         self,
         session: Session,
@@ -363,14 +438,62 @@ class AllocationSimulationService:
             session,
             simulation,
         )
+        results = list(
+            session.scalars(
+                select(AllocationSimulationResult)
+                .where(
+                    AllocationSimulationResult.tenant_id
+                    == simulation.tenant_id,
+                    AllocationSimulationResult.simulation_id
+                    == simulation.id,
+                )
+                .order_by(AllocationSimulationResult.id.asc())
+            ).all()
+        )
+        results_summary = AllocationSimulationResultsSummaryRead(
+            total_rows=len(results),
+            demand_item_count=len(
+                {
+                    result.demand_list_item_id
+                    for result in results
+                }
+            ),
+            high_priority_regression=regression,
+        )
         return SimulationSummary(
             id=simulation.id,
             tenant_id=simulation.tenant_id,
             status=simulation.status,
+            version=simulation.version,
             rule_hash=rule_hash,
+            progress=self._progress(simulation.status),
             blockers=list(simulation.blockers_json or []),
+            results_summary=results_summary,
             high_priority_regression=regression,
             completed_at=simulation.completed_at,
+            error_code=simulation.error_code,
+            error_summary=simulation.error_summary,
+        )
+
+    @staticmethod
+    def _progress(status: str) -> AllocationSimulationProgressRead:
+        if status == "PENDING":
+            return AllocationSimulationProgressRead(
+                phase="QUEUED",
+                percent=0,
+            )
+        if status == "RUNNING":
+            return AllocationSimulationProgressRead(
+                phase="RUNNING",
+                percent=None,
+            )
+        if status in {"COMPLETED", "FAILED", "CANCELLED"}:
+            return AllocationSimulationProgressRead(
+                phase="TERMINAL",
+                percent=100,
+            )
+        raise ValueError(
+            f"unsupported allocation simulation status: {status}"
         )
 
     def _high_priority_regression(

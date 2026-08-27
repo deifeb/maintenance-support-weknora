@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.ai.router import router as ai_router
+from app.api.v1.allocations.router import router as allocations_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.demand.router import router as demand_router
 from app.api.v1.endpoints import system
@@ -10,6 +11,10 @@ from app.api.v1.reviews.router import router as reviews_router
 
 api_router = APIRouter()
 api_router.include_router(system.router)
+api_router.include_router(
+    allocations_router,
+    prefix="/allocations",
+)
 api_router.include_router(master_data_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(demand_router)
