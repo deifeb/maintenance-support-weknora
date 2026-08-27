@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
@@ -16,6 +17,7 @@ from app.core.exceptions import (
 )
 from app.models import (
     InventoryBalance,
+    InventoryPolicy,
     InventoryReservation,
     InventoryReservationLine,
     InventoryTransaction,
@@ -184,74 +186,483 @@ class InventoryReservationService:
         if line_values and selection.unfilled_quantity > _ZERO:
             line_values[-1]["requested_quantity"] += selection.unfilled_quantity
 
-        with session.begin_nested():
-            replay = self._replay_existing(
-                session,
+        return self._persist_reservation(
+            session,
+            actor,
+            command=command,
+            clean_key=clean_key,
+            request_hash=request_hash,
+            mutations=mutations,
+            line_values=line_values,
+            line_errors=selection.warnings,
+        )
+
+    def reserve_for_allocation_line(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        command: ReserveCommand,
+        required_balance_id: int,
+        required_serial_item_id: int | None,
+        allocation_context: dict[str, Any],
+        idempotency_key: str,
+    ) -> InventoryReservationRead:
+        """Reserve one confirmed allocation line against its frozen balance.
+
+        The allocation plan chooses the balance; this method keeps 05-4B authoritative
+        for lazy expiry, FEFO/current eligibility, safety stock, version locking,
+        transaction/ledger writes, and idempotent replay.
+        """
+
+        self._require_contributor(actor)
+        clean_key = self._normalize_idempotency_key(idempotency_key)
+        if command.allow_partial:
+            error = BusinessValidationError(
+                "allocation line reservations must be all-or-nothing",
+                code="ALLOCATION_PARTIAL_RESERVATION_NOT_ALLOWED",
+                details={"retryable": False},
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        normalized_context = snapshot_service.normalize(allocation_context)
+        request_hash = snapshot_service.canonical_hash(
+            {
+                "action": "ALLOCATION_LINE_RESERVE",
+                "command": command.model_dump(mode="json"),
+                "required_balance_id": int(required_balance_id),
+                "required_serial_item_id": required_serial_item_id,
+                "allocation_context": normalized_context,
+            }
+        )
+        replay = self._replay_existing(
+            session,
+            actor,
+            operation_type="RESERVE",
+            idempotency_key=clean_key,
+            request_hash=request_hash,
+        )
+        if replay is not None:
+            return replay
+
+        frozen_expected_version = command.expected_balance_versions.get(
+            required_balance_id
+        )
+        if frozen_expected_version is None:
+            self._raise_conflict(
                 actor,
-                operation_type="RESERVE",
-                idempotency_key=clean_key,
-                request_hash=request_hash,
+                "expected balance version is missing",
+                code="INVENTORY_VERSION_CONFLICT",
+                details={
+                    "balance_id": required_balance_id,
+                    "expected_version": None,
+                    "actual_version": None,
+                    "conflict_object": "inventory_balance",
+                    "retryable": True,
+                },
             )
-            if replay is not None:
-                return replay
-            reservation = self.reservation_repository.create(
+
+        # Discover and lock the complete warehouse+part balance set before
+        # validating the frozen version. This prevents a concurrent normal
+        # reservation on another existing balance from invalidating the
+        # warehouse-level safety-stock calculation between check and write.
+        discovered = self.ledger_repository.list_fefo_candidates(
+            session,
+            actor.tenant_id,
+            spare_part_id=command.spare_part_id,
+            warehouse_id=command.warehouse_id,
+            location_id=None,
+            lot_id=None,
+            serial_item_id=None,
+        )
+        balance_ids = sorted(
+            {candidate.balance_id for candidate in discovered}
+            | {required_balance_id}
+        )
+        locked = self.ledger_repository.lock_balances(
+            session,
+            actor.tenant_id,
+            balance_ids,
+        )
+        locked_by_id = {balance.id: balance for balance in locked}
+        before_expiry = locked_by_id.get(required_balance_id)
+        if (
+            before_expiry is None
+            or before_expiry.spare_part_id != command.spare_part_id
+            or before_expiry.warehouse_id != command.warehouse_id
+            or (
+                command.location_id is not None
+                and before_expiry.location_id != command.location_id
+            )
+            or (
+                command.lot_id is not None
+                and before_expiry.lot_id != command.lot_id
+            )
+        ):
+            self._raise_conflict(
+                actor,
+                "required allocation balance is unavailable",
+                code="INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE",
+                details={
+                    "balance_id": required_balance_id,
+                    "conflict_object": "inventory_balance",
+                    "retryable": True,
+                },
+            )
+
+        # A concurrent same-key winner may have completed while balance locks
+        # were being acquired. Recheck replay before interpreting version drift.
+        replay = self._replay_existing(
+            session,
+            actor,
+            operation_type="RESERVE",
+            idempotency_key=clean_key,
+            request_hash=request_hash,
+        )
+        if replay is not None:
+            return replay
+
+        if before_expiry.version != frozen_expected_version:
+            self._raise_conflict(
+                actor,
+                "inventory balance version conflict",
+                code="INVENTORY_VERSION_CONFLICT",
+                details={
+                    "balance_id": required_balance_id,
+                    "expected_version": frozen_expected_version,
+                    "actual_version": before_expiry.version,
+                    "conflict_object": "inventory_balance",
+                    "retryable": True,
+                },
+            )
+
+        # Lazy expiry is intentionally before authoritative availability/policy checks.
+        # Any version increment caused by this call's expiry work is execution-owned.
+        self._expire_related_reservations(
+            session,
+            actor,
+            spare_part_id=command.spare_part_id,
+            warehouse_id=command.warehouse_id,
+        )
+
+        candidates = self.ledger_repository.list_fefo_candidates(
+            session,
+            actor.tenant_id,
+            spare_part_id=command.spare_part_id,
+            warehouse_id=command.warehouse_id,
+            location_id=None,
+            lot_id=None,
+            serial_item_id=None,
+        )
+        newly_discovered = sorted(
+            {candidate.balance_id for candidate in candidates}
+            - set(balance_ids)
+        )
+        if newly_discovered:
+            self.ledger_repository.lock_balances(
                 session,
-                actor=actor,
-                owner_type=command.owner_type,
-                owner_id=command.owner_id,
-                expires_at=command.expires_at,
-                allow_partial=command.allow_partial,
+                actor.tenant_id,
+                newly_discovered,
             )
-            if mutations:
-                transaction_read = self.transaction_service.apply_plan(
-                    session,
+            candidates = self.ledger_repository.list_fefo_candidates(
+                session,
+                actor.tenant_id,
+                spare_part_id=command.spare_part_id,
+                warehouse_id=command.warehouse_id,
+                location_id=None,
+                lot_id=None,
+                serial_item_id=None,
+            )
+        eligible = [
+            candidate
+            for candidate in candidates
+            if self._allocation_candidate_is_eligible(
+                candidate,
+                as_of=command.as_of,
+            )
+        ]
+
+        aggregate_available = self._distinct_eligible_available(eligible)
+        policy = session.scalar(
+            select(InventoryPolicy)
+            .where(
+                InventoryPolicy.tenant_id == actor.tenant_id,
+                InventoryPolicy.warehouse_id == command.warehouse_id,
+                InventoryPolicy.spare_part_id == command.spare_part_id,
+            )
+            .with_for_update()
+        )
+        safety_stock = policy.safety_stock if policy is not None else _ZERO
+        executable_available = max(aggregate_available - safety_stock, _ZERO)
+        if command.requested_quantity > executable_available:
+            error = BusinessValidationError(
+                "available inventory cannot satisfy the reservation while preserving safety stock",
+                code="INSUFFICIENT_AVAILABLE_INVENTORY",
+                details={
+                    "requested_quantity": format(command.requested_quantity, ".4f"),
+                    "aggregate_available_quantity": format(aggregate_available, ".4f"),
+                    "safety_stock": format(safety_stock, ".4f"),
+                    "executable_available_quantity": format(executable_available, ".4f"),
+                    "conflict_object": "inventory_policy",
+                    "retryable": True,
+                },
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        required_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.balance_id == required_balance_id
+        ]
+        serialized = any(
+            candidate.serial_item_id is not None
+            for candidate in required_candidates
+        )
+        if serialized and required_serial_item_id is None:
+            self._raise_conflict(
+                actor,
+                "confirmed allocation did not freeze a serialized item",
+                code="INVENTORY_SERIAL_SELECTION_REQUIRED",
+                details={
+                    "fact": "serial_selection",
+                    "balance_id": required_balance_id,
+                    "conflict_object": "serialized_item",
+                    "retryable": False,
+                },
+            )
+        if required_serial_item_id != command.serial_item_id:
+            self._raise_conflict(
+                actor,
+                "serialized allocation selection does not match the reservation command",
+                code="INVENTORY_SERIAL_SELECTION_CONFLICT",
+                details={
+                    "balance_id": required_balance_id,
+                    "required_serial_item_id": required_serial_item_id,
+                    "command_serial_item_id": command.serial_item_id,
+                    "conflict_object": "serialized_item",
+                    "retryable": False,
+                },
+            )
+        if required_serial_item_id is not None and command.requested_quantity != Decimal("1.0000"):
+            error = BusinessValidationError(
+                "serialized allocation reservation quantity must equal one",
+                code="INVENTORY_SERIAL_QUANTITY_INVALID",
+                details={
+                    "serial_item_id": required_serial_item_id,
+                    "requested_quantity": format(command.requested_quantity, ".4f"),
+                    "retryable": False,
+                },
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        if required_serial_item_id is not None:
+            exact_serial_candidates = [
+                candidate
+                for candidate in required_candidates
+                if candidate.serial_item_id == required_serial_item_id
+            ]
+            if not exact_serial_candidates:
+                self._raise_conflict(
                     actor,
-                    plan=InventoryMutationPlan(
-                        operation_type="RESERVE",
-                        reference_type="INVENTORY_RESERVATION",
-                        reference_id=str(reservation.id),
-                        reason="reserve inventory",
-                        mutations=tuple(mutations),
-                        audit_context={
-                            "reservation_id": reservation.id,
-                            "owner_type": command.owner_type,
-                            "owner_id": command.owner_id,
-                            "requested_quantity": format(
-                                command.requested_quantity, ".4f"
-                            ),
-                        },
-                    ),
-                    idempotency_key=clean_key,
-                    required_role=MaintenanceRole.CONTRIBUTOR,
+                    "required serialized item does not belong to the confirmed balance",
+                    code="INVENTORY_SERIAL_SELECTION_CONFLICT",
+                    details={
+                        "balance_id": required_balance_id,
+                        "serial_item_id": required_serial_item_id,
+                        "fact": "serial_selection",
+                        "conflict_object": "serialized_item",
+                        "retryable": False,
+                    },
                 )
-                transaction_id = transaction_read.id
-            else:
-                transaction_id = self._create_empty_reservation_transaction(
-                    session,
+            eligible_serial_ids = {
+                candidate.serial_item_id
+                for candidate in eligible
+                if candidate.balance_id == required_balance_id
+            }
+            if required_serial_item_id not in eligible_serial_ids:
+                exact = exact_serial_candidates[0]
+                self._raise_conflict(
                     actor,
-                    reservation=reservation,
-                    idempotency_key=clean_key,
-                    request_hash=request_hash,
-                ).id
-            lines = self.reservation_repository.create_lines(
-                session,
-                reservation=reservation,
-                lines=line_values,
+                    "required serialized item is no longer eligible",
+                    code="SERIAL_STATE_CONFLICT",
+                    details={
+                        "balance_id": required_balance_id,
+                        "serial_item_id": required_serial_item_id,
+                        "exclusion_facts": list(exact.exclusion_facts),
+                        "fact": "serial_selection",
+                        "conflict_object": "serialized_item",
+                        "retryable": False,
+                    },
+                )
+
+        eligible_required = [
+            candidate
+            for candidate in eligible
+            if candidate.balance_id == required_balance_id
+            and (
+                required_serial_item_id is None
+                or candidate.serial_item_id == required_serial_item_id
             )
-            result = self._read_reservation(
-                reservation,
-                lines,
-                requested_quantity=command.requested_quantity,
-                line_errors=selection.warnings,
-            )
-            self._store_operation_snapshot(
-                session,
+        ]
+        if not eligible_required:
+            self._raise_conflict(
                 actor,
-                transaction_id=transaction_id,
-                request_hash=request_hash,
-                result=result,
+                "required allocation balance is no longer FEFO eligible",
+                code="INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE",
+                details={
+                    "balance_id": required_balance_id,
+                    "serial_item_id": required_serial_item_id,
+                    "conflict_object": "inventory_balance",
+                    "retryable": True,
+                },
             )
-            return result
+
+        ordered_eligible = sorted(
+            eligible,
+            key=self._allocation_candidate_sort_key,
+        )
+        required_candidate = sorted(
+            eligible_required,
+            key=self._allocation_candidate_sort_key,
+        )[0]
+        required_available = (
+            min(required_candidate.available_quantity, Decimal("1.0000"))
+            if required_serial_item_id is not None
+            else max(
+                candidate.available_quantity
+                for candidate in eligible_required
+            )
+        )
+        if command.requested_quantity > required_available:
+            error = BusinessValidationError(
+                "required allocation balance cannot satisfy the reservation",
+                code="INSUFFICIENT_AVAILABLE_INVENTORY",
+                details={
+                    "balance_id": required_balance_id,
+                    "requested_quantity": format(command.requested_quantity, ".4f"),
+                    "available_quantity": format(required_available, ".4f"),
+                    "conflict_object": "inventory_balance",
+                    "retryable": True,
+                },
+            )
+            error.request_id = actor.request_id
+            raise error
+
+        ordinary = select_fefo(
+            candidates,
+            command.requested_quantity,
+            as_of=command.as_of,
+        )
+        recommended_balance_id = (
+            ordinary.lines[0].balance_id
+            if ordinary.lines
+            else required_balance_id
+        )
+        recommended_candidate = next(
+            (
+                candidate
+                for candidate in ordered_eligible
+                if candidate.balance_id == recommended_balance_id
+            ),
+            required_candidate,
+        )
+        recommended_serial_item_id = recommended_candidate.serial_item_id
+
+        balance_order: list[int] = []
+        for candidate in ordered_eligible:
+            if candidate.balance_id not in balance_order:
+                balance_order.append(candidate.balance_id)
+        fefo_rank = balance_order.index(required_balance_id) + 1
+
+        override = (
+            recommended_balance_id != required_balance_id
+            or (
+                required_serial_item_id is not None
+                and recommended_serial_item_id != required_serial_item_id
+            )
+        )
+        override_reason = command.fefo_override_reason
+        if override:
+            plan_id = normalized_context.get("allocation_plan_id", "unknown")
+            line_id = normalized_context.get("allocation_plan_line_id", "unknown")
+            override_reason = f"confirmed allocation plan {plan_id} line {line_id}"
+
+        current_balance = self.ledger_repository.get_balance(
+            session,
+            actor.tenant_id,
+            required_balance_id,
+        )
+        if current_balance is None:
+            self._raise_conflict(
+                actor,
+                "required allocation balance disappeared",
+                code="INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE",
+                details={
+                    "balance_id": required_balance_id,
+                    "conflict_object": "inventory_balance",
+                    "retryable": True,
+                },
+            )
+        mutation_expected_version = current_balance.version
+
+        mutations = [
+            InventoryBalanceMutation(
+                balance_id=required_balance_id,
+                expected_version=mutation_expected_version,
+                deltas=InventoryQuantityDelta(
+                    reserved=command.requested_quantity,
+                ),
+            )
+        ]
+        line_values = [
+            {
+                "spare_part_id": command.spare_part_id,
+                "balance_id": required_balance_id,
+                "lot_id": required_candidate.lot_id,
+                "serial_item_id": required_serial_item_id,
+                "requested_quantity": command.requested_quantity,
+                "reserved_quantity": command.requested_quantity,
+                "expected_balance_version": mutation_expected_version,
+                "fefo_rank": fefo_rank,
+                "fefo_override_reason": override_reason,
+                "recommended_selection_json": {
+                    "balance_id": recommended_balance_id,
+                    "serial_item_id": recommended_serial_item_id,
+                    "quantity": format(command.requested_quantity, ".4f"),
+                    "rank": 1,
+                },
+                "actual_selection_json": {
+                    "balance_id": required_balance_id,
+                    "serial_item_id": required_serial_item_id,
+                    "quantity": format(command.requested_quantity, ".4f"),
+                    "rank": fefo_rank,
+                },
+            }
+        ]
+        audit_context = {
+            **normalized_context,
+            "allocation_context": normalized_context,
+            "required_balance_id": required_balance_id,
+            "required_serial_item_id": required_serial_item_id,
+            "recommended_balance_id": recommended_balance_id,
+            "recommended_serial_item_id": recommended_serial_item_id,
+            "actual_balance_id": required_balance_id,
+            "actual_serial_item_id": required_serial_item_id,
+        }
+        return self._persist_reservation(
+            session,
+            actor,
+            command=command,
+            clean_key=clean_key,
+            request_hash=request_hash,
+            mutations=mutations,
+            line_values=line_values,
+            line_errors=ordinary.warnings,
+            audit_context_extra=audit_context,
+        )
 
     def issue(
         self,
@@ -430,6 +841,148 @@ class InventoryReservationService:
             reason="expire inventory reservation",
             as_of=command.as_of,
         )
+
+    def _persist_reservation(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        command: ReserveCommand,
+        clean_key: str,
+        request_hash: str,
+        mutations: Sequence[InventoryBalanceMutation],
+        line_values: Sequence[dict[str, Any]],
+        line_errors: Sequence[str] = (),
+        audit_context_extra: dict[str, Any] | None = None,
+    ) -> InventoryReservationRead:
+        with session.begin_nested():
+            replay = self._replay_existing(
+                session,
+                actor,
+                operation_type="RESERVE",
+                idempotency_key=clean_key,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                return replay
+            reservation = self.reservation_repository.create(
+                session,
+                actor=actor,
+                owner_type=command.owner_type,
+                owner_id=command.owner_id,
+                expires_at=command.expires_at,
+                allow_partial=command.allow_partial,
+            )
+            if mutations:
+                audit_context = {
+                    "reservation_id": reservation.id,
+                    "owner_type": command.owner_type,
+                    "owner_id": command.owner_id,
+                    "requested_quantity": format(
+                        command.requested_quantity,
+                        ".4f",
+                    ),
+                }
+                if audit_context_extra:
+                    audit_context.update(
+                        {
+                            key: value
+                            for key, value in deepcopy(audit_context_extra).items()
+                            if value is not None
+                        }
+                    )
+                transaction_read = self.transaction_service.apply_plan(
+                    session,
+                    actor,
+                    plan=InventoryMutationPlan(
+                        operation_type="RESERVE",
+                        reference_type="INVENTORY_RESERVATION",
+                        reference_id=str(reservation.id),
+                        reason="reserve inventory",
+                        mutations=tuple(mutations),
+                        audit_context=audit_context,
+                    ),
+                    idempotency_key=clean_key,
+                    required_role=MaintenanceRole.CONTRIBUTOR,
+                )
+                transaction_id = transaction_read.id
+            else:
+                transaction_id = self._create_empty_reservation_transaction(
+                    session,
+                    actor,
+                    reservation=reservation,
+                    idempotency_key=clean_key,
+                    request_hash=request_hash,
+                ).id
+            lines = self.reservation_repository.create_lines(
+                session,
+                reservation=reservation,
+                lines=line_values,
+            )
+            result = self._read_reservation(
+                reservation,
+                lines,
+                requested_quantity=command.requested_quantity,
+                line_errors=line_errors,
+            )
+            self._store_operation_snapshot(
+                session,
+                actor,
+                transaction_id=transaction_id,
+                request_hash=request_hash,
+                result=result,
+            )
+            return result
+
+    @staticmethod
+    def _allocation_candidate_is_eligible(
+        candidate: FEFOCandidate,
+        *,
+        as_of: date,
+    ) -> bool:
+        if candidate.expiry_date is not None and candidate.expiry_date < as_of:
+            return False
+        if candidate.exclusion_facts:
+            return False
+        return candidate.available_quantity > _ZERO
+
+    @staticmethod
+    def _allocation_candidate_sort_key(candidate: FEFOCandidate) -> tuple:
+        return (
+            candidate.expiry_date is None,
+            candidate.expiry_date or date.max,
+            candidate.received_date is None,
+            candidate.received_date or date.max,
+            candidate.lot_id is None,
+            candidate.lot_id or 0,
+            candidate.location_id,
+            candidate.balance_id,
+            candidate.serial_item_id is None,
+            candidate.serial_item_id or 0,
+        )
+
+    @staticmethod
+    def _distinct_eligible_available(
+        eligible: Sequence[FEFOCandidate],
+    ) -> Decimal:
+        grouped: dict[int, list[FEFOCandidate]] = {}
+        for candidate in eligible:
+            grouped.setdefault(candidate.balance_id, []).append(candidate)
+        total = _ZERO
+        for candidates in grouped.values():
+            maximum = max(
+                candidate.available_quantity
+                for candidate in candidates
+            )
+            serial_ids = {
+                candidate.serial_item_id
+                for candidate in candidates
+                if candidate.serial_item_id is not None
+            }
+            if serial_ids:
+                maximum = min(maximum, Decimal(len(serial_ids)))
+            total += maximum
+        return total
 
     def _change_reserved_quantities(
         self,
