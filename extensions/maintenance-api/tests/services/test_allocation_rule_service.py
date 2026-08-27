@@ -282,3 +282,129 @@ def test_publish_audit_uses_existing_rule_fields_not_a_seventh_event_table(
     assert published.published_by_user_id == actor_admin.user_id
     assert published.published_by_request_id == actor_admin.request_id
     assert published.published_at is not None
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+
+def _task6_publish_contract():
+    schema_api, service_api = _apis()
+    missing_schema = [
+        name for name in ("AllocationRuleActionResult",)
+        if not hasattr(schema_api, name)
+    ]
+    required_columns = {
+        "publish_idempotency_key",
+        "publish_request_hash",
+        "publish_response_snapshot_json",
+    }
+    missing_columns = required_columns - set(AllocationRuleVersion.__table__.c.keys())
+    if missing_schema or missing_columns:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: strict rule publish receipt contract missing; "
+            f"schema={missing_schema}, columns={sorted(missing_columns)}",
+            pytrace=False,
+        )
+    return schema_api, service_api
+
+
+def test_task6_rule_publish_same_key_same_hash_replays_exact_response(
+    session,
+    actor_admin,
+) -> None:
+    schema_api, service_api = _task6_publish_contract()
+    service = service_api.AllocationRuleService()
+    rule = _stored_rule(session, status="SIMULATED")
+    command = schema_api.AllocationRulePublishCommand(expected_version=rule.version)
+
+    first = service.publish_prevalidated(
+        session,
+        actor_admin,
+        rule.id,
+        command=command,
+        idempotency_key="task6-publish-replay",
+    )
+    session.flush()
+    session.refresh(rule)
+
+    assert rule.publish_idempotency_key == "task6-publish-replay"
+    assert isinstance(rule.publish_request_hash, str)
+    assert len(rule.publish_request_hash) == 64
+    expected_snapshot = {
+        "rule_id": rule.id,
+        "status": "PUBLISHED",
+        "version": rule.version,
+        "version_number": rule.version_number,
+    }
+    assert rule.publish_response_snapshot_json == expected_snapshot
+    assert first.id == rule.id
+    assert first.status == "PUBLISHED"
+
+    replay = service.publish_prevalidated(
+        session,
+        actor_admin,
+        rule.id,
+        command=command,
+        idempotency_key="task6-publish-replay",
+    )
+    assert replay.id == rule.id
+    assert replay.status == "PUBLISHED"
+    assert replay.version == rule.version
+
+
+def test_task6_rule_publish_same_key_changed_hash_is_rejected_before_state(
+    session,
+    actor_admin,
+) -> None:
+    schema_api, service_api = _task6_publish_contract()
+    service = service_api.AllocationRuleService()
+    rule = _stored_rule(session, lineage_id="task6-key-reuse", status="SIMULATED")
+    first_command = schema_api.AllocationRulePublishCommand(expected_version=rule.version)
+    service.publish_prevalidated(
+        session,
+        actor_admin,
+        rule.id,
+        command=first_command,
+        idempotency_key="task6-publish-reused",
+    )
+
+    with pytest.raises(AppException) as raised:
+        service.publish_prevalidated(
+            session,
+            actor_admin,
+            rule.id,
+            command=schema_api.AllocationRulePublishCommand(expected_version=999),
+            idempotency_key="task6-publish-reused",
+        )
+    assert raised.value.code == "IDEMPOTENCY_KEY_REUSED"
+    assert raised.value.details["retryable"] is False
+
+
+def test_task6_rule_publish_missing_stored_response_is_not_reconstructed(
+    session,
+    actor_admin,
+) -> None:
+    schema_api, service_api = _task6_publish_contract()
+    service = service_api.AllocationRuleService()
+    rule = _stored_rule(session, lineage_id="task6-missing-response", status="SIMULATED")
+    command = schema_api.AllocationRulePublishCommand(expected_version=rule.version)
+    service.publish_prevalidated(
+        session,
+        actor_admin,
+        rule.id,
+        command=command,
+        idempotency_key="task6-publish-missing-response",
+    )
+    rule.publish_response_snapshot_json = None
+    session.flush()
+
+    with pytest.raises(AppException) as raised:
+        service.publish_prevalidated(
+            session,
+            actor_admin,
+            rule.id,
+            command=command,
+            idempotency_key="task6-publish-missing-response",
+        )
+    assert raised.value.code == "IDEMPOTENT_RESPONSE_UNAVAILABLE"
+    assert raised.value.details["retryable"] is False

@@ -178,3 +178,44 @@ def test_repository_overlap_query_treats_open_ended_ranges_as_overlapping(
     )
 
     assert [rule.id for rule in overlaps] == [open_ended.id]
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+
+def test_task6_repository_query_surface_is_explicit() -> None:
+    from inspect import signature
+
+    repository = _repository_api().AllocationRepository()
+    required = {
+        "list_rules_page": {"session", "tenant_id", "page", "page_size", "status", "lineage_id"},
+        "get_rule_by_publish_idempotency_key": {
+            "session",
+            "tenant_id",
+            "idempotency_key",
+        },
+        "get_plan": {"session", "tenant_id", "plan_id"},
+        "list_plans_page": {
+            "session",
+            "tenant_id",
+            "page",
+            "page_size",
+            "status",
+            "source_demand_list_id",
+            "rule_id",
+        },
+    }
+    missing_methods = [name for name in required if not hasattr(repository, name)]
+    if missing_methods:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: missing allocation repository API: "
+            f"{', '.join(sorted(missing_methods))}",
+            pytrace=False,
+        )
+
+    for name, parameters in required.items():
+        actual = set(signature(getattr(repository, name)).parameters)
+        assert parameters <= actual, (
+            f"{TASK6_FEATURE_MISSING}: {name} parameters missing "
+            f"{sorted(parameters - actual)}"
+        )

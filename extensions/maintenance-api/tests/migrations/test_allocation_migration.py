@@ -480,7 +480,7 @@ def test_allocation_revision_chain_is_exact() -> None:
     assert amendment.down_revision == REVISION
 
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [AMENDMENT_REVISION]
+    assert script.get_revision(AMENDMENT_REVISION).revision == AMENDMENT_REVISION
 
 
 def test_allocation_upgrade_roundtrip_preserves_demand_review_inventory_facts(
@@ -601,6 +601,94 @@ def test_gap_balance_version_amendment_is_reversible(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one()
         assert current_revision == REVISION
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+TASK6_REVISION = "20260827_15"
+TASK6_RECEIPT_COLUMNS = {
+    "publish_idempotency_key",
+    "publish_request_hash",
+    "publish_response_snapshot_json",
+}
+
+
+def _task6_revision(config: Config):
+    script = ScriptDirectory.from_config(config)
+    try:
+        revision = script.get_revision(TASK6_REVISION)
+    except Exception:
+        revision = None
+    if revision is None:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: missing Alembic revision {TASK6_REVISION}",
+            pytrace=False,
+        )
+    return revision
+
+
+def test_task6_publish_receipt_migration_is_reversible_and_unique_head(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config, url = _config(
+        tmp_path / "allocation-task6-publish-receipt.db",
+        monkeypatch,
+    )
+    revision = _task6_revision(config)
+    assert revision.revision == TASK6_REVISION
+    assert revision.down_revision == AMENDMENT_REVISION
+
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == [TASK6_REVISION]
+
+    command.upgrade(config, AMENDMENT_REVISION)
+    engine = create_engine(url)
+    try:
+        _seed_source_facts(engine)
+        before_hash = _source_fact_hash(engine)
+
+        command.upgrade(config, TASK6_REVISION)
+        upgraded = inspect(engine)
+        columns = {
+            column["name"]: column
+            for column in upgraded.get_columns("allocation_rule_versions")
+        }
+        missing = TASK6_RECEIPT_COLUMNS - set(columns)
+        assert not missing, (
+            f"{TASK6_FEATURE_MISSING}: missing publish receipt columns: "
+            f"{sorted(missing)}"
+        )
+        assert all(columns[name]["nullable"] is True for name in TASK6_RECEIPT_COLUMNS)
+        assert (
+            "tenant_id",
+            "publish_idempotency_key",
+        ) in set(_unique_index_columns(upgraded, "allocation_rule_versions").values())
+        assert _source_fact_hash(engine) == before_hash
+
+        command.downgrade(config, AMENDMENT_REVISION)
+        downgraded = inspect(engine)
+        downgraded_columns = {
+            column["name"]
+            for column in downgraded.get_columns("allocation_rule_versions")
+        }
+        assert TASK6_RECEIPT_COLUMNS.isdisjoint(downgraded_columns)
+        assert _source_fact_hash(engine) == before_hash
+
+        command.upgrade(config, TASK6_REVISION)
+        reupgraded = inspect(engine)
+        assert TASK6_RECEIPT_COLUMNS <= {
+            column["name"]
+            for column in reupgraded.get_columns("allocation_rule_versions")
+        }
+        assert _source_fact_hash(engine) == before_hash
+        with engine.connect() as connection:
+            current_revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+        assert current_revision == TASK6_REVISION
     finally:
         engine.dispose()
         get_settings.cache_clear()

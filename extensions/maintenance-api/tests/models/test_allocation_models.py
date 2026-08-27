@@ -433,3 +433,33 @@ def test_allocation_plan_metadata_is_tenant_safe_auditable_and_idempotent() -> N
         "allocation_plans",
         ("tenant_id", "id"),
     ) in event_fks
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+
+def test_task6_rule_publish_receipt_model_contract() -> None:
+    AllocationRuleVersion, *_ = _allocation_classes()
+    rule = _table(AllocationRuleVersion)
+    required = {
+        "publish_idempotency_key",
+        "publish_request_hash",
+        "publish_response_snapshot_json",
+    }
+    missing = required - set(rule.c.keys())
+    if missing:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: missing rule publish receipt columns: "
+            f"{sorted(missing)}",
+            pytrace=False,
+        )
+
+    assert rule.c.publish_idempotency_key.nullable is True
+    assert rule.c.publish_request_hash.nullable is True
+    assert rule.c.publish_response_snapshot_json.nullable is True
+    assert getattr(rule.c.publish_idempotency_key.type, "length", None) == 128
+    assert getattr(rule.c.publish_request_hash.type, "length", None) == 64
+    assert (
+        "tenant_id",
+        "publish_idempotency_key",
+    ) in _unique_column_sets(rule)

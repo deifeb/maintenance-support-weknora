@@ -537,3 +537,208 @@ def test_latest_for_rule_is_tenant_scoped_and_returns_newest(
     assert latest is not None
     assert latest.id == second.id
     assert latest.tenant_id == actor_contributor.tenant_id
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+
+def _task6_simulation_schema_api():
+    schema_api = importlib.import_module("app.schemas.allocation")
+    required = (
+        "AllocationSimulationSubmitCommand",
+        "AllocationSimulationProgressRead",
+        "AllocationSimulationResultsSummaryRead",
+        "AllocationSimulationSummaryRead",
+    )
+    missing = [name for name in required if not hasattr(schema_api, name)]
+    if missing:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: missing simulation API schema: "
+            f"{', '.join(missing)}",
+            pytrace=False,
+        )
+    return schema_api
+
+
+def test_task6_simulation_submit_guards_expected_rule_version(
+    session,
+    actor_contributor,
+) -> None:
+    from inspect import signature
+
+    from app.core.exceptions import AppException
+
+    service_api = _service_api()
+    schema_api = _task6_simulation_schema_api()
+    service = service_api.AllocationSimulationService()
+    if "expected_rule_version" not in signature(service.submit).parameters:
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: AllocationSimulationService.submit "
+            "must accept expected_rule_version",
+            pytrace=False,
+        )
+
+    context = _seed_context(session)
+    command = schema_api.AllocationSimulationSubmitCommand(
+        expected_rule_version=context["candidate"].version + 1,
+        baseline_rule_id=context["baseline"].id,
+        source_demand_list_id=context["demand_list"].id,
+        sample_ref="task6-version-conflict",
+    )
+    with pytest.raises(AppException) as raised:
+        service.submit(
+            session,
+            actor_contributor,
+            candidate_rule_id=context["candidate"].id,
+            baseline_rule_id=command.baseline_rule_id,
+            source_demand_list_id=command.source_demand_list_id,
+            sample_ref=command.sample_ref,
+            expected_rule_version=command.expected_rule_version,
+            idempotency_key="task6-simulation-version",
+        )
+    assert raised.value.code == "ALLOCATION_RULE_VERSION_CONFLICT"
+    assert raised.value.details["expected_version"] == command.expected_rule_version
+    assert raised.value.details["actual_version"] == context["candidate"].version
+
+
+# PLAN05_4D_TASK6_GREEN_B_TEST_CONTRACT
+def test_task6_simulation_summary_schema_exposes_indeterminate_running_progress(
+    session,
+    actor_contributor,
+) -> None:
+    service_api = _service_api()
+    context = _seed_context(session)
+    service = service_api.AllocationSimulationService()
+    simulation = _submit(
+        service,
+        session,
+        actor_contributor,
+        context,
+        key="task6-progress-summary",
+    )
+
+    pending = service.latest_for_rule(
+        session,
+        actor_contributor.tenant_id,
+        context["candidate"].id,
+    )
+    if (
+        pending is None
+        or not hasattr(pending, "progress")
+        or not hasattr(pending, "results_summary")
+        or not hasattr(service, "latest_read_for_rule")
+    ):
+        pytest.fail(
+            f"{TASK6_FEATURE_MISSING}: latest simulation public progress/"
+            "result summary support missing",
+            pytrace=False,
+        )
+    assert pending.progress.phase == "QUEUED"
+    assert pending.progress.percent == 0
+    assert pending.results_summary.total_rows == 0
+    assert pending.results_summary.demand_item_count == 0
+
+    public_pending = service.latest_read_for_rule(
+        session,
+        actor_contributor.tenant_id,
+        context["candidate"].id,
+    )
+    assert public_pending is not None
+    assert public_pending.progress.phase == "QUEUED"
+    assert public_pending.progress.percent == 0
+
+    claimed = service.claim(
+        session,
+        actor_contributor.tenant_id,
+        simulation.id,
+    )
+    assert claimed is not None
+    running_summary = service.latest_for_rule(
+        session,
+        actor_contributor.tenant_id,
+        context["candidate"].id,
+    )
+    assert running_summary is not None
+    assert running_summary.progress.phase == "RUNNING"
+    assert running_summary.progress.percent is None
+
+    completed = service.run_claimed(
+        session,
+        actor_contributor.tenant_id,
+        simulation.id,
+    )
+    assert completed.status == "COMPLETED"
+    terminal_summary = service.latest_for_rule(
+        session,
+        actor_contributor.tenant_id,
+        context["candidate"].id,
+    )
+    assert terminal_summary is not None
+    assert terminal_summary.progress.phase == "TERMINAL"
+    assert terminal_summary.progress.percent == 100
+    assert terminal_summary.results_summary.total_rows >= 1
+    assert terminal_summary.results_summary.demand_item_count == 1
+    assert (
+        terminal_summary.results_summary.high_priority_regression
+        == terminal_summary.high_priority_regression
+    )
+
+    public_terminal = service.latest_read_for_rule(
+        session,
+        actor_contributor.tenant_id,
+        context["candidate"].id,
+    )
+    assert public_terminal is not None
+    assert public_terminal.status == "COMPLETED"
+    assert public_terminal.version == terminal_summary.version
+    assert public_terminal.progress.phase == "TERMINAL"
+    assert public_terminal.results_summary == terminal_summary.results_summary
+
+    schema_api = _task6_simulation_schema_api()
+
+    submit_fields = set(schema_api.AllocationSimulationSubmitCommand.model_fields)
+    assert {
+        "expected_rule_version",
+        "baseline_rule_id",
+        "source_demand_list_id",
+        "sample_ref",
+    } <= submit_fields
+
+    progress_fields = set(schema_api.AllocationSimulationProgressRead.model_fields)
+    assert progress_fields == {"phase", "percent"}
+    queued = schema_api.AllocationSimulationProgressRead(
+        phase="QUEUED",
+        percent=0,
+    )
+    running = schema_api.AllocationSimulationProgressRead(
+        phase="RUNNING",
+        percent=None,
+    )
+    terminal = schema_api.AllocationSimulationProgressRead(
+        phase="TERMINAL",
+        percent=100,
+    )
+    assert queued.percent == 0
+    assert running.percent is None
+    assert terminal.percent == 100
+
+    result_fields = set(
+        schema_api.AllocationSimulationResultsSummaryRead.model_fields
+    )
+    assert {
+        "total_rows",
+        "demand_item_count",
+        "high_priority_regression",
+    } <= result_fields
+    summary_fields = set(schema_api.AllocationSimulationSummaryRead.model_fields)
+    assert {
+        "id",
+        "status",
+        "version",
+        "progress",
+        "blockers",
+        "results_summary",
+        "completed_at",
+        "error_code",
+        "error_summary",
+    } <= summary_fields

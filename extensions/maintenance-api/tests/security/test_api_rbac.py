@@ -33,6 +33,7 @@ EXPECTED_COUNTS = {
     "ai": 26,
     "inventory": 33,
     "reviews": 7,
+    "allocations": 14,
 }
 MASTER_ROLE_BY_METHOD = {
     "get": "require_viewer",
@@ -125,6 +126,25 @@ REVIEW_ROLE_BY_FUNCTION = {
     "batch_decide_demand_review_findings": "require_contributor",
     "derive_demand_list_from_review": "require_admin",
     "void_demand_list_review": "require_admin",
+}
+
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+ALLOCATION_ROLE_BY_FUNCTION = {
+    "list_rules": "require_viewer",
+    "create_rule": "require_contributor",
+    "simulate_rule": "require_contributor",
+    "publish_rule": "require_admin",
+    "retire_rule": "require_admin",
+    "list_plans": "require_viewer",
+    "create_plan": "require_contributor",
+    "get_plan": "require_viewer",
+    "preview_plan": "require_contributor",
+    "edit_plan_line": "require_contributor",
+    "confirm_plan": "require_contributor",
+    "execute_plan": "require_contributor",
+    "void_plan": "require_contributor",
+    "regenerate_plan": "require_contributor",
 }
 
 INVENTORY_ROLE_BY_FUNCTION = {
@@ -281,6 +301,8 @@ def _expected_role(
         return INVENTORY_ROLE_BY_FUNCTION.get(function_name)
     if domain == "reviews":
         return REVIEW_ROLE_BY_FUNCTION.get(function_name)
+    if domain == "allocations":
+        return ALLOCATION_ROLE_BY_FUNCTION.get(function_name)
     return None
 
 
@@ -348,8 +370,10 @@ def test_business_route_inventory_is_exact() -> None:
                 )
         counts[domain] = count
 
-    assert counts == EXPECTED_COUNTS
-    assert sum(counts.values()) == 197
+    assert counts == EXPECTED_COUNTS, (
+        f"{TASK6_FEATURE_MISSING}: route counts {counts}"
+    )
+    assert sum(counts.values()) == 211
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
     )
@@ -453,3 +477,31 @@ def test_inventory_read_routes_do_not_accept_tenant_id_argument() -> None:
                 )
 
     assert failures == []
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+
+def test_task6_allocation_rbac_inventory_is_exact() -> None:
+    rows = [
+        function.name
+        for path in _files("allocations")
+        for function, _, _ in _endpoints(path)
+    ]
+    if set(rows) != set(ALLOCATION_ROLE_BY_FUNCTION) or len(rows) != 14:
+        raise AssertionError(
+            f"{TASK6_FEATURE_MISSING}: allocation RBAC inventory missing or drifted; "
+            f"expected={sorted(ALLOCATION_ROLE_BY_FUNCTION)}, actual={sorted(rows)}"
+        )
+
+    failures: list[str] = []
+    for path in _files("allocations"):
+        for function, method, aliases in _endpoints(path):
+            dependencies = _dependencies(function, aliases)
+            named = [name for name in dependencies if name in ROLE_DEPENDENCIES]
+            expected = ALLOCATION_ROLE_BY_FUNCTION[function.name]
+            if named != [expected] or "get_actor" in dependencies:
+                failures.append(
+                    f"{path.name}:{function.name}: expected={expected}, actual={dependencies}"
+                )
+    assert failures == [], (
+        f"{TASK6_FEATURE_MISSING}: allocation RBAC mismatches\n" + "\n".join(failures)
+    )

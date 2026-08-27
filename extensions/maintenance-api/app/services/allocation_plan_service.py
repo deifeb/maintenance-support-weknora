@@ -32,7 +32,13 @@ from app.schemas.allocation import (
     AllocationPlanExecutionLineResult,
     AllocationPlanExecutionResult,
     AllocationPlanLineEditCommand,
+    AllocationPlanLineRead,
     AllocationPlanPreviewCommand,
+    AllocationPlanRead,
+    AllocationPlanRegenerateCommand,
+    AllocationPlanRegenerationResult,
+    AllocationPlanSummaryRead,
+    AllocationPlanVoidCommand,
 )
 from app.schemas.inventory_ledger import MAX_INVENTORY_QUANTITY
 from app.schemas.inventory_reservation import ReserveCommand
@@ -97,11 +103,15 @@ class AllocationPlanService:
         source_demand_list_id: int,
         *,
         idempotency_key: str,
+        expected_source_version: int | None = None,
     ) -> AllocationPlan:
         self._require_contributor(actor)
         clean_key = self._normalize_idempotency_key(actor, idempotency_key)
         request_hash = snapshot_service.canonical_hash(
-            {"source_demand_list_id": int(source_demand_list_id)}
+            {
+                "source_demand_list_id": int(source_demand_list_id),
+                "expected_source_version": expected_source_version,
+            }
         )
 
         existing = self.repository.get_plan_by_idempotency_key(
@@ -124,6 +134,23 @@ class AllocationPlanService:
             actor,
             source_demand_list_id,
         )
+        if (
+            expected_source_version is not None
+            and source.version != expected_source_version
+        ):
+            self._raise_conflict(
+                actor,
+                "allocation source version conflict",
+                code="ALLOCATION_SOURCE_NOT_CURRENT",
+                details={
+                    "fact": "source",
+                    "source_demand_list_id": source.id,
+                    "expected_version": expected_source_version,
+                    "actual_version": source.version,
+                    "retryable": False,
+                    "suggested_action": "select_or_publish_current_source",
+                },
+            )
         demand_snapshot = self._snapshot_helper._demand_snapshot(
             session,
             actor.tenant_id,
@@ -213,6 +240,245 @@ class AllocationPlanService:
         )
         session.flush()
         return plan
+
+    # PLAN05_4D_TASK6_GREEN_C: viewer-safe plan reads.
+    def list_read(
+        self,
+        session: Session,
+        actor: ActorContext,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        status: str | None = None,
+        source_demand_list_id: int | None = None,
+        rule_id: int | None = None,
+    ) -> tuple[list[AllocationPlanSummaryRead], int]:
+        plans, total = self.repository.list_plans_page(
+            session,
+            actor.tenant_id,
+            page=page,
+            page_size=page_size,
+            status=status,
+            source_demand_list_id=source_demand_list_id,
+            rule_id=rule_id,
+        )
+        return [self._plan_summary_read(plan) for plan in plans], total
+
+    def get_read(
+        self,
+        session: Session,
+        actor: ActorContext,
+        plan_id: int,
+    ) -> AllocationPlanRead:
+        plan = self.repository.get_plan(
+            session,
+            actor.tenant_id,
+            plan_id,
+        )
+        if plan is None:
+            self._raise_not_found(actor, "allocation_plan", plan_id)
+        return self._plan_read(session, plan)
+
+    def void(
+        self,
+        session: Session,
+        actor: ActorContext,
+        plan_id: int,
+        *,
+        command: AllocationPlanVoidCommand,
+    ) -> AllocationPlanActionResult:
+        self._require_contributor(actor)
+        plan = self.repository.get_plan_for_update(
+            session,
+            actor.tenant_id,
+            plan_id,
+        )
+        if plan is None:
+            self._raise_not_found(actor, "allocation_plan", plan_id)
+
+        if plan.status == "VOIDED":
+            existing = self._latest_plan_event(
+                session,
+                actor.tenant_id,
+                plan.id,
+                "VOIDED",
+            )
+            if existing is None or not isinstance(
+                existing.response_snapshot_json,
+                dict,
+            ):
+                self._raise_conflict(
+                    actor,
+                    "allocation void response is unavailable",
+                    code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                    details={"retryable": False},
+                )
+            return AllocationPlanActionResult.model_validate(
+                existing.response_snapshot_json
+            ).model_copy(deep=True)
+
+        self._require_plan_version(actor, plan, command.expected_version)
+        if plan.status not in {"DRAFT", "PREVIEWED", "CONFIRMED"}:
+            self._raise_conflict(
+                actor,
+                "allocation plan cannot be voided in its current state",
+                code="ALLOCATION_PLAN_STATE_CONFLICT",
+                details={
+                    "status": plan.status,
+                    "retryable": False,
+                },
+            )
+
+        before = self._plan_snapshot(session, plan)
+        plan.status = "VOIDED"
+        plan.version += 1
+        session.flush()
+        event = self._add_event(
+            session,
+            actor,
+            plan,
+            event_type="VOIDED",
+            before=before,
+            after=self._plan_snapshot(session, plan),
+            response=None,
+        )
+        session.flush()
+        result = AllocationPlanActionResult(
+            plan_id=plan.id,
+            event_id=event.id,
+            status=plan.status,
+            version=plan.version,
+        )
+        event.response_snapshot_json = snapshot_service.normalize(
+            result.model_dump(mode="json")
+        )
+        session.flush()
+        return result
+
+    def regenerate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        source_plan_id: int,
+        *,
+        command: AllocationPlanRegenerateCommand,
+        idempotency_key: str,
+    ) -> AllocationPlanRegenerationResult:
+        self._require_contributor(actor)
+        clean_key = self._normalize_idempotency_key(actor, idempotency_key)
+        request_hash = snapshot_service.canonical_hash(
+            {
+                "action": "REGENERATE",
+                "source_plan_id": int(source_plan_id),
+                "command": command.model_dump(mode="json"),
+            }
+        )
+
+        existing = self._find_action_event(
+            session,
+            actor.tenant_id,
+            source_plan_id,
+            event_types=("PLAN_REGENERATED",),
+            idempotency_key=clean_key,
+        )
+        if existing is not None:
+            return self._replay_action_event(
+                actor,
+                existing,
+                request_hash=request_hash,
+                result_type=AllocationPlanRegenerationResult,
+            )
+
+        source_plan = self.repository.get_plan_for_update(
+            session,
+            actor.tenant_id,
+            source_plan_id,
+        )
+        if source_plan is None:
+            self._raise_not_found(
+                actor,
+                "allocation_plan",
+                source_plan_id,
+            )
+
+        existing = self._find_action_event(
+            session,
+            actor.tenant_id,
+            source_plan.id,
+            event_types=("PLAN_REGENERATED",),
+            idempotency_key=clean_key,
+        )
+        if existing is not None:
+            return self._replay_action_event(
+                actor,
+                existing,
+                request_hash=request_hash,
+                result_type=AllocationPlanRegenerationResult,
+            )
+
+        self._require_plan_version(
+            actor,
+            source_plan,
+            command.expected_version,
+        )
+        source = self._resolve_regeneration_source(
+            session,
+            actor,
+            source_plan,
+        )
+        before = self._plan_snapshot(session, source_plan)
+        new_plan = self.create(
+            session,
+            actor,
+            source.id,
+            idempotency_key=self._regeneration_plan_key(
+                source_plan.id,
+                clean_key,
+            ),
+            expected_source_version=source.version,
+        )
+
+        created = self.repository.get_plan_created_event(
+            session,
+            actor.tenant_id,
+            new_plan.id,
+        )
+        if created is not None:
+            created_after = dict(created.after_snapshot_json or {})
+            created_after["regenerated_from_plan_id"] = source_plan.id
+            created.after_snapshot_json = snapshot_service.normalize(
+                created_after
+            )
+
+        event = self._add_event(
+            session,
+            actor,
+            source_plan,
+            event_type="PLAN_REGENERATED",
+            idempotency_key=clean_key,
+            request_hash=request_hash,
+            before=before,
+            after={
+                "source_plan": before,
+                "new_plan_id": new_plan.id,
+                "source_demand_list_id": source.id,
+                "source_demand_list_version": source.version,
+            },
+            response=None,
+        )
+        session.flush()
+        result = AllocationPlanRegenerationResult(
+            source_plan_id=source_plan.id,
+            new_plan_id=new_plan.id,
+            event_id=event.id,
+            status=new_plan.status,
+            version=new_plan.version,
+        )
+        event.response_snapshot_json = snapshot_service.normalize(
+            result.model_dump(mode="json")
+        )
+        session.flush()
+        return result
 
     def edit_line(
         self,
@@ -1438,6 +1704,123 @@ class AllocationPlanService:
         else:
             details["policy"] = None
         return max(cap, _ZERO), details
+
+    # PLAN05_4D_TASK6_GREEN_C: public plan read mapping and regeneration.
+    @staticmethod
+    def _plan_summary_read(
+        plan: AllocationPlan,
+    ) -> AllocationPlanSummaryRead:
+        return AllocationPlanSummaryRead(
+            id=plan.id,
+            source_demand_list_id=plan.source_demand_list_id,
+            source_demand_list_version=plan.source_demand_list_version,
+            rule_id=plan.rule_id,
+            inventory_fingerprint=plan.inventory_fingerprint,
+            status=plan.status,
+            version=plan.version,
+            created_at=plan.created_at,
+            updated_at=plan.updated_at,
+        )
+
+    @staticmethod
+    def _plan_line_read(
+        line: AllocationPlanLine,
+    ) -> AllocationPlanLineRead:
+        return AllocationPlanLineRead(
+            id=line.id,
+            plan_id=line.plan_id,
+            demand_list_item_id=line.demand_list_item_id,
+            spare_part_id=line.spare_part_id,
+            recommended_balance_id=line.recommended_balance_id,
+            recommended_lot_id=line.recommended_lot_id,
+            recommended_serial_item_id=line.recommended_serial_item_id,
+            demand_quantity=line.demand_quantity,
+            allocated_quantity=line.allocated_quantity,
+            gap_quantity=line.gap_quantity,
+            risks=list(line.risks_json or []),
+            manual_override=line.manual_override_json,
+            expected_balance_version=line.expected_balance_version,
+            reservation_id=line.reservation_id,
+            result=line.result_json,
+            version=line.version,
+        )
+
+    def _plan_read(
+        self,
+        session: Session,
+        plan: AllocationPlan,
+    ) -> AllocationPlanRead:
+        lines = self.repository.list_plan_lines(
+            session,
+            plan.tenant_id,
+            plan.id,
+        )
+        summary = self._plan_summary_read(plan)
+        return AllocationPlanRead(
+            **summary.model_dump(),
+            lines=tuple(self._plan_line_read(line) for line in lines),
+        )
+
+    def _resolve_regeneration_source(
+        self,
+        session: Session,
+        actor: ActorContext,
+        source_plan: AllocationPlan,
+    ) -> DemandList:
+        old_source = session.scalar(
+            select(DemandList).where(
+                DemandList.tenant_id == actor.tenant_id,
+                DemandList.id == source_plan.source_demand_list_id,
+            )
+        )
+        if old_source is not None and self._source_is_eligible(old_source):
+            return old_source
+
+        if old_source is not None:
+            current = session.scalar(
+                select(DemandList)
+                .where(
+                    DemandList.tenant_id == actor.tenant_id,
+                    DemandList.lineage_id == old_source.lineage_id,
+                    DemandList.status == "PUBLISHED",
+                    DemandList.is_current.is_(True),
+                )
+                .order_by(
+                    DemandList.version_number.desc(),
+                    DemandList.id.desc(),
+                )
+                .limit(1)
+            )
+            if current is not None and self._source_is_eligible(current):
+                return current
+
+        self._raise_conflict(
+            actor,
+            "no eligible allocation source is available for regeneration",
+            code="ALLOCATION_SOURCE_NOT_CURRENT",
+            details={
+                "fact": "source",
+                "source_demand_list_id": source_plan.source_demand_list_id,
+                "retryable": False,
+                "suggested_action": "select_or_publish_current_source",
+                "regenerate": "/api/v1/demand-lists",
+            },
+        )
+        raise AssertionError("unreachable")
+
+    @staticmethod
+    def _regeneration_plan_key(
+        source_plan_id: int,
+        idempotency_key: str,
+    ) -> str:
+        digest = snapshot_service.canonical_hash(
+            {
+                "action": "REGENERATED_PLAN_CREATE",
+                "source_plan_id": source_plan_id,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        return f"regen:{source_plan_id}:{digest}"
 
     def _require_eligible_source(
         self,
