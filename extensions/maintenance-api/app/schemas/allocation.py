@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -142,3 +142,55 @@ class AllocationPlanPreviewCommand(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     expected_version: int = Field(gt=0)
+
+
+class AllocationPlanConfirmCommand(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    expected_version: int = Field(gt=0)
+
+
+class AllocationPlanExecuteCommand(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    expected_version: int = Field(gt=0)
+
+
+AllocationExecutionOutcome = Literal[
+    "RESERVED",
+    "GAP_RETAINED",
+    "CONFLICT",
+]
+
+
+class AllocationPlanActionResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    plan_id: int
+    event_id: int
+    status: str
+    version: int
+
+
+class AllocationPlanExecutionLineResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    line_id: int
+    outcome: AllocationExecutionOutcome
+    reservation_id: int | None = None
+    error_code: str | None = None
+    cause_code: str | None = None
+    retryable: bool = False
+    suggested_action: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class AllocationPlanExecutionResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    plan_id: int
+    execution_id: int
+    execution_as_of: date
+    status: str
+    version: int
+    line_results: tuple[AllocationPlanExecutionLineResult, ...]

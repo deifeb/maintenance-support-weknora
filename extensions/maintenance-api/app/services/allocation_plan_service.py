@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
+    AppException,
     BusinessValidationError,
     ConflictError,
     InsufficientMaintenanceRoleError,
@@ -25,13 +26,21 @@ from app.models import (
 )
 from app.repositories.allocation_repository import AllocationRepository
 from app.schemas.allocation import (
+    AllocationPlanActionResult,
+    AllocationPlanConfirmCommand,
+    AllocationPlanExecuteCommand,
+    AllocationPlanExecutionLineResult,
+    AllocationPlanExecutionResult,
     AllocationPlanLineEditCommand,
     AllocationPlanPreviewCommand,
 )
+from app.schemas.inventory_ledger import MAX_INVENTORY_QUANTITY
+from app.schemas.inventory_reservation import ReserveCommand
 from app.security.actor import ActorContext, MaintenanceRole
 from app.services.allocation_rule_service import AllocationRuleService
 from app.services.allocation_scoring import rank_candidates
 from app.services.allocation_simulation_service import AllocationSimulationService
+from app.services.inventory_reservation_service import InventoryReservationService
 from app.services.snapshot_service import snapshot_service
 
 _ROLE_RANK = {
@@ -40,7 +49,34 @@ _ROLE_RANK = {
     MaintenanceRole.ADMIN: 2,
 }
 _ZERO = Decimal("0")
+_INVENTORY_QUANTUM = Decimal("0.0001")
+_ONE_INVENTORY_UNIT = Decimal("1.0000")
 _REPAIR_STATUSES = {"AWAITING_REPAIR", "IN_REPAIR"}
+_EXECUTION_TERMINAL_EVENTS = (
+    "EXECUTION_COMPLETED",
+    "EXECUTION_PARTIALLY_COMPLETED",
+    "EXECUTION_FAILED",
+)
+_EXPECTED_INVENTORY_LINE_CODES = frozenset(
+    {
+        "INSUFFICIENT_AVAILABLE_INVENTORY",
+        "INVENTORY_VERSION_CONFLICT",
+        "INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE",
+        "INVENTORY_SERIAL_SELECTION_REQUIRED",
+        "INVENTORY_SERIAL_SELECTION_CONFLICT",
+        "INVENTORY_SERIAL_QUANTITY_INVALID",
+        "INVENTORY_STATE_CONFLICT",
+        "INVENTORY_STATE_TARGET_MISMATCH",
+        "INVENTORY_ALLOCATION_EXCEEDS_ON_HAND",
+        "FEFO_SELECTION_INVALID",
+        "LOT_EXPIRED",
+        "LOT_FROZEN",
+        "LOT_QUARANTINED",
+        "SERIAL_STATE_CONFLICT",
+        "RESERVATION_EXPIRED",
+        "RESOURCE_CONFLICT",
+    }
+)
 
 
 class AllocationPlanService:
@@ -48,8 +84,10 @@ class AllocationPlanService:
         self,
         *,
         repository: AllocationRepository | None = None,
+        reservation_service: InventoryReservationService | None = None,
     ) -> None:
         self.repository = repository or AllocationRepository()
+        self.reservation_service = reservation_service or InventoryReservationService()
         self._snapshot_helper = AllocationSimulationService()
 
     def create(
@@ -418,6 +456,780 @@ class AllocationPlanService:
         session.flush()
         return plan
 
+    def confirm(
+        self,
+        session: Session,
+        actor: ActorContext,
+        plan_id: int,
+        *,
+        command: AllocationPlanConfirmCommand,
+        idempotency_key: str,
+    ) -> AllocationPlanActionResult:
+        self._require_contributor(actor)
+        clean_key = self._normalize_idempotency_key(actor, idempotency_key)
+        request_hash = snapshot_service.canonical_hash(
+            {
+                "action": "CONFIRM",
+                "plan_id": int(plan_id),
+                "expected_version": command.expected_version,
+            }
+        )
+        plan = self.repository.get_plan_for_update(
+            session,
+            actor.tenant_id,
+            plan_id,
+        )
+        if plan is None:
+            self._raise_not_found(actor, "allocation_plan", plan_id)
+
+        existing = self._find_action_event(
+            session,
+            actor.tenant_id,
+            plan.id,
+            event_types=("CONFIRMED",),
+            idempotency_key=clean_key,
+        )
+        if existing is not None:
+            return self._replay_action_event(
+                actor,
+                existing,
+                request_hash=request_hash,
+                result_type=AllocationPlanActionResult,
+            )
+
+        if plan.status != "PREVIEWED":
+            self._raise_conflict(
+                actor,
+                "allocation plan can only be confirmed from PREVIEWED",
+                code="ALLOCATION_PLAN_STATE_CONFLICT",
+                details={"status": plan.status},
+            )
+        self._require_plan_version(actor, plan, command.expected_version)
+
+        latest_preview = self._latest_plan_event(
+            session,
+            actor.tenant_id,
+            plan.id,
+            "PREVIEWED",
+        )
+        preview_response = (
+            latest_preview.response_snapshot_json
+            if latest_preview is not None
+            else None
+        )
+        preview_version = (
+            preview_response.get("version")
+            if isinstance(preview_response, dict)
+            else None
+        )
+        if preview_version != plan.version:
+            self._raise_conflict(
+                actor,
+                "allocation plan must be previewed again before confirmation",
+                code="ALLOCATION_PLAN_STATE_CONFLICT",
+                details={
+                    "fact": "preview",
+                    "latest_preview_event_id": (
+                        latest_preview.id if latest_preview is not None else None
+                    ),
+                    "preview_version": preview_version,
+                    "plan_version": plan.version,
+                    "suggested_action": "preview_again",
+                },
+            )
+
+        lines = self._current_plan_lines(
+            session,
+            actor.tenant_id,
+            plan.id,
+        )
+        for line in lines:
+            self._validate_confirm_quantity(actor, plan, line)
+
+        before = self._plan_snapshot(session, plan)
+        plan.status = "CONFIRMED"
+        plan.version += 1
+        session.flush()
+        after = {
+            "plan": self._plan_snapshot(session, plan),
+            "confirmed_preview_event_id": latest_preview.id,
+            "confirmed_preview_snapshot": {
+                "before": latest_preview.before_snapshot_json,
+                "after": latest_preview.after_snapshot_json,
+                "response": latest_preview.response_snapshot_json,
+            },
+        }
+        event = self._add_event(
+            session,
+            actor,
+            plan,
+            event_type="CONFIRMED",
+            idempotency_key=clean_key,
+            request_hash=request_hash,
+            before=before,
+            after=after,
+            response=None,
+        )
+        session.flush()
+        result = AllocationPlanActionResult(
+            plan_id=plan.id,
+            event_id=event.id,
+            status=plan.status,
+            version=plan.version,
+        )
+        event.response_snapshot_json = snapshot_service.normalize(
+            result.model_dump(mode="json")
+        )
+        session.flush()
+        return result
+
+    def execute(
+        self,
+        session: Session,
+        actor: ActorContext,
+        plan_id: int,
+        *,
+        command: AllocationPlanExecuteCommand,
+        idempotency_key: str,
+    ) -> AllocationPlanExecutionResult:
+        self._require_contributor(actor)
+        clean_key = self._normalize_idempotency_key(actor, idempotency_key)
+        request_hash = snapshot_service.canonical_hash(
+            {
+                "action": "EXECUTE",
+                "plan_id": int(plan_id),
+                "expected_version": command.expected_version,
+            }
+        )
+        plan = self.repository.get_plan_for_update(
+            session,
+            actor.tenant_id,
+            plan_id,
+        )
+        if plan is None:
+            self._raise_not_found(actor, "allocation_plan", plan_id)
+
+        terminal = self._find_action_event(
+            session,
+            actor.tenant_id,
+            plan.id,
+            event_types=_EXECUTION_TERMINAL_EVENTS,
+            idempotency_key=clean_key,
+        )
+        if terminal is not None:
+            return self._replay_action_event(
+                actor,
+                terminal,
+                request_hash=request_hash,
+                result_type=AllocationPlanExecutionResult,
+            )
+
+        if plan.status != "CONFIRMED":
+            self._raise_conflict(
+                actor,
+                "allocation plan cannot start a new execution in its current state",
+                code="ALLOCATION_PLAN_STATE_CONFLICT",
+                details={
+                    "status": plan.status,
+                    "retryable": False,
+                    "suggested_action": "regenerate",
+                },
+            )
+        self._require_plan_version(actor, plan, command.expected_version)
+
+        source = session.scalar(
+            select(DemandList)
+            .where(
+                DemandList.tenant_id == actor.tenant_id,
+                DemandList.id == plan.source_demand_list_id,
+            )
+            .with_for_update()
+        )
+        if (
+            source is None
+            or self._enum_value(source.status) != "PUBLISHED"
+            or not bool(source.is_current)
+            or source.version != plan.source_demand_list_version
+        ):
+            self._raise_conflict(
+                actor,
+                "allocation source is no longer the frozen current published version",
+                code="ALLOCATION_SOURCE_NOT_CURRENT",
+                details={
+                    "fact": "source",
+                    "source_demand_list_id": plan.source_demand_list_id,
+                    "expected_version": plan.source_demand_list_version,
+                    "actual_version": source.version if source is not None else None,
+                    "retryable": False,
+                    "suggested_action": "regenerate",
+                },
+            )
+
+        rule = self.repository.get_rule_for_update(
+            session,
+            actor.tenant_id,
+            plan.rule_id,
+        )
+        created = self.repository.get_plan_created_event(
+            session,
+            actor.tenant_id,
+            plan.id,
+        )
+        frozen_rule_version = None
+        if created is not None:
+            created_snapshot = created.after_snapshot_json or {}
+            frozen_rule_version = (created_snapshot.get("rule") or {}).get("version")
+        if (
+            rule is None
+            or rule.status != "PUBLISHED"
+            or frozen_rule_version is None
+            or int(rule.version) != int(frozen_rule_version)
+        ):
+            self._raise_conflict(
+                actor,
+                "allocation rule changed after plan generation",
+                code="ALLOCATION_RULE_VERSION_CONFLICT",
+                details={
+                    "fact": "rule",
+                    "rule_id": plan.rule_id,
+                    "expected_version": frozen_rule_version,
+                    "actual_version": rule.version if rule is not None else None,
+                    "retryable": False,
+                    "suggested_action": "regenerate",
+                },
+            )
+
+        before_execution = self._plan_snapshot(session, plan)
+        execution_as_of = datetime.now(timezone.utc).date()
+        plan.status = "EXECUTING"
+        plan.version += 1
+        session.flush()
+        start_event = self._add_event(
+            session,
+            actor,
+            plan,
+            event_type="EXECUTION_STARTED",
+            idempotency_key=clean_key,
+            request_hash=request_hash,
+            before=before_execution,
+            after={
+                "plan": self._plan_snapshot(session, plan),
+                "execution_as_of": execution_as_of.isoformat(),
+            },
+            response={
+                "plan_id": plan.id,
+                "status": plan.status,
+                "version": plan.version,
+                "execution_as_of": execution_as_of.isoformat(),
+            },
+        )
+        session.flush()
+        execution_id = start_event.id
+
+        lines = self._current_plan_lines(
+            session,
+            actor.tenant_id,
+            plan.id,
+        )
+        ordered_lines = sorted(
+            lines,
+            key=lambda line: (
+                line.recommended_balance_id is None,
+                line.recommended_balance_id or 0,
+                line.id,
+            ),
+        )
+        owned_versions: dict[int, int] = {}
+        line_results: list[AllocationPlanExecutionLineResult] = []
+
+        for line in ordered_lines:
+            if line.allocated_quantity <= _ZERO:
+                result = AllocationPlanExecutionLineResult(
+                    line_id=line.id,
+                    outcome="GAP_RETAINED",
+                    retryable=False,
+                )
+                self._store_line_execution_result(
+                    session,
+                    actor,
+                    plan,
+                    line,
+                    result,
+                    execution_id=execution_id,
+                    event_type="LINE_EXECUTION_SKIPPED",
+                )
+                line_results.append(result)
+                continue
+
+            if (
+                line.recommended_balance_id is None
+                or line.expected_balance_version is None
+            ):
+                result = self._allocation_line_conflict_result(
+                    line,
+                    cause_code="INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE",
+                    cause_details={
+                        "fact": "recommended_balance",
+                        "retryable": False,
+                    },
+                )
+                self._store_line_execution_result(
+                    session,
+                    actor,
+                    plan,
+                    line,
+                    result,
+                    execution_id=execution_id,
+                    event_type="LINE_EXECUTION_CONFLICT",
+                    error_code="ALLOCATION_INVENTORY_CONFLICT",
+                )
+                line_results.append(result)
+                continue
+
+            balance_id = line.recommended_balance_id
+            current_balance = session.scalar(
+                select(InventoryBalance).where(
+                    InventoryBalance.tenant_id == actor.tenant_id,
+                    InventoryBalance.id == balance_id,
+                )
+            )
+            expected_version = owned_versions.get(
+                balance_id,
+                line.expected_balance_version,
+            )
+            precheck_details: dict[str, Any] | None = None
+            precheck_code: str | None = None
+            if current_balance is None:
+                precheck_code = "INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE"
+                precheck_details = {"retryable": True}
+            elif current_balance.spare_part_id != line.spare_part_id:
+                precheck_code = "INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE"
+                precheck_details = {
+                    "actual_spare_part_id": current_balance.spare_part_id,
+                    "retryable": False,
+                }
+            elif (
+                line.recommended_lot_id is not None
+                and current_balance.lot_id != line.recommended_lot_id
+            ):
+                precheck_code = "INVENTORY_REQUIRED_BALANCE_NOT_ELIGIBLE"
+                precheck_details = {
+                    "expected_lot_id": line.recommended_lot_id,
+                    "actual_lot_id": current_balance.lot_id,
+                    "retryable": False,
+                }
+            elif current_balance.version != expected_version:
+                precheck_code = "INVENTORY_VERSION_CONFLICT"
+                precheck_details = {
+                    "expected_version": expected_version,
+                    "actual_version": current_balance.version,
+                    "retryable": True,
+                }
+
+            if precheck_code is not None:
+                result = self._allocation_line_conflict_result(
+                    line,
+                    cause_code=precheck_code,
+                    cause_details=precheck_details,
+                    expected_version=expected_version,
+                )
+                self._store_line_execution_result(
+                    session,
+                    actor,
+                    plan,
+                    line,
+                    result,
+                    execution_id=execution_id,
+                    event_type="LINE_EXECUTION_CONFLICT",
+                    error_code="ALLOCATION_INVENTORY_CONFLICT",
+                )
+                line_results.append(result)
+                continue
+
+            quantity = line.allocated_quantity.quantize(_INVENTORY_QUANTUM)
+            reserve_command = ReserveCommand(
+                owner_type="ALLOCATION_PLAN",
+                owner_id=str(plan.id),
+                spare_part_id=line.spare_part_id,
+                warehouse_id=current_balance.warehouse_id,
+                requested_quantity=quantity,
+                allow_partial=False,
+                expected_balance_versions={balance_id: expected_version},
+                as_of=execution_as_of,
+                serial_item_id=line.recommended_serial_item_id,
+                expires_at=None,
+            )
+            allocation_context = {
+                "allocation_plan_id": plan.id,
+                "allocation_plan_line_id": line.id,
+                "allocation_execution_id": execution_id,
+                "execution_as_of": execution_as_of.isoformat(),
+                "source_demand_list_id": plan.source_demand_list_id,
+                "rule_id": plan.rule_id,
+            }
+            child_key = (
+                f"allocation-plan:{plan.id}:line:{line.id}:execute:{execution_id}"
+            )
+            try:
+                with session.begin_nested():
+                    reservation = self.reservation_service.reserve_for_allocation_line(
+                        session,
+                        actor,
+                        command=reserve_command,
+                        required_balance_id=balance_id,
+                        required_serial_item_id=line.recommended_serial_item_id,
+                        allocation_context=allocation_context,
+                        idempotency_key=child_key,
+                    )
+                    result = AllocationPlanExecutionLineResult(
+                        line_id=line.id,
+                        outcome="RESERVED",
+                        reservation_id=reservation.id,
+                        retryable=False,
+                        details={
+                            "balance_id": balance_id,
+                            "expected_version": expected_version,
+                            "requested_quantity": format(
+                                reservation.requested_quantity, ".4f"
+                            ),
+                            "reserved_quantity": format(
+                                reservation.reserved_quantity, ".4f"
+                            ),
+                            "unfilled_quantity": format(
+                                reservation.unfilled_quantity, ".4f"
+                            ),
+                            "child_idempotency_key": child_key,
+                        },
+                    )
+                    self._store_line_execution_result(
+                        session,
+                        actor,
+                        plan,
+                        line,
+                        result,
+                        execution_id=execution_id,
+                        event_type="LINE_EXECUTED",
+                    )
+            except AppException as exc:
+                if not self._is_expected_inventory_line_conflict(exc):
+                    raise
+                result = self._allocation_line_conflict_result(
+                    line,
+                    cause_code=exc.code,
+                    cause_details=exc.details,
+                    expected_version=expected_version,
+                )
+                self._store_line_execution_result(
+                    session,
+                    actor,
+                    plan,
+                    line,
+                    result,
+                    execution_id=execution_id,
+                    event_type="LINE_EXECUTION_CONFLICT",
+                    error_code="ALLOCATION_INVENTORY_CONFLICT",
+                )
+
+            line_results.append(result)
+            if result.outcome == "RESERVED":
+                current_after = self._current_balance(
+                    session,
+                    actor.tenant_id,
+                    balance_id,
+                )
+                owned_versions[balance_id] = (
+                    current_after.version
+                    if current_after is not None
+                    else expected_version
+                )
+
+        reserved_count = sum(
+            result.outcome == "RESERVED"
+            for result in line_results
+        )
+        conflict_count = sum(
+            result.outcome == "CONFLICT"
+            for result in line_results
+        )
+        if conflict_count == 0:
+            terminal_status = "COMPLETED"
+            terminal_event_type = "EXECUTION_COMPLETED"
+        elif reserved_count > 0:
+            terminal_status = "PARTIALLY_COMPLETED"
+            terminal_event_type = "EXECUTION_PARTIALLY_COMPLETED"
+        else:
+            terminal_status = "FAILED"
+            terminal_event_type = "EXECUTION_FAILED"
+
+        before_terminal = self._plan_snapshot(session, plan)
+        plan.status = terminal_status
+        plan.version += 1
+        session.flush()
+        ordered_results = tuple(
+            sorted(line_results, key=lambda result: result.line_id)
+        )
+        response = AllocationPlanExecutionResult(
+            plan_id=plan.id,
+            execution_id=execution_id,
+            execution_as_of=execution_as_of,
+            status=plan.status,
+            version=plan.version,
+            line_results=ordered_results,
+        )
+        self._add_event(
+            session,
+            actor,
+            plan,
+            event_type=terminal_event_type,
+            idempotency_key=clean_key,
+            request_hash=request_hash,
+            before=before_terminal,
+            after={
+                "plan": self._plan_snapshot(session, plan),
+                "execution_id": execution_id,
+                "execution_as_of": execution_as_of.isoformat(),
+            },
+            response=response.model_dump(mode="json"),
+        )
+        session.flush()
+        return response
+
+    @staticmethod
+    def _current_balance(
+        session: Session,
+        tenant_id: str,
+        balance_id: int,
+    ) -> InventoryBalance | None:
+        return session.scalar(
+            select(InventoryBalance).where(
+                InventoryBalance.tenant_id == tenant_id,
+                InventoryBalance.id == balance_id,
+            )
+        )
+
+    @staticmethod
+    def _current_plan_lines(
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+    ) -> list[AllocationPlanLine]:
+        return list(
+            session.scalars(
+                select(AllocationPlanLine)
+                .where(
+                    AllocationPlanLine.tenant_id == tenant_id,
+                    AllocationPlanLine.plan_id == plan_id,
+                )
+                .order_by(AllocationPlanLine.id.asc())
+            ).all()
+        )
+
+    @staticmethod
+    def _latest_plan_event(
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+        event_type: str,
+    ) -> AllocationPlanEvent | None:
+        return session.scalar(
+            select(AllocationPlanEvent)
+            .where(
+                AllocationPlanEvent.tenant_id == tenant_id,
+                AllocationPlanEvent.plan_id == plan_id,
+                AllocationPlanEvent.event_type == event_type,
+            )
+            .order_by(AllocationPlanEvent.id.desc())
+            .limit(1)
+        )
+
+    @staticmethod
+    def _find_action_event(
+        session: Session,
+        tenant_id: str,
+        plan_id: int,
+        *,
+        event_types: tuple[str, ...],
+        idempotency_key: str,
+    ) -> AllocationPlanEvent | None:
+        return session.scalar(
+            select(AllocationPlanEvent)
+            .where(
+                AllocationPlanEvent.tenant_id == tenant_id,
+                AllocationPlanEvent.plan_id == plan_id,
+                AllocationPlanEvent.event_type.in_(event_types),
+                AllocationPlanEvent.idempotency_key == idempotency_key,
+            )
+            .order_by(AllocationPlanEvent.id.desc())
+            .limit(1)
+        )
+
+    @staticmethod
+    def _replay_action_event(
+        actor: ActorContext,
+        event: AllocationPlanEvent,
+        *,
+        request_hash: str,
+        result_type: Any,
+    ) -> Any:
+        if event.request_hash != request_hash:
+            AllocationPlanService._raise_conflict(
+                actor,
+                "allocation action idempotency key was reused",
+                code="IDEMPOTENCY_KEY_REUSED",
+                details={
+                    "idempotency_key": event.idempotency_key,
+                    "retryable": False,
+                },
+            )
+        snapshot = event.response_snapshot_json
+        if not isinstance(snapshot, dict):
+            AllocationPlanService._raise_conflict(
+                actor,
+                "allocation idempotent response is unavailable",
+                code="IDEMPOTENT_RESPONSE_UNAVAILABLE",
+                details={"retryable": False},
+            )
+        return result_type.model_validate(snapshot).model_copy(deep=True)
+
+    @staticmethod
+    def _validate_confirm_quantity(
+        actor: ActorContext,
+        plan: AllocationPlan,
+        line: AllocationPlanLine,
+    ) -> None:
+        quantity = line.allocated_quantity
+        try:
+            quantized = quantity.quantize(_INVENTORY_QUANTUM)
+        except InvalidOperation:
+            quantized = None
+        if (
+            not quantity.is_finite()
+            or quantized is None
+            or quantity != quantized
+        ):
+            AllocationPlanService._raise_conflict(
+                actor,
+                "allocation quantity is not exact at inventory precision",
+                code="ALLOCATION_INVENTORY_CONFLICT",
+                details={
+                    "fact": "quantity_precision",
+                    "line_id": line.id,
+                    "quantity": format(quantity, "f"),
+                    "retryable": False,
+                    "suggested_action": "edit_and_preview_again",
+                },
+            )
+        if abs(quantized) > MAX_INVENTORY_QUANTITY:
+            AllocationPlanService._raise_conflict(
+                actor,
+                "allocation quantity is outside inventory Numeric(18,4) range",
+                code="ALLOCATION_INVENTORY_CONFLICT",
+                details={
+                    "fact": "quantity_range",
+                    "line_id": line.id,
+                    "quantity": format(quantity, "f"),
+                    "retryable": False,
+                    "suggested_action": "edit_and_preview_again",
+                },
+            )
+        if (
+            line.recommended_serial_item_id is not None
+            and quantity > _ZERO
+            and quantized != _ONE_INVENTORY_UNIT
+        ):
+            AllocationPlanService._raise_conflict(
+                actor,
+                "serialized allocation quantity must equal one",
+                code="ALLOCATION_INVENTORY_CONFLICT",
+                details={
+                    "fact": "serial_quantity",
+                    "line_id": line.id,
+                    "serial_item_id": line.recommended_serial_item_id,
+                    "quantity": format(quantity, "f"),
+                    "retryable": False,
+                    "suggested_action": "edit_and_preview_again",
+                },
+            )
+
+    @staticmethod
+    def _is_expected_inventory_line_conflict(exc: AppException) -> bool:
+        if exc.code in {"IDEMPOTENCY_KEY_REUSED", "IDEMPOTENT_RESPONSE_UNAVAILABLE"}:
+            return False
+        return exc.code in _EXPECTED_INVENTORY_LINE_CODES
+
+    @staticmethod
+    def _allocation_line_conflict_result(
+        line: AllocationPlanLine,
+        *,
+        cause_code: str,
+        cause_details: Any | None,
+        expected_version: int | None = None,
+    ) -> AllocationPlanExecutionLineResult:
+        details: dict[str, Any] = {
+            "line_id": line.id,
+            "balance_id": line.recommended_balance_id,
+            "suggested_action": "regenerate",
+            "expected_version": (
+                expected_version
+                if expected_version is not None
+                else line.expected_balance_version
+            ),
+        }
+        cause_retryable = None
+        if isinstance(cause_details, dict):
+            cause_copy = dict(cause_details)
+            cause_retryable = cause_copy.pop("retryable", None)
+            details.update(cause_copy)
+        elif cause_details is not None:
+            details["cause_details"] = cause_details
+        if cause_retryable is not None:
+            details["cause_retryable"] = bool(cause_retryable)
+        return AllocationPlanExecutionLineResult(
+            line_id=line.id,
+            outcome="CONFLICT",
+            error_code="ALLOCATION_INVENTORY_CONFLICT",
+            cause_code=cause_code,
+            retryable=False,
+            suggested_action="regenerate",
+            details=details,
+        )
+
+    def _store_line_execution_result(
+        self,
+        session: Session,
+        actor: ActorContext,
+        plan: AllocationPlan,
+        line: AllocationPlanLine,
+        result: AllocationPlanExecutionLineResult,
+        *,
+        execution_id: int,
+        event_type: str,
+        error_code: str | None = None,
+    ) -> None:
+        before = self._line_snapshot(line)
+        if result.reservation_id is not None:
+            line.reservation_id = result.reservation_id
+        stored_result = result.model_dump(mode="json")
+        stored_result["execution_id"] = execution_id
+        line.result_json = stored_result
+        line.version += 1
+        session.flush()
+        self._add_event(
+            session,
+            actor,
+            plan,
+            event_type=event_type,
+            before=before,
+            after={
+                "line": self._line_snapshot(line),
+                "reservation_id": line.reservation_id,
+                "result": stored_result,
+            },
+            response=stored_result,
+            error_code=error_code,
+        )
+        session.flush()
+
     def _select_rule(
         self,
         session: Session,
@@ -687,10 +1499,14 @@ class AllocationPlanService:
             "plan_id": line.plan_id,
             "demand_list_item_id": line.demand_list_item_id,
             "recommended_balance_id": line.recommended_balance_id,
+            "recommended_lot_id": line.recommended_lot_id,
+            "recommended_serial_item_id": line.recommended_serial_item_id,
             "demand_quantity": format(line.demand_quantity, "f"),
             "allocated_quantity": format(line.allocated_quantity, "f"),
             "gap_quantity": format(line.gap_quantity, "f"),
             "expected_balance_version": line.expected_balance_version,
+            "reservation_id": line.reservation_id,
+            "result": line.result_json,
             "manual_override": line.manual_override_json,
             "version": line.version,
         }
@@ -728,6 +1544,7 @@ class AllocationPlanService:
         response: dict[str, Any] | None,
         idempotency_key: str | None = None,
         request_hash: str | None = None,
+        error_code: str | None = None,
     ) -> AllocationPlanEvent:
         event = AllocationPlanEvent(
             tenant_id=actor.tenant_id,
@@ -747,7 +1564,7 @@ class AllocationPlanService:
             response_snapshot_json=(
                 snapshot_service.normalize(response) if response is not None else None
             ),
-            error_code=None,
+            error_code=error_code,
             occurred_at=datetime.now(timezone.utc),
         )
         session.add(event)
