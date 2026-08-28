@@ -145,6 +145,18 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         meta: { ...maintenanceRouteMeta },
       },
       {
+        path: 'inventory-gap/rules',
+        name: 'maintenanceAllocationRules',
+        component: () => import('@/views/maintenance/inventory-gap/AllocationRuleList.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/allocations/:planId',
+        name: 'maintenanceAllocationPlanDetail',
+        component: () => import('@/views/maintenance/inventory-gap/AllocationPlanDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
         path: 'inventory-gap/balances/:balanceId',
         name: 'maintenanceInventoryBalanceDetail',
         component: () => import('@/views/maintenance/inventory-gap/InventoryBalanceDetail.vue'),
