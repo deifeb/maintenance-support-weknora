@@ -178,6 +178,153 @@
         {{ t('maintenance.inventory.workspace.next') }}
       </button>
     </footer>
+
+    <section class="inventory-workspace__allocation">
+      <div class="inventory-workspace__allocation-heading">
+        <div>
+          <p>{{ t('maintenance.inventory.allocationAssurance.eyebrow') }}</p>
+          <h2>{{ t('maintenance.inventory.allocationAssurance.title') }}</h2>
+          <span>{{ t('maintenance.inventory.allocationAssurance.description') }}</span>
+        </div>
+        <div class="inventory-workspace__allocation-actions">
+          <button type="button" @click="openAllocationRules">
+            {{ t('maintenance.inventory.allocationAssurance.rules') }}
+          </button>
+          <button
+            type="button"
+            :disabled="allocation.plans.loading"
+            @click="refreshAllocationPlans"
+          >
+            {{ t('maintenance.inventory.allocationAssurance.refreshPlans') }}
+          </button>
+        </div>
+      </div>
+
+      <div class="inventory-workspace__allocation-source">
+        <h3>{{ t('maintenance.inventory.allocationAssurance.source.title') }}</h3>
+        <label>
+          <span>{{ t('maintenance.inventory.allocationAssurance.source.demandListId') }}</span>
+          <input
+            v-model="allocationSourceId"
+            inputmode="numeric"
+            autocomplete="off"
+          />
+        </label>
+        <button
+          type="button"
+          :disabled="demandList.loading"
+          @click="loadAllocationSource"
+        >
+          {{
+            demandList.loading
+              ? t('maintenance.inventory.allocationAssurance.source.loading')
+              : t('maintenance.inventory.allocationAssurance.source.load')
+          }}
+        </button>
+        <p
+          v-if="allocationSourceIdInvalid"
+          class="inventory-workspace__allocation-warning"
+        >
+          {{ t('maintenance.inventory.allocationAssurance.source.invalidId') }}
+        </p>
+        <MaintenanceErrorState
+          v-if="demandList.error"
+          :error="demandList.error"
+          :locale="locale"
+          @retry="loadAllocationSource"
+        />
+
+        <div
+          v-if="demandList.current"
+          class="inventory-workspace__allocation-source-facts"
+        >
+          <span>
+            {{ t('maintenance.inventory.allocationAssurance.source.status') }}:
+            <strong>{{ demandList.current.status }}</strong>
+          </span>
+          <span>
+            {{ t('maintenance.inventory.allocationAssurance.source.version') }}:
+            <strong>{{ demandList.current.version }}</strong>
+          </span>
+          <span>
+            {{ t('maintenance.inventory.allocationAssurance.source.current') }}:
+            <strong>{{ demandList.current.is_current ? 'YES' : 'NO' }}</strong>
+          </span>
+          <span>
+            {{ t('maintenance.inventory.allocationAssurance.source.eligible') }}:
+            <strong>{{ allocationSourceEligible ? 'YES' : 'NO' }}</strong>
+          </span>
+        </div>
+
+        <p
+          v-if="demandList.current && !allocationSourceEligible"
+          class="inventory-workspace__allocation-warning"
+        >
+          {{ t('maintenance.inventory.allocationAssurance.source.ineligible') }}
+        </p>
+
+        <button
+          v-if="permissionStore.permissions.editDemandList"
+          type="button"
+          :disabled="!canCreateAllocationPlan || creatingAllocationPlan"
+          @click="createPlan"
+        >
+          {{
+            creatingAllocationPlan
+              ? t('maintenance.inventory.allocationAssurance.actions.creating')
+              : t('maintenance.inventory.allocationAssurance.actions.create')
+          }}
+        </button>
+      </div>
+
+      <MaintenanceErrorState
+        v-if="allocation.plans.error"
+        :error="allocation.plans.error"
+        :locale="locale"
+        @retry="refreshAllocationPlans"
+      />
+
+      <div class="inventory-workspace__allocation-register">
+        <h3>{{ t('maintenance.inventory.allocationAssurance.plans.title') }}</h3>
+        <p v-if="!allocation.plans.loading && allocation.plans.items.length === 0">
+          {{ t('maintenance.inventory.allocationAssurance.plans.empty') }}
+        </p>
+        <div
+          v-else
+          class="inventory-workspace__table-wrap"
+          :aria-busy="allocation.plans.loading"
+        >
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>{{ t('maintenance.inventory.columns.status') }}</th>
+                <th>{{ t('maintenance.inventory.allocationAssurance.plans.source') }}</th>
+                <th>{{ t('maintenance.inventory.allocationAssurance.plans.rule') }}</th>
+                <th>{{ t('maintenance.inventory.allocationAssurance.plans.version') }}</th>
+                <th>{{ t('maintenance.inventory.allocationAssurance.plans.updated') }}</th>
+                <th>{{ t('maintenance.inventory.columns.actions') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="plan in allocation.plans.items" :key="plan.id">
+                <td>#{{ plan.id }}</td>
+                <td><MaintenanceStatusTag :status="plan.status" /></td>
+                <td>#{{ plan.source_demand_list_id }} / v{{ plan.source_demand_list_version }}</td>
+                <td>#{{ plan.rule_id }}</td>
+                <td>{{ plan.version }}</td>
+                <td>{{ plan.updated_at }}</td>
+                <td>
+                  <button type="button" @click="openAllocationPlan(plan.id)">
+                    {{ t('maintenance.inventory.allocationAssurance.plans.open') }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 </template>
 
@@ -205,10 +352,16 @@ import MaintenanceStatusTag from '@/components/maintenance/common/MaintenanceSta
 import InventoryBalanceTable from '@/components/maintenance/inventory/InventoryBalanceTable.vue'
 import InventoryListToolbar from '@/components/maintenance/inventory/InventoryListToolbar.vue'
 import {
+  isAllocationPlanSourceEligible,
+} from '@/components/maintenance/allocation/allocation-workflow'
+import {
   INVENTORY_WORKSPACE_TABS,
   type InventoryWorkspaceTab,
 } from '@/components/maintenance/inventory/inventory-workflow'
+import { useAllocationStore } from '@/stores/maintenance/allocation'
+import { useDemandListStore } from '@/stores/maintenance/demandList'
 import { useInventoryStore } from '@/stores/maintenance/inventory'
+import { useMaintenancePermissionsStore } from '@/stores/maintenance/permissions'
 
 const NumericFilter = defineComponent({
   props: { modelValue: { type: String, required: true }, label: { type: String, required: true } },
@@ -242,6 +395,37 @@ const TextFilter = defineComponent({
 const { t, locale } = useI18n()
 const router = useRouter()
 const inventory = useInventoryStore()
+const allocation = useAllocationStore()
+const demandList = useDemandListStore()
+const permissionStore = useMaintenancePermissionsStore()
+const allocationSourceId = ref('')
+const allocationSourceIdInvalid = ref(false)
+const creatingAllocationPlan = ref(false)
+const selectedAllocationSourceId = computed(() => (
+  positive(allocationSourceId.value) ?? null
+))
+const allocationSourceMatchesInput = computed(() => {
+  const source = demandList.current
+  return (
+    source !== null
+    && selectedAllocationSourceId.value === source.id
+  )
+})
+const allocationSourceEligible = computed(() => {
+  const source = demandList.current
+  return (
+    source !== null
+    && allocationSourceMatchesInput.value
+    && isAllocationPlanSourceEligible(
+      source.status,
+      source.is_current,
+    )
+  )
+})
+const canCreateAllocationPlan = computed(() => (
+  permissionStore.permissions.editDemandList
+  && allocationSourceEligible.value
+))
 const activeTab = ref<InventoryWorkspaceTab>('balances')
 const loaded = reactive<Record<InventoryWorkspaceTab, boolean>>({ balances: false, reservations: false, transfers: false, stocktakes: false, transactions: false })
 
@@ -330,6 +514,97 @@ function setActivePage(page: number): void {
   void loaders[activeTab.value](page)
 }
 
+async function fetchPlans(): Promise<void> {
+  const source = demandList.current
+  const selectedSourceId = selectedAllocationSourceId.value
+  const matchedSourceId = (
+    source !== null
+    && selectedSourceId === source.id
+  )
+    ? source.id
+    : undefined
+
+  await allocation.fetchPlans({
+    page: 1,
+    page_size: 20,
+    source_demand_list_id: matchedSourceId,
+  })
+}
+
+function refreshAllocationPlans(): void {
+  void fetchPlans()
+}
+
+async function loadAllocationSource(): Promise<void> {
+  const sourceId = positive(allocationSourceId.value)
+  if (sourceId === undefined) {
+    allocationSourceIdInvalid.value = true
+    return
+  }
+
+  allocationSourceIdInvalid.value = false
+
+  try {
+    const source = await demandList.load(sourceId)
+    await allocation.fetchPlans({
+      page: 1,
+      page_size: 20,
+      source_demand_list_id: source.id,
+    })
+  } catch {
+    // The Store retains the normalized authoritative load error.
+  }
+}
+
+async function createPlan(): Promise<void> {
+  const source = demandList.current
+  const selectedSourceId = selectedAllocationSourceId.value
+  if (
+    source === null
+    || selectedSourceId === null
+    || source.id !== selectedSourceId
+    || !permissionStore.permissions.editDemandList
+    || !isAllocationPlanSourceEligible(
+      source.status,
+      source.is_current,
+    )
+  ) {
+    return
+  }
+
+  creatingAllocationPlan.value = true
+  try {
+    const created = await allocation.createPlan({
+      source_demand_list_id: source.id,
+      expected_source_version: source.version,
+    })
+    await allocation.fetchPlans({
+      page: 1,
+      page_size: 20,
+      source_demand_list_id: source.id,
+    })
+    await router.push({
+      name: 'maintenanceAllocationPlanDetail',
+      params: { planId: created.id },
+    })
+  } catch {
+    // Allocation Store command/list state remains authoritative for errors.
+  } finally {
+    creatingAllocationPlan.value = false
+  }
+}
+
+function openAllocationRules(): void {
+  void router.push({ name: 'maintenanceAllocationRules' })
+}
+
+function openAllocationPlan(planId: number): void {
+  void router.push({
+    name: 'maintenanceAllocationPlanDetail',
+    params: { planId },
+  })
+}
+
 function openBalance(id: number): void { void router.push({ name: 'maintenanceInventoryBalanceDetail', params: { balanceId: id } }) }
 function openReservation(id: number): void { void router.push({ name: 'maintenanceInventoryReservationDetail', params: { reservationId: id } }) }
 function openTransfer(id: number): void { void router.push({ name: 'maintenanceInventoryTransferDetail', params: { transferId: id } }) }
@@ -338,7 +613,10 @@ function openTransaction(id: number): void { void router.push({ name: 'maintenan
 function referenceLabel(type: string | null, id: string | null): string { return type === null && id === null ? '—' : `${type ?? '—'} / ${id ?? '—'}` }
 
 watch(activeTab, () => loadActive())
-onMounted(() => loadActive())
+onMounted(() => {
+  loadActive()
+  void fetchPlans()
+})
 </script>
 
 <style scoped>
@@ -357,4 +635,19 @@ onMounted(() => loadActive())
 .inventory-workspace__table-wrap th, .inventory-workspace__table-wrap td { padding: 10px 12px; border-bottom: 1px solid var(--td-component-stroke); text-align: left; font-size: 12px; }
 .inventory-workspace__table-wrap th { color: var(--td-text-color-secondary); font-weight: 600; }
 .inventory-workspace__pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 18px; color: var(--td-text-color-secondary); font-size: 12px; }
+.inventory-workspace__allocation { display: grid; gap: 16px; margin-top: 28px; padding: 20px; border: 1px solid var(--td-component-stroke); border-radius: 8px; background: var(--td-bg-color-container); }
+.inventory-workspace__allocation-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.inventory-workspace__allocation-heading p { margin: 0 0 4px; color: var(--td-brand-color); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.inventory-workspace__allocation-heading h2, .inventory-workspace__allocation-register h3, .inventory-workspace__allocation-source h3 { margin: 0; }
+.inventory-workspace__allocation-heading span { display: block; margin-top: 6px; color: var(--td-text-color-secondary); font-size: 12px; }
+.inventory-workspace__allocation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.inventory-workspace__allocation button { min-height: 36px; padding: 0 12px; border: 1px solid var(--td-component-stroke); border-radius: 5px; background: var(--td-bg-color-container); color: var(--td-text-color-primary); cursor: pointer; }
+.inventory-workspace__allocation button:disabled { cursor: not-allowed; opacity: .55; }
+.inventory-workspace__allocation-source { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 14px; border: 1px solid var(--td-component-stroke); border-radius: 7px; }
+.inventory-workspace__allocation-source h3 { flex-basis: 100%; }
+.inventory-workspace__allocation-source label { display: grid; gap: 5px; min-width: 180px; color: var(--td-text-color-secondary); font-size: 11px; }
+.inventory-workspace__allocation-source input { min-height: 36px; padding: 0 10px; border: 1px solid var(--td-component-stroke); border-radius: 5px; background: var(--td-bg-color-container); color: var(--td-text-color-primary); }
+.inventory-workspace__allocation-source-facts { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: 12px; color: var(--td-text-color-secondary); font-size: 12px; }
+.inventory-workspace__allocation-warning { flex-basis: 100%; margin: 0; color: var(--td-warning-color); font-size: 12px; }
+.inventory-workspace__allocation-register { display: grid; gap: 10px; }
 </style>
