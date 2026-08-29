@@ -61,12 +61,17 @@ def _enum_value(value: Any) -> str:
 
 
 def _observed_at(*rows: Any) -> datetime:
-    values = [
-        value
-        for row in rows
-        for value in (getattr(row, "updated_at", None), getattr(row, "created_at", None))
-        if isinstance(value, datetime)
-    ]
+    values: list[datetime] = []
+    for row in rows:
+        for value in (
+            getattr(row, "updated_at", None),
+            getattr(row, "created_at", None),
+        ):
+            if not isinstance(value, datetime):
+                continue
+            if value.tzinfo is None or value.utcoffset() is None:
+                value = value.replace(tzinfo=timezone.utc)
+            values.append(value)
     if values:
         return max(values)
     return datetime.now(timezone.utc)
@@ -134,10 +139,12 @@ class BusinessCardService:
         if snapshot is None:
             return None
         exact_historical = snapshot_version is not None
-        status = (
-            str(snapshot.current_state)
-            if exact_historical
-            else _enum_value(row.status)
+        status = str(
+            getattr(
+                snapshot,
+                "current_state",
+                _enum_value(row.status),
+            )
         )
         if (
             not exact_historical
@@ -160,11 +167,7 @@ class BusinessCardService:
                     f"/platform/maintenance/scenarios/new?session_id={row.id}"
                 ),
             ),
-            observed_at=(
-                _observed_at(snapshot)
-                if exact_historical
-                else _observed_at(snapshot, row)
-            ),
+            observed_at=_observed_at(snapshot),
             payload=ScenarioDraftPayload(),
         )
 
