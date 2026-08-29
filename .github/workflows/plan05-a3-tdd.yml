@@ -23,8 +23,26 @@ jobs:
           cache-dependency-path: extensions/maintenance-api/requirements-dev.txt
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
-      - name: Run focused A1-A3 tests
+      - name: Ruff touched A3 surface
+        run: >-
+          python -m ruff check
+          app/schemas/business_card.py
+          app/schemas/business_card_projection.py
+          app/services/business_card_service.py
+          app/services/ai_session_service.py
+          app/repositories/ai_session_repository.py
+          app/api/v1/ai/sessions.py
+          app/api/v1/ai/business_cards.py
+          app/api/v1/ai/router.py
+          tests/services/test_business_card_service.py
+          tests/api/test_business_card_api.py
+      - name: Run A1-A3 and nearby AI regressions
         run: >-
           python -m pytest -q
           tests/services/test_business_card_service.py
           tests/api/test_business_card_api.py
+          tests/api/test_ai_session_api.py
+          tests/api/test_ai_sessions.py
+          tests/api/test_ai_sse.py
+          tests/api/test_ai_actor_routes.py
+          tests/api/test_ai_routes.py
