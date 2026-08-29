@@ -25,6 +25,8 @@ from app.services.ai_confirmation_service import (
     ai_confirmation_service,
 )
 
+MAINTENANCE_PROJECTION_SOURCE_INFO_KEY = "maintenance_projection_source"
+
 
 @dataclass(slots=True)
 class AISessionCancelResult:
@@ -243,6 +245,11 @@ class AISessionService:
             ) from exc
         session.commit()
         session.refresh(row)
+        if role == "USER" and message_type == "USER_TEXT":
+            session.info[MAINTENANCE_PROJECTION_SOURCE_INFO_KEY] = {
+                "session_id": session_id,
+                "message_id": row.id,
+            }
         return row
 
     def append_event(
