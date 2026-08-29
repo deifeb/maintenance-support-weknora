@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.exceptions import NotFoundError
+from app.models.enums import AIMessageRole, AIMessageType
 from app.schemas.business_card import (
     CalculationCard,
     CalculationPayload,
@@ -22,6 +23,11 @@ from app.schemas.business_card import (
     ScenarioDraftCard,
     ScenarioDraftPayload,
     canonicalize_cards,
+)
+from app.schemas.business_card_projection import (
+    MaintenanceCardReference,
+    MaintenanceProjection,
+    MaintenanceProjectionSource,
 )
 from app.security.actor import ActorContext
 
@@ -47,6 +53,7 @@ INVENTORY_CARD_STATUSES = {
 }
 COMPARABLE_CALCULATION_STATUSES = {"SUCCEEDED", "PARTIAL_SUCCESS"}
 SEVERITY_PRIORITY = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+CARD_REFERENCE_KEY = "maintenance_card_references"
 
 
 def _enum_value(value: Any) -> str:
@@ -103,26 +110,48 @@ class BusinessCardService:
         self.ai_report_repository = ai_report_repository
 
     def build_scenario_draft(
-        self, session, actor: ActorContext, ai_session_id: int
+        self,
+        session,
+        actor: ActorContext,
+        ai_session_id: int,
+        *,
+        snapshot_version: int | None = None,
     ) -> ScenarioDraftCard | None:
         row = self.ai_session_repository.get(session, actor.tenant_id, ai_session_id)
         if row is None:
             raise NotFoundError("ai_session", ai_session_id)
-        snapshot = self.ai_session_repository.latest_snapshot(
-            session, actor.tenant_id, ai_session_id
-        )
+        if snapshot_version is None:
+            snapshot = self.ai_session_repository.latest_snapshot(
+                session, actor.tenant_id, ai_session_id
+            )
+        else:
+            snapshot = self.ai_session_repository.get_snapshot(
+                session,
+                actor.tenant_id,
+                ai_session_id,
+                snapshot_version,
+            )
         if snapshot is None:
             return None
-        if getattr(row, "active_scenario_version_id", None) is not None:
+        exact_historical = snapshot_version is not None
+        status = (
+            str(snapshot.current_state)
+            if exact_historical
+            else _enum_value(row.status)
+        )
+        if (
+            not exact_historical
+            and getattr(row, "active_scenario_version_id", None) is not None
+        ):
             return None
-        if _enum_value(row.status) not in SCENARIO_DRAFT_STATUSES:
+        if status not in SCENARIO_DRAFT_STATUSES:
             return None
         if not getattr(snapshot, "scenario_draft_json", None):
             return None
         return ScenarioDraftCard(
             title=_title(getattr(row, "title", ""), "场景草稿"),
             summary=f"场景草稿快照 v{snapshot.snapshot_version} 可继续完善。",
-            status=_enum_value(row.status),
+            status=status,
             target=MaintenanceCardTarget(
                 object_type="AI_SESSION_SNAPSHOT",
                 object_id=row.id,
@@ -131,7 +160,11 @@ class BusinessCardService:
                     f"/platform/maintenance/scenarios/new?session_id={row.id}"
                 ),
             ),
-            observed_at=_observed_at(snapshot, row),
+            observed_at=(
+                _observed_at(snapshot)
+                if exact_historical
+                else _observed_at(snapshot, row)
+            ),
             payload=ScenarioDraftPayload(),
         )
 
@@ -373,6 +406,164 @@ class BusinessCardService:
             if card is not None:
                 cards.append(card)
         return canonicalize_cards(cards)
+
+    def project_trigger_message(
+        self,
+        session,
+        actor: ActorContext,
+        session_id: int,
+        trigger_message_id: int,
+        *,
+        include_scenario_draft: bool,
+    ) -> MaintenanceProjection:
+        message = self._require_trigger_message(
+            session,
+            actor,
+            session_id,
+            trigger_message_id,
+        )
+        cards: list[MaintenanceBusinessCard] = []
+        if include_scenario_draft:
+            scenario_card = self.build_scenario_draft(
+                session,
+                actor,
+                session_id,
+            )
+            if scenario_card is not None:
+                cards.append(scenario_card)
+        cards = canonicalize_cards(cards)
+        references = [self._reference_from_card(card) for card in cards]
+        structured = dict(message.structured_content_json or {})
+        structured[CARD_REFERENCE_KEY] = [
+            reference.model_dump(mode="json", exclude_none=True)
+            for reference in references
+        ]
+        updated = self.ai_session_repository.set_message_structured_content(
+            session,
+            actor.tenant_id,
+            session_id,
+            trigger_message_id,
+            structured,
+        )
+        if updated is None:
+            raise NotFoundError("ai_message", trigger_message_id)
+        session.commit()
+        return MaintenanceProjection(
+            source=MaintenanceProjectionSource(
+                session_id=session_id,
+                message_id=trigger_message_id,
+            ),
+            cards=cards,
+        )
+
+    def recover_exact_turn(
+        self,
+        session,
+        actor: ActorContext,
+        session_id: int,
+        trigger_message_id: int,
+    ) -> MaintenanceProjection:
+        message = self._require_trigger_message(
+            session,
+            actor,
+            session_id,
+            trigger_message_id,
+        )
+        raw_references = (message.structured_content_json or {}).get(
+            CARD_REFERENCE_KEY,
+            [],
+        )
+        if not isinstance(raw_references, list):
+            raw_references = []
+        cards: list[MaintenanceBusinessCard] = []
+        for raw_reference in raw_references:
+            try:
+                reference = MaintenanceCardReference.model_validate(raw_reference)
+            except Exception:
+                continue
+            card = self._build_exact_reference(session, actor, reference)
+            if card is not None:
+                cards.append(card)
+        return MaintenanceProjection(
+            source=MaintenanceProjectionSource(
+                session_id=session_id,
+                message_id=trigger_message_id,
+            ),
+            cards=canonicalize_cards(cards),
+        )
+
+    def _require_trigger_message(
+        self,
+        session,
+        actor: ActorContext,
+        session_id: int,
+        trigger_message_id: int,
+    ):
+        message = self.ai_session_repository.get_message(
+            session,
+            actor.tenant_id,
+            session_id,
+            trigger_message_id,
+        )
+        if message is None:
+            raise NotFoundError("ai_message", trigger_message_id)
+        if (
+            _enum_value(message.role) != AIMessageRole.USER.value
+            or _enum_value(message.message_type) != AIMessageType.USER_TEXT.value
+        ):
+            raise NotFoundError("ai_message", trigger_message_id)
+        return message
+
+    @staticmethod
+    def _reference_from_card(
+        card: MaintenanceBusinessCard,
+    ) -> MaintenanceCardReference:
+        lookup_id: Any = card.target.object_id
+        if card.type == "REVIEW_FINDING":
+            lookup_id = card.payload.review_id
+        return MaintenanceCardReference(
+            type=card.type,
+            object_id=card.target.object_id,
+            lookup_id=lookup_id,
+            observed_version=card.target.observed_version,
+        )
+
+    def _build_exact_reference(
+        self,
+        session,
+        actor: ActorContext,
+        reference: MaintenanceCardReference,
+    ) -> MaintenanceBusinessCard | None:
+        lookup_id = reference.lookup_id or reference.object_id
+        if reference.type == "SCENARIO_DRAFT":
+            if not isinstance(reference.observed_version, int):
+                return None
+            card = self.build_scenario_draft(
+                session,
+                actor,
+                int(lookup_id),
+                snapshot_version=reference.observed_version,
+            )
+        else:
+            builders = {
+                "CALCULATION": self.build_calculation,
+                "MODEL_COMPARISON": self.build_model_comparison,
+                "INVENTORY_GAP": self.build_inventory_gap,
+                "REVIEW_FINDING": self.build_review_finding,
+                "REPORT": self.build_report,
+            }
+            builder = builders.get(reference.type)
+            if builder is None:
+                return None
+            card = builder(session, actor, int(lookup_id))
+        if card is None:
+            return None
+        if str(card.target.object_id) != str(reference.object_id):
+            return None
+        observed = card.target.observed_version
+        if str(observed) != str(reference.observed_version):
+            return None
+        return card
 
 
 business_card_service = BusinessCardService()
