@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
+from app.core.exceptions import NotFoundError
 from app.schemas.business_card import (
     BusinessCardBatch,
     CalculationCard,
@@ -25,6 +28,7 @@ from app.schemas.business_card import (
     canonicalize_cards,
     parse_business_card,
 )
+from app.services.business_card_service import BusinessCardService
 
 NOW = datetime(2026, 8, 29, tzinfo=timezone.utc)
 
@@ -262,3 +266,356 @@ def test_observed_at_requires_timezone():
     raw["observed_at"] = "2026-08-29T10:00:00"
     with pytest.raises(ValidationError):
         parse_business_card(raw)
+
+
+# 05-5A2 authoritative builder tests
+
+
+def ns(**values):
+    return SimpleNamespace(**values)
+
+
+class AIRepo:
+    def __init__(self, session_row=None, snapshot=None):
+        self.session_row = session_row
+        self.snapshot = snapshot
+        self.last_tenant = None
+
+    def get(self, session, tenant_id, session_id):
+        self.last_tenant = tenant_id
+        return self.session_row if self.session_row and self.session_row.id == session_id else None
+
+    def latest_snapshot(self, session, tenant_id, session_id):
+        self.last_tenant = tenant_id
+        return self.snapshot
+
+
+class CalcRepo:
+    def __init__(self, group=None):
+        self.group = group
+        self.last_tenant = None
+
+    def get(self, session, tenant_id, group_id):
+        self.last_tenant = tenant_id
+        return self.group if self.group and self.group.id == group_id else None
+
+
+class AllocationRepo:
+    def __init__(self, plan=None, lines=None):
+        self.plan = plan
+        self.lines = lines or []
+        self.last_tenant = None
+
+    def get_plan(self, session, tenant_id, plan_id):
+        self.last_tenant = tenant_id
+        return self.plan if self.plan and self.plan.id == plan_id else None
+
+    def list_plan_lines(self, session, tenant_id, plan_id):
+        self.last_tenant = tenant_id
+        return list(self.lines)
+
+
+class ReviewRepo:
+    def __init__(self, review=None, findings=None):
+        self.review = review
+        self.findings = findings or []
+        self.last_tenant = None
+
+    def get(self, session, tenant_id, review_id):
+        self.last_tenant = tenant_id
+        return self.review if self.review and self.review.id == review_id else None
+
+    def list_findings(self, session, tenant_id, review_id):
+        self.last_tenant = tenant_id
+        return list(self.findings)
+
+
+class ReportRepo:
+    def __init__(self, job=None, version=None):
+        self.job = job
+        self.version = version
+        self.last_tenant = None
+
+    def get_job(self, session, tenant_id, report_job_id):
+        self.last_tenant = tenant_id
+        return self.job if self.job and self.job.id == report_job_id else None
+
+    def latest_version(self, session, tenant_id, report_job_id):
+        self.last_tenant = tenant_id
+        return self.version
+
+
+def service(**overrides):
+    return BusinessCardService(
+        ai_session_repository=overrides.get("ai", AIRepo()),
+        calculation_group_repository=overrides.get("calc", CalcRepo()),
+        allocation_repository=overrides.get("allocation", AllocationRepo()),
+        demand_review_repository=overrides.get("review", ReviewRepo()),
+        ai_report_repository=overrides.get("report", ReportRepo()),
+    )
+
+
+def test_scenario_builder_uses_latest_authoritative_snapshot_and_tenant(actor_viewer):
+    actor = actor_viewer
+    ai = AIRepo(
+        ns(
+            id=7,
+            title="Engine fleet",
+            status="PLANNED",
+            active_scenario_version_id=None,
+            updated_at=NOW,
+        ),
+        ns(
+            session_id=7,
+            snapshot_version=3,
+            scenario_draft_json={"mission": "x"},
+            updated_at=NOW,
+        ),
+    )
+    card = service(ai=ai).build_scenario_draft(object(), actor, 7)
+    assert ai.last_tenant == "tenant-a"
+    assert card.type == "SCENARIO_DRAFT"
+    assert card.target.object_id == 7
+    assert card.target.observed_version == 3
+    assert card.target.navigation_path == "/platform/maintenance/scenarios/new?session_id=7"
+
+
+def test_scenario_builder_suppresses_materialized_or_empty_draft(actor_viewer):
+    actor = actor_viewer
+    materialized = AIRepo(
+        ns(
+            id=7,
+            title="x",
+            status="PLANNED",
+            active_scenario_version_id=99,
+            updated_at=NOW,
+        ),
+        ns(
+            session_id=7,
+            snapshot_version=3,
+            scenario_draft_json={"x": 1},
+            updated_at=NOW,
+        ),
+    )
+    assert service(ai=materialized).build_scenario_draft(object(), actor, 7) is None
+    empty = AIRepo(
+        ns(
+            id=7,
+            title="x",
+            status="PLANNED",
+            active_scenario_version_id=None,
+            updated_at=NOW,
+        ),
+        ns(
+            session_id=7,
+            snapshot_version=3,
+            scenario_draft_json={},
+            updated_at=NOW,
+        ),
+    )
+    assert service(ai=empty).build_scenario_draft(object(), actor, 7) is None
+
+
+def test_cross_tenant_or_missing_object_is_non_enumerating_not_found(actor_viewer):
+    with pytest.raises(NotFoundError):
+        service(calc=CalcRepo()).build_calculation(object(), actor_viewer, 35)
+
+
+def test_calculation_builder_uses_group_authority(actor_viewer):
+    group = ns(
+        id=35,
+        scenario_version_id=8,
+        status="COMPLETED",
+        primary_candidate_key="base",
+        current_children=[ns(candidate_key="base"), ns(candidate_key="alt")],
+        version=4,
+        updated_at=NOW,
+    )
+    calc = CalcRepo(group)
+    card = service(calc=calc).build_calculation(object(), actor_viewer, 35)
+    assert calc.last_tenant == "tenant-a"
+    assert card.payload.group_id == 35
+    assert card.payload.current_candidate_count == 2
+    assert card.payload.observed_version == 4
+    assert card.target.navigation_path == "/platform/maintenance/calculations/35/progress"
+
+
+def test_model_comparison_requires_two_meaningful_current_children(actor_viewer):
+    def meaningful(status="SUCCEEDED"):
+        return ns(calculation=ns(status=status, result_summary_json={"items": 2}))
+
+    group = ns(
+        id=35,
+        scenario_version_id=8,
+        status="COMPLETED",
+        primary_candidate_key="base",
+        current_children=[meaningful(), meaningful("PARTIAL_SUCCESS")],
+        version=4,
+        updated_at=NOW,
+    )
+    card = service(calc=CalcRepo(group)).build_model_comparison(object(), actor_viewer, 35)
+    assert card.payload.comparable_candidate_count == 2
+    assert card.target.navigation_path == "/platform/maintenance/calculations/35/comparison"
+
+    group.current_children = [
+        meaningful(),
+        ns(calculation=ns(status="RUNNING", result_summary_json=None)),
+    ]
+    assert service(calc=CalcRepo(group)).build_model_comparison(object(), actor_viewer, 35) is None
+
+
+def test_inventory_gap_builder_aggregates_authoritative_lines(actor_viewer):
+    plan = ns(
+        id=41,
+        status="PREVIEWED",
+        source_demand_list_id=11,
+        version=2,
+        updated_at=NOW,
+    )
+    lines = [
+        ns(gap_quantity=Decimal("10"), risks_json=[], updated_at=NOW),
+        ns(gap_quantity=Decimal("4.5"), risks_json=[{"code": "R1"}], updated_at=NOW),
+        ns(gap_quantity=Decimal("0"), risks_json=[], updated_at=NOW),
+    ]
+    card = service(allocation=AllocationRepo(plan, lines)).build_inventory_gap(
+        object(), actor_viewer, 41
+    )
+    assert card.payload.gap_item_count == 2
+    assert card.payload.total_gap_quantity == Decimal("14.5")
+    assert card.payload.risk_item_count == 1
+    assert card.target.navigation_path == "/platform/maintenance/inventory-gap/allocations/41"
+
+
+def test_inventory_gap_draft_or_no_gap_is_not_applicable(actor_viewer):
+    plan = ns(
+        id=41,
+        status="DRAFT",
+        source_demand_list_id=11,
+        version=1,
+        updated_at=NOW,
+    )
+    lines = [ns(gap_quantity=Decimal("1"), risks_json=[], updated_at=NOW)]
+    assert service(allocation=AllocationRepo(plan, lines)).build_inventory_gap(
+        object(), actor_viewer, 41
+    ) is None
+    plan.status = "PREVIEWED"
+    lines = [ns(gap_quantity=Decimal("0"), risks_json=[], updated_at=NOW)]
+    assert service(allocation=AllocationRepo(plan, lines)).build_inventory_gap(
+        object(), actor_viewer, 41
+    ) is None
+
+
+def test_review_builder_selects_one_finding_by_approved_priority(actor_viewer):
+    review = ns(id=50, pending_finding_count=3, updated_at=NOW)
+    findings = [
+        ns(
+            id=1,
+            review_id=50,
+            decision_status="ACCEPTED",
+            blocking=True,
+            severity="CRITICAL",
+            requires_admin_acceptance=True,
+            version=2,
+            updated_at=NOW,
+        ),
+        ns(
+            id=2,
+            review_id=50,
+            decision_status="PENDING",
+            blocking=False,
+            severity="CRITICAL",
+            requires_admin_acceptance=False,
+            version=1,
+            updated_at=NOW,
+        ),
+        ns(
+            id=3,
+            review_id=50,
+            decision_status="PENDING",
+            blocking=True,
+            severity="HIGH",
+            requires_admin_acceptance=True,
+            version=4,
+            updated_at=NOW,
+        ),
+    ]
+    card = service(review=ReviewRepo(review, findings)).build_review_finding(
+        object(), actor_viewer, 50
+    )
+    assert card.target.object_id == 3
+    assert card.payload.review_id == 50
+    assert card.payload.remaining_pending_count == 3
+    assert card.target.navigation_path == "/platform/maintenance/reviews/50"
+
+
+def test_report_builder_uses_latest_version_and_meaningful_job_states(actor_viewer):
+    job = ns(
+        id=61,
+        report_code="AIR-61",
+        report_type="MANAGEMENT_DECISION",
+        status="READY_FOR_REVIEW",
+        title="Management decision report",
+        updated_at=NOW,
+    )
+    version = ns(id=62, version_number=3, status="REVIEWED", updated_at=NOW)
+    card = service(report=ReportRepo(job, version)).build_report(object(), actor_viewer, 61)
+    assert card.title == "Management decision report"
+    assert card.payload.version_id == 62
+    assert card.target.observed_version == 3
+    assert card.target.navigation_path == "/platform/maintenance/reports?report_id=61"
+
+    job.status = "GENERATING_SECTIONS"
+    assert service(report=ReportRepo(job, version)).build_report(object(), actor_viewer, 61) is None
+
+
+def test_build_cards_applies_stable_priority_dedup_and_limit(actor_viewer):
+    ai = AIRepo(
+        ns(
+            id=7,
+            title="x",
+            status="PLANNED",
+            active_scenario_version_id=None,
+            updated_at=NOW,
+        ),
+        ns(
+            session_id=7,
+            snapshot_version=1,
+            scenario_draft_json={"x": 1},
+            updated_at=NOW,
+        ),
+    )
+    group = ns(
+        id=35,
+        scenario_version_id=8,
+        status="COMPLETED",
+        primary_candidate_key="base",
+        current_children=[],
+        version=1,
+        updated_at=NOW,
+    )
+    plan = ns(
+        id=41,
+        status="PREVIEWED",
+        source_demand_list_id=11,
+        version=1,
+        updated_at=NOW,
+    )
+    allocation = AllocationRepo(
+        plan,
+        [ns(gap_quantity=Decimal("1"), risks_json=[], updated_at=NOW)],
+    )
+    result = service(ai=ai, calc=CalcRepo(group), allocation=allocation).build_cards(
+        object(),
+        actor_viewer,
+        [
+            ("CALCULATION", 35),
+            ("SCENARIO_DRAFT", 7),
+            ("INVENTORY_GAP", 41),
+            ("CALCULATION", 35),
+        ],
+    )
+    assert [card.type for card in result] == [
+        "INVENTORY_GAP",
+        "SCENARIO_DRAFT",
+        "CALCULATION",
+    ]
