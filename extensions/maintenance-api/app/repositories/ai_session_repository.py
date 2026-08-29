@@ -140,6 +140,44 @@ class AISessionRepository:
         session.flush()
         return row
 
+    def get_message(
+        self,
+        session: Session,
+        tenant_id: str,
+        session_id: int,
+        message_id: int,
+    ) -> AIMessage | None:
+        return session.scalar(
+            select(AIMessage)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AIMessage.tenant_id == tenant_id,
+                AIMessage.session_id == session_id,
+                AIMessage.id == message_id,
+            )
+        )
+
+    def set_message_structured_content(
+        self,
+        session: Session,
+        tenant_id: str,
+        session_id: int,
+        message_id: int,
+        structured_content: dict[str, Any],
+    ) -> AIMessage | None:
+        row = self.get_message(
+            session,
+            tenant_id,
+            session_id,
+            message_id,
+        )
+        if row is None:
+            return None
+        row.structured_content_json = dict(structured_content)
+        session.flush()
+        return row
+
     def append_event(
         self,
         session: Session,
@@ -253,6 +291,29 @@ class AISessionRepository:
         session.add(row)
         session.flush()
         return row
+
+    def get_snapshot(
+        self,
+        session: Session,
+        tenant_id: str,
+        session_id: int,
+        snapshot_version: int,
+    ) -> AISessionSnapshot | None:
+        self._require_session(
+            session,
+            tenant_id,
+            session_id,
+        )
+        return session.scalar(
+            select(AISessionSnapshot)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AISessionSnapshot.tenant_id == tenant_id,
+                AISessionSnapshot.session_id == session_id,
+                AISessionSnapshot.snapshot_version == snapshot_version,
+            )
+        )
 
     def latest_snapshot(
         self,
