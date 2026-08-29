@@ -1,0 +1,30 @@
+name: Plan05 A3 TDD
+
+on:
+  push:
+    branches:
+      - codex/plan05-a3-tdd
+
+permissions:
+  contents: read
+
+jobs:
+  exact-turn-projection:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extensions/maintenance-api
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: extensions/maintenance-api/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run focused A1-A3 tests
+        run: >-
+          python -m pytest -q
+          tests/services/test_business_card_service.py
+          tests/api/test_business_card_api.py
