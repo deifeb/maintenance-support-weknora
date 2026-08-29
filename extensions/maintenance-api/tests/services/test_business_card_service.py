@@ -3,10 +3,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
-
 from app.core.exceptions import NotFoundError
 from app.schemas.business_card import (
+    MAX_CARD_PROJECTION_BYTES,
     BusinessCardBatch,
     CalculationCard,
     CalculationPayload,
@@ -21,14 +20,14 @@ from app.schemas.business_card import (
     ReviewFindingPayload,
     ScenarioDraftCard,
     ScenarioDraftPayload,
-    MAX_CARD_PROJECTION_BYTES,
-    projection_size_bytes,
-    require_projection_size,
     canonical_card_json,
     canonicalize_cards,
     parse_business_card,
+    projection_size_bytes,
+    require_projection_size,
 )
 from app.services.business_card_service import BusinessCardService
+from pydantic import ValidationError
 
 NOW = datetime(2026, 8, 29, tzinfo=timezone.utc)
 
