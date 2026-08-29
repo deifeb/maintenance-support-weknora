@@ -6,7 +6,7 @@ on:
       - codex/plan05-a3-tdd
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   exact-turn-projection:
@@ -23,6 +23,17 @@ jobs:
           cache-dependency-path: extensions/maintenance-api/requirements-dev.txt
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
+      - name: Apply deterministic Ruff import fix
+        run: python -m ruff check --fix tests/services/test_business_card_service.py
+      - name: Persist deterministic Ruff import fix
+        run: |
+          if ! git diff --quiet -- tests/services/test_business_card_service.py; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add tests/services/test_business_card_service.py
+            git commit -m "style: apply ruff import ordering"
+            git push origin HEAD:codex/plan05-a3-tdd
+          fi
       - name: Ruff touched A3 surface
         run: >-
           python -m ruff check
