@@ -81,6 +81,12 @@ TENANT_TABLES = {
     "demand_list_review_findings",
     "demand_list_review_decisions",
     "demand_list_review_events",
+    "allocation_rule_versions",
+    "allocation_simulations",
+    "allocation_simulation_results",
+    "allocation_plans",
+    "allocation_plan_lines",
+    "allocation_plan_events",
 }
 
 VERSIONED_TABLES = {
