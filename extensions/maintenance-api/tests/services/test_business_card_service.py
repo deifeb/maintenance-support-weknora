@@ -3,7 +3,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-
 from app.core.exceptions import NotFoundError
 from app.schemas.business_card import (
     MAX_CARD_PROJECTION_BYTES,
