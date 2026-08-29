@@ -21,6 +21,7 @@ class StrictProjectionModel(BaseModel):
 class MaintenanceCardReference(StrictProjectionModel):
     type: CardType
     object_id: ObjectIdentity
+    lookup_id: ObjectIdentity | None = None
     observed_version: ObservedVersion = None
 
 
