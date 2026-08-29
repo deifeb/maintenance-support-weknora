@@ -28,10 +28,14 @@ from app.services.ai_orchestration_service import (
     ai_orchestration_service,
 )
 from app.services.ai_session_service import (
+    MAINTENANCE_PROJECTION_SOURCE_INFO_KEY,
     ai_session_service,
 )
 from app.services.ai_tool_registry import (
     permissions_for_actor,
+)
+from app.services.business_card_service import (
+    business_card_service,
 )
 
 router = APIRouter()
@@ -186,6 +190,10 @@ async def post_message(
     ],
     session: Session = Depends(get_db_session),
 ):
+    session.info.pop(
+        MAINTENANCE_PROJECTION_SOURCE_INFO_KEY,
+        None,
+    )
     result = (
         await ai_orchestration_service
         .handle_message(
@@ -201,8 +209,35 @@ async def post_message(
             ),
         )
     )
+    source = session.info.pop(
+        MAINTENANCE_PROJECTION_SOURCE_INFO_KEY,
+        None,
+    )
+    if (
+        not isinstance(source, dict)
+        or source.get("session_id") != session_id
+        or not isinstance(source.get("message_id"), int)
+    ):
+        raise RuntimeError(
+            "exact maintenance trigger identity was not captured"
+        )
+    trigger_message_id = int(source["message_id"])
+    projection = business_card_service.project_trigger_message(
+        session,
+        actor,
+        session_id,
+        trigger_message_id,
+        include_scenario_draft=(
+            result.scenario_draft is not None
+        ),
+    )
+    data = result.model_dump(mode="json")
+    data["trigger_message_id"] = trigger_message_id
+    data["maintenance_projection"] = (
+        projection.model_dump(mode="json")
+    )
     return success_response(
-        result.model_dump(mode="json"),
+        data,
         actor=actor,
     )
 
