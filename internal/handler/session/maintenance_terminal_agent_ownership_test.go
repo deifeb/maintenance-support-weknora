@@ -94,21 +94,12 @@ func TestAgentStreamCompleteDoesNotPreemptTerminalFinalizerOwnership(t *testing.
 		)
 	}
 
-	if len(streamManager.events) != 1 {
-		t.Fatalf(
-			"stream event count = %d, want 1",
-			len(streamManager.events),
-		)
-	}
-	evt := streamManager.events[0]
-	if evt.Type != types.ResponseTypeComplete {
-		t.Fatalf(
-			"stream event type = %q, want %q",
-			evt.Type,
-			types.ResponseTypeComplete,
-		)
-	}
-	if !evt.Done {
-		t.Fatal("complete stream event must remain terminal")
+	for _, evt := range streamManager.events {
+		if evt.Type == types.ResponseTypeComplete {
+			t.Fatal(
+				"agent stream handler appended ResponseTypeComplete; " +
+					"terminal winner must own durable completion event",
+			)
+		}
 	}
 }

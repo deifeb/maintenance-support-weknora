@@ -665,20 +665,5 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 		}
 	}
 
-	// Send completion event to stream manager so SSE can detect completion
-	if err := h.streamManager.AppendEvent(h.ctx, h.sessionID, h.assistantMessageID, interfaces.StreamEvent{
-		ID:        evt.ID,
-		Type:      types.ResponseTypeComplete,
-		Content:   "",
-		Done:      true,
-		Timestamp: time.Now(),
-		Data: map[string]interface{}{
-			"total_steps":       data.TotalSteps,
-			"total_duration_ms": data.TotalDurationMs,
-		},
-	}); err != nil {
-		logger.GetLogger(h.ctx).Errorf("Append complete event to stream failed: %v", err)
-	}
-
 	return nil
 }

@@ -148,8 +148,10 @@ func TestCompleteAssistantMessageRoutesNormalAndAgentCallsitesThroughTerminalFin
 			Persisted: true,
 		},
 	}
+	streamManager := &maintenanceTerminalCompleteStreamManager{}
 	handler := &Handler{
 		messageService:               messageService,
+		streamManager:                streamManager,
 		maintenanceTerminalFinalizer: finalizer,
 	}
 	message := terminalCallsiteAssistant()
@@ -159,6 +161,20 @@ func TestCompleteAssistantMessageRoutesNormalAndAgentCallsitesThroughTerminalFin
 		message,
 		"user question",
 	)
+
+	if len(streamManager.events) != 1 {
+		t.Fatalf(
+			"terminal winner complete event count = %d, want 1",
+			len(streamManager.events),
+		)
+	}
+	if streamManager.events[0].Type != types.ResponseTypeComplete {
+		t.Fatalf(
+			"terminal winner event type = %q, want %q",
+			streamManager.events[0].Type,
+			types.ResponseTypeComplete,
+		)
+	}
 
 	if finalizer.calls != 1 {
 		t.Fatalf("terminal finalizer calls = %d, want 1", finalizer.calls)
@@ -192,8 +208,10 @@ func TestCompleteAssistantMessageDoesNotPostProcessWhenTerminalRaceWasLost(
 			Persisted: false,
 		},
 	}
+	streamManager := &maintenanceTerminalCompleteStreamManager{}
 	handler := &Handler{
 		messageService:               messageService,
+		streamManager:                streamManager,
 		maintenanceTerminalFinalizer: finalizer,
 	}
 
@@ -202,6 +220,13 @@ func TestCompleteAssistantMessageDoesNotPostProcessWhenTerminalRaceWasLost(
 		terminalCallsiteAssistant(),
 		"user question",
 	)
+
+	if len(streamManager.events) != 0 {
+		t.Fatalf(
+			"losing terminal path complete event count = %d, want 0",
+			len(streamManager.events),
+		)
+	}
 
 	select {
 	case <-messageService.indexed:

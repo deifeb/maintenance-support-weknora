@@ -1414,6 +1414,13 @@ func (h *Handler) completeAssistantMessage(ctx context.Context, assistantMessage
 		return
 	}
 
+	if err := h.appendTerminalCompleteEvent(ctx, assistantMessage); err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"session_id": assistantMessage.SessionID,
+			"message_id": assistantMessage.ID,
+		})
+	}
+
 	// Asynchronously index the Q&A pair into the chat history knowledge base for vector search.
 	// Use WithoutCancel so the goroutine survives after the HTTP request context is done.
 	bgCtx := context.WithoutCancel(ctx)
