@@ -28,6 +28,12 @@ type MessageService interface {
 
 	// UpdateMessage updates a message
 	UpdateMessage(ctx context.Context, message *types.Message) error
+	// FinalizeAssistantMessageIfOpen validates session write scope and conditionally persists one terminal assistant snapshot.
+	// The returned bool is false when another terminal path already completed the same assistant message.
+	FinalizeAssistantMessageIfOpen(
+		ctx context.Context,
+		message *types.Message,
+	) (bool, error)
 
 	// UpdateMessageImages updates only the images JSONB column for a message.
 	UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error
@@ -75,6 +81,12 @@ type MessageRepository interface {
 	) ([]*types.Message, error)
 	// UpdateMessage updates a message
 	UpdateMessage(ctx context.Context, message *types.Message) error
+	// FinalizeAssistantMessageIfOpen atomically persists one terminal assistant snapshot only while the row is still open.
+	// The returned bool is false when another terminal path already completed the same assistant message.
+	FinalizeAssistantMessageIfOpen(
+		ctx context.Context,
+		message *types.Message,
+	) (bool, error)
 	// UpdateMessageImages updates only the images JSONB column for a message
 	UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error
 	// UpdateMessageMaintenanceCards updates only the immutable maintenance card snapshot.

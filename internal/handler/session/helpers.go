@@ -8,6 +8,7 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/maintenanceprojection"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/gin-gonic/gin"
@@ -333,7 +334,17 @@ func (h *Handler) setupStopEventHandler(
 			context.WithoutCancel(ctx),
 			types.TenantIDContextKey, sessionTenantID,
 		)
-		h.completeAssistantMessage(updateCtx, assistantMessage, "") // empty query: stopped conversations are not indexed
+		assistantMessage.UpdatedAt = time.Now()
+		if _, err := h.finalizeAssistantTerminal(
+			updateCtx,
+			assistantMessage,
+			maintenanceprojection.TerminalReasonStop,
+		); err != nil {
+			logger.ErrorWithFields(updateCtx, err, map[string]interface{}{
+				"session_id": assistantMessage.SessionID,
+				"message_id": assistantMessage.ID,
+			})
+		}
 		return nil
 	})
 }

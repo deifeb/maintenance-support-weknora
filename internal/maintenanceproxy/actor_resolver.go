@@ -1,6 +1,7 @@
 package maintenanceproxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -20,12 +21,20 @@ func actorUnavailable(reason string) error {
 // ResolveWebActor projects the explicit authenticated WeKnora web-user context
 // into the actor contract used by the private Maintenance proxy.
 func ResolveWebActor(c *gin.Context) (Actor, error) {
-	actor := Actor{}
 	if c == nil || c.Request == nil {
+		return Actor{}, actorUnavailable("request context is missing")
+	}
+	return ResolveWebActorContext(c.Request.Context())
+}
+
+// ResolveWebActorContext projects the authenticated request context into the
+// actor contract used by async Maintenance terminal finalization.
+func ResolveWebActorContext(ctx context.Context) (Actor, error) {
+	actor := Actor{}
+	if ctx == nil {
 		return actor, actorUnavailable("request context is missing")
 	}
 
-	ctx := c.Request.Context()
 	requestID, ok := ctx.Value(types.RequestIDContextKey).(string)
 	if !ok || strings.TrimSpace(requestID) == "" {
 		return actor, actorUnavailable("request id is missing")

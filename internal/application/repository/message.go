@@ -114,6 +114,41 @@ func (r *messageRepository) UpdateMessage(ctx context.Context, message *types.Me
 	).Updates(message).Error
 }
 
+// FinalizeAssistantMessageIfOpen atomically persists the mutable terminal
+// snapshot only if the exact assistant row is still open. RowsAffected == 0
+// means another terminal path (for example user stop) already won the race.
+func (r *messageRepository) FinalizeAssistantMessageIfOpen(
+	ctx context.Context,
+	message *types.Message,
+) (bool, error) {
+	updates := map[string]interface{}{
+		"content":              message.Content,
+		"knowledge_references": message.KnowledgeReferences,
+		"agent_steps":          message.AgentSteps,
+		"is_completed":         message.IsCompleted,
+		"is_fallback":          message.IsFallback,
+		"agent_duration_ms":    message.AgentDurationMs,
+		"maintenance_cards":    message.MaintenanceCards,
+		"execution_context":    message.ExecutionContext,
+		"updated_at":           message.UpdatedAt,
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&types.Message{}).
+		Where(
+			"id = ? AND session_id = ? AND role = ? AND is_completed = ?",
+			message.ID,
+			message.SessionID,
+			"assistant",
+			false,
+		).
+		Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
 // DeleteMessage deletes a message
 func (r *messageRepository) DeleteMessage(ctx context.Context, sessionID string, messageID string) error {
 	return r.db.WithContext(ctx).Where(

@@ -16,6 +16,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/errors"
 	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/maintenanceprojection"
 	"github.com/Tencent/WeKnora/internal/types"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/gin-gonic/gin"
@@ -80,6 +81,41 @@ func (rc *qaRequestContext) buildQARequest() *types.QARequest {
 	}
 }
 
+func validateMaintenanceProjectionSource(
+	source *MaintenanceProjectionSourceRequest,
+) (*types.MaintenanceProjectionProvenance, error) {
+	if source == nil {
+		return nil, nil
+	}
+	if source.SchemaVersion != "1.0" {
+		return nil, fmt.Errorf(
+			"maintenance_projection_source.schema_version must be 1.0",
+		)
+	}
+	if source.SourceKind != "AI_MESSAGE_TRIGGER" {
+		return nil, fmt.Errorf(
+			"maintenance_projection_source.source_kind must be AI_MESSAGE_TRIGGER",
+		)
+	}
+	if source.AISessionID <= 0 {
+		return nil, fmt.Errorf(
+			"maintenance_projection_source.ai_session_id must be positive",
+		)
+	}
+	if source.TriggerMessageID <= 0 {
+		return nil, fmt.Errorf(
+			"maintenance_projection_source.trigger_message_id must be positive",
+		)
+	}
+
+	return &types.MaintenanceProjectionProvenance{
+		SchemaVersion:    source.SchemaVersion,
+		SourceKind:       source.SourceKind,
+		AISessionID:      source.AISessionID,
+		TriggerMessageID: source.TriggerMessageID,
+	}, nil
+}
+
 // parseQARequest parses and validates a QA request, returns the request context
 func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestContext, *CreateKnowledgeQARequest, error) {
 	receivedAt := time.Now()
@@ -99,6 +135,13 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	var request CreateKnowledgeQARequest
 	if err := c.ShouldBindJSON(&request); err != nil {
 		logger.Error(ctx, "Failed to parse request data", err)
+		return nil, nil, errors.NewBadRequestError(err.Error())
+	}
+
+	maintenanceProjection, err := validateMaintenanceProjectionSource(
+		request.MaintenanceProjectionSource,
+	)
+	if err != nil {
 		return nil, nil, errors.NewBadRequestError(err.Error())
 	}
 
@@ -309,6 +352,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		secutils.SanitizeForLogArray(skillNames),
 		request.WebSearchEnabled,
 	)
+	executionContext.MaintenanceProjection = maintenanceProjection
 
 	// Build request context
 	reqCtx := &qaRequestContext{
@@ -942,6 +986,27 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 			if streamCtx.asyncCtx.Err() != nil {
 				logger.Infof(streamCtx.asyncCtx, "QA cancelled by user stop for session: %s", sessionID)
 			} else {
+				errorUpdateCtx := context.WithValue(
+					context.WithoutCancel(streamCtx.asyncCtx),
+					types.TenantIDContextKey,
+					reqCtx.session.TenantID,
+				)
+				streamCtx.assistantMessage.UpdatedAt = time.Now()
+				if _, terminalErr := h.finalizeAssistantTerminal(
+					errorUpdateCtx,
+					streamCtx.assistantMessage,
+					maintenanceprojection.TerminalReasonError,
+				); terminalErr != nil {
+					logger.ErrorWithFields(
+						errorUpdateCtx,
+						terminalErr,
+						map[string]interface{}{
+							"session_id": streamCtx.assistantMessage.SessionID,
+							"message_id": streamCtx.assistantMessage.ID,
+							"reason":     maintenanceprojection.TerminalReasonError,
+						},
+					)
+				}
 				logger.ErrorWithFields(streamCtx.asyncCtx, serviceErr, nil)
 				streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
 					Type:      event.EventError,
@@ -1319,12 +1384,35 @@ func appendQuickAnswerReasoning(msg *types.Message, content string) {
 	msg.AgentSteps[0].ReasoningContent += content
 }
 
-// completeAssistantMessage marks an assistant message as complete, updates it,
-// and asynchronously indexes the Q&A pair into the chat history knowledge base.
+// completeAssistantMessage finalizes a normal/agent assistant turn through the
+// single conditional terminal boundary. Only the terminal winner may run
+// post-persistence indexing and follow-up generation.
 func (h *Handler) completeAssistantMessage(ctx context.Context, assistantMessage *types.Message, userQuery string) {
 	assistantMessage.UpdatedAt = time.Now()
-	assistantMessage.IsCompleted = true
-	_ = h.messageService.UpdateMessage(ctx, assistantMessage)
+
+	result, err := h.finalizeAssistantTerminal(
+		ctx,
+		assistantMessage,
+		maintenanceprojection.TerminalReasonNormal,
+	)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"session_id": assistantMessage.SessionID,
+			"message_id": assistantMessage.ID,
+		})
+		return
+	}
+	if result.ProjectionError != nil {
+		logger.Warnf(
+			ctx,
+			"maintenance projection failed closed for assistant message %s: %v",
+			assistantMessage.ID,
+			result.ProjectionError,
+		)
+	}
+	if !result.Persisted {
+		return
+	}
 
 	// Asynchronously index the Q&A pair into the chat history knowledge base for vector search.
 	// Use WithoutCancel so the goroutine survives after the HTTP request context is done.

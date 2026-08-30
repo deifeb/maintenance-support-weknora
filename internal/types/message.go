@@ -324,20 +324,32 @@ type Message struct {
 	DeletedAt gorm.DeletedAt `json:"deleted_at"            gorm:"index"`
 }
 
+// MaintenanceProjectionProvenance records the exact Maintenance AI turn
+// that produced a persisted card projection for this WeKnora assistant turn.
+// It is provenance only and must not contain tenant identity, credentials,
+// authorization material, or card contents.
+type MaintenanceProjectionProvenance struct {
+	SchemaVersion    string `json:"schema_version"`
+	SourceKind       string `json:"source_kind"`
+	AISessionID      int64  `json:"ai_session_id"`
+	TriggerMessageID int64  `json:"trigger_message_id"`
+}
+
 // MessageExecutionContext is a message-level snapshot of the non-secret
 // request state used by derived experiences such as follow-up suggestions.
 type MessageExecutionContext struct {
-	AgentConfigHash       string                    `json:"agent_config_hash,omitempty"`
-	QuestionSuggestions   *QuestionSuggestionConfig `json:"question_suggestions,omitempty"`
-	KnowledgeBaseIDs      []string                  `json:"knowledge_base_ids,omitempty"`
-	KnowledgeIDs          []string                  `json:"knowledge_ids,omitempty"`
-	TagIDs                []string                  `json:"tag_ids,omitempty"`
-	TagScopes             []TagScope                `json:"tag_scopes,omitempty"`
-	MCPServiceIDs         []string                  `json:"mcp_service_ids,omitempty"`
-	SkillNames            []string                  `json:"skill_names,omitempty"`
-	WebSearchEnabled      bool                      `json:"web_search_enabled"`
-	Locale                string                    `json:"locale,omitempty"`
-	SuggestionAttribution *SuggestionAttribution    `json:"suggestion_attribution,omitempty"`
+	AgentConfigHash       string                           `json:"agent_config_hash,omitempty"`
+	QuestionSuggestions   *QuestionSuggestionConfig        `json:"question_suggestions,omitempty"`
+	KnowledgeBaseIDs      []string                         `json:"knowledge_base_ids,omitempty"`
+	KnowledgeIDs          []string                         `json:"knowledge_ids,omitempty"`
+	TagIDs                []string                         `json:"tag_ids,omitempty"`
+	TagScopes             []TagScope                       `json:"tag_scopes,omitempty"`
+	MCPServiceIDs         []string                         `json:"mcp_service_ids,omitempty"`
+	SkillNames            []string                         `json:"skill_names,omitempty"`
+	WebSearchEnabled      bool                             `json:"web_search_enabled"`
+	Locale                string                           `json:"locale,omitempty"`
+	SuggestionAttribution *SuggestionAttribution           `json:"suggestion_attribution,omitempty"`
+	MaintenanceProjection *MaintenanceProjectionProvenance `json:"maintenance_projection,omitempty"`
 }
 
 func (c MessageExecutionContext) Value() (driver.Value, error) {

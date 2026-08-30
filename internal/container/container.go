@@ -74,6 +74,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
 	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/maintenanceintegration"
 	"github.com/Tencent/WeKnora/internal/mcp"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
@@ -110,7 +111,9 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	// Core infrastructure configuration
 	logger.Debugf(ctx, "[Container] Registering core infrastructure...")
 	must(container.Provide(config.LoadConfig))
-	must(container.Provide(newMaintenanceProxy))
+	must(container.Provide(maintenanceintegration.NewRuntime))
+	must(container.Provide(maintenanceintegration.ProxyFromRuntime))
+	must(container.Provide(maintenanceintegration.FinalizerFromRuntime))
 	must(container.Provide(initLangfuse))
 	must(container.Provide(initDatabase))
 	must(container.Provide(initFileService))
