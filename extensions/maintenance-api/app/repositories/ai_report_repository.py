@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, TypeVar
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -141,6 +141,143 @@ class AIReportRepository:
             AIReportJob,
             report_job_id,
         )
+
+    def list_report_center_page(
+        self,
+        session: Session,
+        tenant_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str | None = None,
+        report_type: AIReportType | None = None,
+        job_status: AIReportJobStatus | None = None,
+        version_status: AIReportVersionStatus | None = None,
+        session_id: int | None = None,
+        scenario_version_id: int | None = None,
+        calculation_run_id: int | None = None,
+        review_run_id: int | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> tuple[
+        list[tuple[AIReportJob, AIReportVersion | None]],
+        int,
+    ]:
+        latest_number = (
+            select(
+                AIReportVersion.report_job_id.label(
+                    "report_job_id"
+                ),
+                func.max(
+                    AIReportVersion.version_number
+                ).label("latest_version_number"),
+            )
+            .where(AIReportVersion.tenant_id == tenant_id)
+            .group_by(AIReportVersion.report_job_id)
+            .subquery()
+        )
+
+        latest_join = and_(
+            AIReportVersion.tenant_id == tenant_id,
+            AIReportVersion.report_job_id
+            == AIReportJob.id,
+            AIReportVersion.version_number
+            == latest_number.c.latest_version_number,
+        )
+
+        conditions = [AIReportJob.tenant_id == tenant_id]
+        normalized_keyword = (keyword or "").strip()
+        if normalized_keyword:
+            pattern = f"%{normalized_keyword}%"
+            conditions.append(
+                or_(
+                    AIReportJob.report_code.ilike(pattern),
+                    AIReportJob.title.ilike(pattern),
+                )
+            )
+        if report_type is not None:
+            conditions.append(
+                AIReportJob.report_type == report_type
+            )
+        if job_status is not None:
+            conditions.append(AIReportJob.status == job_status)
+        if session_id is not None:
+            conditions.append(AIReportJob.session_id == session_id)
+        if version_status is not None:
+            conditions.append(
+                AIReportVersion.status == version_status
+            )
+        if scenario_version_id is not None:
+            conditions.append(
+                AIReportVersion.scenario_version_id
+                == scenario_version_id
+            )
+        if calculation_run_id is not None:
+            conditions.append(
+                AIReportVersion.calculation_run_id
+                == calculation_run_id
+            )
+        if review_run_id is not None:
+            conditions.append(
+                AIReportVersion.review_run_id == review_run_id
+            )
+
+        sort_columns = {
+            "created_at": AIReportJob.created_at,
+            "report_code": AIReportJob.report_code,
+            "title": AIReportJob.title,
+            "report_type": AIReportJob.report_type,
+            "job_status": AIReportJob.status,
+        }
+        if sort_by not in sort_columns:
+            raise ValueError("unsupported sort_by")
+        if sort_order not in {"asc", "desc"}:
+            raise ValueError("unsupported sort_order")
+
+        sort_column = sort_columns[sort_by]
+        direction = (
+            sort_column.asc
+            if sort_order == "asc"
+            else sort_column.desc
+        )
+        tie_direction = (
+            AIReportJob.id.asc()
+            if sort_order == "asc"
+            else AIReportJob.id.desc()
+        )
+
+        count_statement = (
+            select(func.count(AIReportJob.id))
+            .select_from(AIReportJob)
+            .outerjoin(
+                latest_number,
+                latest_number.c.report_job_id
+                == AIReportJob.id,
+            )
+            .outerjoin(AIReportVersion, latest_join)
+            .where(*conditions)
+        )
+        total = int(session.scalar(count_statement) or 0)
+
+        statement = (
+            select(AIReportJob, AIReportVersion)
+            .outerjoin(
+                latest_number,
+                latest_number.c.report_job_id
+                == AIReportJob.id,
+            )
+            .outerjoin(AIReportVersion, latest_join)
+            .where(*conditions)
+            .order_by(direction(), tie_direction)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .execution_options(populate_existing=True)
+        )
+        rows = session.execute(statement).all()
+        return [
+            (job, version)
+            for job, version in rows
+        ], total
 
     def list_versions(
         self,
