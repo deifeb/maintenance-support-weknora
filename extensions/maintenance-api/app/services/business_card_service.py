@@ -6,6 +6,10 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.exceptions import NotFoundError
+from app.schemas.ai_session import (
+    AIMessageBusinessCardProjectionRead,
+    MaintenanceProjectionSource,
+)
 from app.schemas.business_card import (
     CalculationCard,
     CalculationPayload,
@@ -55,15 +59,22 @@ def _enum_value(value: Any) -> str:
 
 def _observed_at(*rows: Any) -> datetime:
     values = [
-        value
+        (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            or value.utcoffset() is None
+            else value.astimezone(timezone.utc)
+        )
         for row in rows
-        for value in (getattr(row, "updated_at", None), getattr(row, "created_at", None))
+        for value in (
+            getattr(row, "updated_at", None),
+            getattr(row, "created_at", None),
+        )
         if isinstance(value, datetime)
     ]
     if values:
         return max(values)
     return datetime.now(timezone.utc)
-
 
 def _title(value: str, fallback: str) -> str:
     clean = value.strip() if isinstance(value, str) else ""
@@ -374,5 +385,60 @@ class BusinessCardService:
                 cards.append(card)
         return canonicalize_cards(cards)
 
+    @staticmethod
+    def references_from_message(
+        message: Any,
+    ) -> list[tuple[str, int]]:
+        structured_content = getattr(
+            message,
+            "structured_content_json",
+            None,
+        )
+        if not isinstance(structured_content, dict):
+            return []
+
+        raw_references = structured_content.get(
+            "maintenance_business_refs",
+            [],
+        )
+        if not isinstance(raw_references, list):
+            return []
+
+        references: list[tuple[str, int]] = []
+        for reference in raw_references:
+            if not isinstance(reference, dict):
+                continue
+            card_type = reference.get("type")
+            object_id = reference.get("object_id")
+            if not isinstance(card_type, str):
+                continue
+            if (
+                not isinstance(object_id, int)
+                or isinstance(object_id, bool)
+                or object_id <= 0
+            ):
+                continue
+            references.append((card_type, object_id))
+        return references
+
+    def build_message_projection(
+        self,
+        session,
+        actor: ActorContext,
+        ai_session_id: int,
+        trigger_message: Any,
+    ) -> AIMessageBusinessCardProjectionRead:
+        cards = self.build_cards(
+            session,
+            actor,
+            self.references_from_message(trigger_message),
+        )
+        return AIMessageBusinessCardProjectionRead(
+            source=MaintenanceProjectionSource(
+                session_id=ai_session_id,
+                message_id=trigger_message.id,
+            ),
+            cards=cards,
+        )
 
 business_card_service = BusinessCardService()

@@ -50,6 +50,9 @@ def test_session_message_and_events_flow(
     )
     assert message.status_code == 200
     data = message.json()["data"]
+    trigger_message_id = data["trigger_message_id"]
+    assert isinstance(trigger_message_id, int)
+    assert trigger_message_id > 0
     assert (
         data["scenario_draft"][
             "equipment_quantity"
