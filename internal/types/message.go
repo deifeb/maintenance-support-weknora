@@ -198,6 +198,68 @@ func (m *MentionedItems) Scan(value interface{}) error {
 	return json.Unmarshal(b, m)
 }
 
+// MaintenanceCardTarget identifies the authoritative maintenance object
+// represented by a persisted display-only card snapshot.
+type MaintenanceCardTarget struct {
+	ObjectType      string `json:"object_type"`
+	ObjectID        any    `json:"object_id"`
+	ObservedVersion any    `json:"observed_version"`
+	NavigationPath  string `json:"navigation_path"`
+}
+
+// MaintenanceCard is the immutable v1 maintenance projection persisted on
+// an assistant message. Business authorization remains owned by Maintenance.
+type MaintenanceCard struct {
+	SchemaVersion string                `json:"schema_version"`
+	Type          string                `json:"type"`
+	Title         string                `json:"title"`
+	Summary       string                `json:"summary"`
+	Status        string                `json:"status"`
+	Target        MaintenanceCardTarget `json:"target"`
+	ObservedAt    string                `json:"observed_at"`
+	Payload       map[string]any        `json:"payload"`
+}
+
+// MaintenanceCards is a bounded maintenance-card snapshot stored as JSONB.
+type MaintenanceCards []MaintenanceCard
+
+// Value implements driver.Valuer for database serialization.
+// A nil slice is persisted canonically as [] rather than null.
+func (m MaintenanceCards) Value() (driver.Value, error) {
+	if m == nil {
+		return json.Marshal([]MaintenanceCard{})
+	}
+	return json.Marshal(m)
+}
+
+// Scan implements sql.Scanner for database deserialization.
+// Legacy NULL and JSON null both normalize to an empty non-nil slice.
+func (m *MaintenanceCards) Scan(value interface{}) error {
+	if value == nil {
+		*m = make(MaintenanceCards, 0)
+		return nil
+	}
+
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		*m = make(MaintenanceCards, 0)
+		return nil
+	}
+
+	if err := json.Unmarshal(b, m); err != nil {
+		return err
+	}
+	if *m == nil {
+		*m = make(MaintenanceCards, 0)
+	}
+	return nil
+}
+
 // Message represents a conversation message
 // Each message belongs to a conversation session and can be from either user or system
 // Messages can contain references to knowledge chunks used to generate responses
@@ -225,6 +287,8 @@ type Message struct {
 	Images MessageImages `json:"images,omitempty" gorm:"type:jsonb;column:images"`
 	// Attached files (documents, audio, etc., for user messages)
 	Attachments MessageAttachments `json:"attachments,omitempty" gorm:"type:jsonb;column:attachments"`
+	// Immutable display-only maintenance projection persisted on this message
+	MaintenanceCards MaintenanceCards `json:"maintenance_cards,omitempty" gorm:"type:jsonb;column:maintenance_cards;default:'[]'"`
 	// Whether message generation is complete
 	IsCompleted bool `json:"is_completed"`
 	// Whether this response is a fallback (no knowledge base match found)
@@ -260,20 +324,32 @@ type Message struct {
 	DeletedAt gorm.DeletedAt `json:"deleted_at"            gorm:"index"`
 }
 
+// MaintenanceProjectionProvenance records the exact Maintenance AI turn
+// that produced a persisted card projection for this WeKnora assistant turn.
+// It is provenance only and must not contain tenant identity, credentials,
+// authorization material, or card contents.
+type MaintenanceProjectionProvenance struct {
+	SchemaVersion    string `json:"schema_version"`
+	SourceKind       string `json:"source_kind"`
+	AISessionID      int64  `json:"ai_session_id"`
+	TriggerMessageID int64  `json:"trigger_message_id"`
+}
+
 // MessageExecutionContext is a message-level snapshot of the non-secret
 // request state used by derived experiences such as follow-up suggestions.
 type MessageExecutionContext struct {
-	AgentConfigHash       string                    `json:"agent_config_hash,omitempty"`
-	QuestionSuggestions   *QuestionSuggestionConfig `json:"question_suggestions,omitempty"`
-	KnowledgeBaseIDs      []string                  `json:"knowledge_base_ids,omitempty"`
-	KnowledgeIDs          []string                  `json:"knowledge_ids,omitempty"`
-	TagIDs                []string                  `json:"tag_ids,omitempty"`
-	TagScopes             []TagScope                `json:"tag_scopes,omitempty"`
-	MCPServiceIDs         []string                  `json:"mcp_service_ids,omitempty"`
-	SkillNames            []string                  `json:"skill_names,omitempty"`
-	WebSearchEnabled      bool                      `json:"web_search_enabled"`
-	Locale                string                    `json:"locale,omitempty"`
-	SuggestionAttribution *SuggestionAttribution    `json:"suggestion_attribution,omitempty"`
+	AgentConfigHash       string                           `json:"agent_config_hash,omitempty"`
+	QuestionSuggestions   *QuestionSuggestionConfig        `json:"question_suggestions,omitempty"`
+	KnowledgeBaseIDs      []string                         `json:"knowledge_base_ids,omitempty"`
+	KnowledgeIDs          []string                         `json:"knowledge_ids,omitempty"`
+	TagIDs                []string                         `json:"tag_ids,omitempty"`
+	TagScopes             []TagScope                       `json:"tag_scopes,omitempty"`
+	MCPServiceIDs         []string                         `json:"mcp_service_ids,omitempty"`
+	SkillNames            []string                         `json:"skill_names,omitempty"`
+	WebSearchEnabled      bool                             `json:"web_search_enabled"`
+	Locale                string                           `json:"locale,omitempty"`
+	SuggestionAttribution *SuggestionAttribution           `json:"suggestion_attribution,omitempty"`
+	MaintenanceProjection *MaintenanceProjectionProvenance `json:"maintenance_projection,omitempty"`
 }
 
 func (c MessageExecutionContext) Value() (driver.Value, error) {
@@ -352,6 +428,9 @@ func (m *Message) BeforeCreate(tx *gorm.DB) (err error) {
 	}
 	if m.Attachments == nil {
 		m.Attachments = make(MessageAttachments, 0)
+	}
+	if m.MaintenanceCards == nil {
+		m.MaintenanceCards = make(MaintenanceCards, 0)
 	}
 	return nil
 }

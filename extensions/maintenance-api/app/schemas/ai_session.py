@@ -1,6 +1,8 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from app.schemas.business_card import MaintenanceBusinessCard
 
 
 class AISessionCreateRequest(BaseModel):
@@ -29,3 +31,15 @@ class AIMessageProcessRead(BaseModel):
     scenario_draft: dict[str, Any]
     readiness: str
     clarification_questions: list[str]
+
+
+class MaintenanceProjectionSource(BaseModel):
+    kind: Literal["AI_MESSAGE_TRIGGER"] = "AI_MESSAGE_TRIGGER"
+    session_id: int = Field(gt=0)
+    message_id: int = Field(gt=0)
+
+
+class AIMessageBusinessCardProjectionRead(BaseModel):
+    schema_version: Literal["1.0"] = "1.0"
+    source: MaintenanceProjectionSource
+    cards: list[MaintenanceBusinessCard] = Field(default_factory=list)

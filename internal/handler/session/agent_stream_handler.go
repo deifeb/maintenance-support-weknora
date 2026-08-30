@@ -602,7 +602,6 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 	// Update assistant message with final data
 	if data.MessageID == h.assistantMessageID {
 		// h.assistantMessage.Content = data.FinalAnswer
-		h.assistantMessage.IsCompleted = true
 		h.assistantMessage.AgentDurationMs = data.TotalDurationMs
 
 		// Update knowledge references if provided
@@ -664,21 +663,6 @@ func (h *AgentStreamHandler) handleComplete(ctx context.Context, evt event.Event
 		}); err != nil {
 			logger.GetLogger(h.ctx).Errorf("Append fallback answer done event failed: %v", err)
 		}
-	}
-
-	// Send completion event to stream manager so SSE can detect completion
-	if err := h.streamManager.AppendEvent(h.ctx, h.sessionID, h.assistantMessageID, interfaces.StreamEvent{
-		ID:        evt.ID,
-		Type:      types.ResponseTypeComplete,
-		Content:   "",
-		Done:      true,
-		Timestamp: time.Now(),
-		Data: map[string]interface{}{
-			"total_steps":       data.TotalSteps,
-			"total_duration_ms": data.TotalDurationMs,
-		},
-	}); err != nil {
-		logger.GetLogger(h.ctx).Errorf("Append complete event to stream failed: %v", err)
 	}
 
 	return nil

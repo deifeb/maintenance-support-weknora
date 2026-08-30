@@ -49,6 +49,9 @@ from app.repositories.ai_session_repository import (
     AISessionRepository,
     ai_session_repository,
 )
+from app.schemas.ai_session import (
+    AIMessageBusinessCardProjectionRead,
+)
 from app.security.actor import ActorContext
 from app.services.ai_confirmation_service import (
     AIConfirmationService,
@@ -73,10 +76,17 @@ from app.services.ai_tool_registry import (
     ToolRegistry,
     ai_tool_registry,
 )
+from app.services.business_card_service import (
+    business_card_service,
+)
 
 
 class AIOrchestrationResult(BaseModel):
     session_id: int
+    trigger_message_id: int | None = None
+    maintenance_projection: (
+        AIMessageBusinessCardProjectionRead | None
+    ) = None
     status: AISessionStatus
     pending_confirmation_id: int | None = None
     confirmation_token: str | None = None
@@ -249,7 +259,7 @@ class AIOrchestrationService:
             ),
             model_override=model_override,
         )
-        self.session_service.add_message(
+        trigger_message = self.session_service.add_message(
             session,
             actor,
             session_id,
@@ -296,6 +306,16 @@ class AIOrchestrationService:
             )
             return AIOrchestrationResult(
                 session_id=session_id,
+                trigger_message_id=trigger_message.id,
+                maintenance_projection=(
+                    business_card_service
+                    .build_message_projection(
+                        session,
+                        actor,
+                        session_id,
+                        trigger_message,
+                    )
+                ),
                 status=ai_session.status,
                 summary={
                     "refused": True,
@@ -488,6 +508,16 @@ class AIOrchestrationService:
             )
             return AIOrchestrationResult(
                 session_id=session_id,
+                trigger_message_id=trigger_message.id,
+                maintenance_projection=(
+                    business_card_service
+                    .build_message_projection(
+                        session,
+                        actor,
+                        session_id,
+                        trigger_message,
+                    )
+                ),
                 status=ai_session.status,
                 pending_confirmation_id=(
                     confirmation.id
@@ -658,6 +688,19 @@ class AIOrchestrationService:
                 )
             },
         )
+        trigger_structured_content = dict(
+            trigger_message.structured_content_json or {}
+        )
+        trigger_structured_content["maintenance_business_refs"] = [
+            {
+                "type": "SCENARIO_DRAFT",
+                "object_id": session_id,
+            }
+        ]
+        trigger_message.structured_content_json = (
+            trigger_structured_content
+        )
+        session.commit()
         self.session_service.append_event(
             session,
             actor,
@@ -706,6 +749,16 @@ class AIOrchestrationService:
         )
         return AIOrchestrationResult(
             session_id=session_id,
+            trigger_message_id=trigger_message.id,
+            maintenance_projection=(
+                business_card_service
+                .build_message_projection(
+                    session,
+                    actor,
+                    session_id,
+                    trigger_message,
+                )
+            ),
             status=ai_session.status,
             scenario_draft=draft_json,
             summary={

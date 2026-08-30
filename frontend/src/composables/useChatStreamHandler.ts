@@ -1,6 +1,7 @@
 import { markRaw, nextTick, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ensureRagPipelineHistoryStream } from '@/utils/rag-pipeline-history'
+import { applyMaintenanceCardSnapshot } from '@/utils/maintenanceCards'
 
 export type ChatMessage = Record<string, unknown>
 
@@ -128,6 +129,16 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
 
   /** Match the in-flight assistant row by request id or assistant message id. */
   const resolveActiveAssistantMessage = (data: ChatMessage) => {
+    const dataPayload = data.data as ChatMessage | undefined
+    const payloadAssistantId = dataPayload?.assistant_message_id as string | undefined
+
+    if (payloadAssistantId) {
+      const exact = findLastMessage(
+        (item) => item.role === 'assistant' && item.id === payloadAssistantId,
+      )
+      if (exact) return exact
+    }
+
     const dataId = data.id as string | undefined
     const assistantId =
       (data.assistant_message_id as string | undefined) ||
@@ -387,6 +398,7 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
       }
 
       restoreQuickAnswerFlags(item)
+      applyMaintenanceCardSnapshot(item, item.maintenance_cards)
 
       if (item.content) {
         const content = String(item.content)
@@ -472,9 +484,7 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
 
   const handleAgentChunk = (data: ChatMessage) => {
     const dataId = data.id as string | undefined
-    let message = findLastMessage(
-      (item) => item.request_id === dataId || item.id === dataId,
-    )
+    let message = resolveActiveAssistantMessage(data)
     let created = false
 
     if (!message) {
@@ -810,6 +820,7 @@ export function useChatStreamHandler(options: UseChatStreamHandlerOptions) {
         isReplying.value = false
         message.is_completed = true
         onReplyComplete?.(String(message.content || ''))
+        applyMaintenanceCardSnapshot(message, dataPayload?.maintenance_cards)
         onTurnComplete?.(message)
         fullContent.value = ''
         currentAssistantMessageId.value = ''
