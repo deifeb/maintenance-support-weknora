@@ -1,26 +1,40 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.repositories.ai_report_repository import (
     AIReportRepository,
     ai_report_repository,
 )
+from app.schemas.ai_report import AIReportCreateRequest
 from app.schemas.common import PageData
 from app.schemas.report_center import (
     ReportCenterItemRead,
     ReportCenterLatestVersionRead,
     ReportCenterQuery,
+    ReportJobCreateRequest,
+    ReportJobStatusRead,
+    ReportVersionSummaryRead,
 )
 from app.security.actor import ActorContext
+from app.services.ai_report_service import (
+    AIReportService,
+    ai_report_service,
+)
 
 
 class ReportCenterQueryService:
     def __init__(
         self,
         repository: AIReportRepository | None = None,
+        report_service: AIReportService | None = None,
     ) -> None:
         self.repository = repository or ai_report_repository
+        self.report_service = (
+            report_service or ai_report_service
+        )
 
     def list(
         self,
@@ -92,6 +106,120 @@ class ReportCenterQueryService:
                 if total
                 else 0
             ),
+        )
+
+    @staticmethod
+    def _version_summary(version) -> ReportVersionSummaryRead:
+        return ReportVersionSummaryRead(
+            id=version.id,
+            version_number=version.version_number,
+            status=version.status,
+            template_version=version.template_version,
+            content_digest=version.content_digest,
+        )
+
+    def _job_status_read(
+        self,
+        job,
+        version,
+    ) -> ReportJobStatusRead:
+        return ReportJobStatusRead(
+            report_id=job.id,
+            report_code=job.report_code,
+            report_type=job.report_type,
+            job_status=job.status,
+            title=job.title,
+            progress_percent=job.progress_percent,
+            error_code=job.error_code,
+            latest_version=self._version_summary(
+                version
+            ),
+        )
+
+    def create_job(
+        self,
+        session: Session,
+        actor: ActorContext,
+        payload: ReportJobCreateRequest,
+    ) -> ReportJobStatusRead:
+        job = self.report_service.create(
+            session,
+            actor,
+            AIReportCreateRequest(
+                **payload.model_dump(mode="json")
+            ),
+        )
+        version = self.report_service.latest_version(
+            session,
+            actor,
+            job.id,
+        )
+        return self._job_status_read(
+            job,
+            version,
+        )
+
+    def job_status(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> ReportJobStatusRead:
+        job = self.report_service.get_job(
+            session,
+            actor,
+            report_job_id,
+        )
+        version = self.report_service.latest_version(
+            session,
+            actor,
+            report_job_id,
+        )
+        return self._job_status_read(
+            job,
+            version,
+        )
+
+    def detail(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> dict[str, Any]:
+        return self.report_service.read(
+            session,
+            actor,
+            report_job_id,
+        )
+
+    def versions(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> list[ReportVersionSummaryRead]:
+        rows = self.report_service.list_versions(
+            session,
+            actor,
+            report_job_id,
+        )
+        return [
+            self._version_summary(row)
+            for row in rows
+        ]
+
+    def export(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+        export_format: str,
+    ) -> tuple[bytes, str, str]:
+        return self.report_service.export(
+            session,
+            actor,
+            report_job_id,
+            export_format,
         )
 
 

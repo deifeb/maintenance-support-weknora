@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    Request,
+    Response,
+)
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 
@@ -13,21 +19,37 @@ from app.models.enums import (
     AIReportType,
     AIReportVersionStatus,
 )
-from app.schemas.common import MaintenanceSuccessResponse, PageData
+from app.schemas.common import (
+    MaintenanceSuccessResponse,
+    PageData,
+)
 from app.schemas.report_center import (
     ReportCenterItemRead,
     ReportCenterQuery,
     ReportCenterSortBy,
     ReportCenterSortOrder,
+    ReportJobCreateRequest,
 )
 from app.security.actor import ActorContext
-from app.security.permissions import require_viewer
-from app.services.report_center_service import report_center_query_service
+from app.security.permissions import (
+    require_contributor,
+    require_viewer,
+)
+from app.services.report_center_service import (
+    report_center_query_service,
+)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 SessionDep = Annotated[Session, Depends(get_db_session)]
-ViewerDep = Annotated[ActorContext, Depends(require_viewer)]
+ViewerDep = Annotated[
+    ActorContext,
+    Depends(require_viewer),
+]
+ContributorDep = Annotated[
+    ActorContext,
+    Depends(require_contributor),
+]
 
 
 async def reject_tenant_override(request: Request) -> None:
@@ -92,4 +114,96 @@ def list_reports(
         page_data,
         "Report center queried",
         actor=actor,
+    )
+
+
+@router.post("/jobs")
+def create_report_job(
+    payload: ReportJobCreateRequest,
+    session: SessionDep,
+    actor: ContributorDep,
+):
+    return success_response(
+        report_center_query_service.create_job(
+            session,
+            actor,
+            payload,
+        ),
+        actor=actor,
+    )
+
+
+@router.get("/jobs/{job_id}")
+def get_report_job_status(
+    job_id: int,
+    session: SessionDep,
+    actor: ViewerDep,
+):
+    return success_response(
+        report_center_query_service.job_status(
+            session,
+            actor,
+            job_id,
+        ),
+        actor=actor,
+    )
+
+
+@router.get("/{report_id}")
+def get_report_detail(
+    report_id: int,
+    session: SessionDep,
+    actor: ViewerDep,
+):
+    return success_response(
+        report_center_query_service.detail(
+            session,
+            actor,
+            report_id,
+        ),
+        actor=actor,
+    )
+
+
+@router.get("/{report_id}/versions")
+def list_report_versions(
+    report_id: int,
+    session: SessionDep,
+    actor: ViewerDep,
+):
+    return success_response(
+        report_center_query_service.versions(
+            session,
+            actor,
+            report_id,
+        ),
+        actor=actor,
+    )
+
+
+@router.get("/{report_id}/exports/{format}")
+def export_report(
+    report_id: int,
+    format: str,
+    session: SessionDep,
+    actor: ViewerDep,
+):
+    content, content_type, file_name = (
+        report_center_query_service.export(
+            session,
+            actor,
+            report_id,
+            format,
+        )
+    )
+    return Response(
+        content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": (
+                "attachment; "
+                f'filename="{file_name}"'
+            ),
+            "X-Request-ID": actor.request_id,
+        },
     )

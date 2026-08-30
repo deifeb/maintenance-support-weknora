@@ -3,12 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+)
 
 from app.models.enums import (
     AIReportJobStatus,
     AIReportType,
     AIReportVersionStatus,
+)
+from app.schemas.ai_report import (
+    AIReportCitationInput,
+    AIReportSectionInput,
 )
 
 ReportCenterSortBy = Literal[
@@ -59,6 +67,47 @@ class ReportCenterItemRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_version: ReportCenterLatestVersionRead | None
+
+
+class ReportJobCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
+    report_type: AIReportType = (
+        AIReportType.MANAGEMENT_DECISION
+    )
+    session_id: int | None = None
+    scenario_version_id: int | None = None
+    calculation_run_id: int | None = None
+    review_run_id: int | None = None
+    sections: list[AIReportSectionInput] = Field(
+        default_factory=list
+    )
+    citations: list[AIReportCitationInput] = Field(
+        default_factory=list
+    )
+    metadata: dict[str, object] = Field(
+        default_factory=dict
+    )
+
+
+class ReportVersionSummaryRead(BaseModel):
+    id: int
+    version_number: int
+    status: AIReportVersionStatus
+    template_version: str
+    content_digest: str
+
+
+class ReportJobStatusRead(BaseModel):
+    report_id: int
+    report_code: str
+    report_type: AIReportType
+    job_status: AIReportJobStatus
+    title: str
+    progress_percent: int
+    error_code: str | None
+    latest_version: ReportVersionSummaryRead
 
 
 # Compatibility aliases keep the public schema vocabulary unsurprising
