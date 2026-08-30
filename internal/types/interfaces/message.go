@@ -77,6 +77,8 @@ type MessageRepository interface {
 	UpdateMessage(ctx context.Context, message *types.Message) error
 	// UpdateMessageImages updates only the images JSONB column for a message
 	UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error
+	// UpdateMessageMaintenanceCards updates only the immutable maintenance card snapshot.
+	UpdateMessageMaintenanceCards(ctx context.Context, sessionID, messageID string, cards types.MaintenanceCards) error
 	// UpdateMessageRenderedContent updates the rendered_content column for a user message
 	UpdateMessageRenderedContent(ctx context.Context, sessionID, messageID string, renderedContent string) error
 	// DeleteMessage deletes a message
