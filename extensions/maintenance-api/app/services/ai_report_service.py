@@ -455,6 +455,9 @@ class AIReportService:
                 code="REPORT_VERSION_ALREADY_GENERATED",
             )
 
+        job.error_code = None
+        job.error_message = None
+
         try:
             result = self._generate_version(
                 session,
