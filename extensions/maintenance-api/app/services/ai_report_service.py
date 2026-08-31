@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -26,9 +27,11 @@ from app.models import (
     AIReportVersion,
 )
 from app.models.enums import (
+    AIExecutionMode,
     AIReportJobStatus,
     AIReportVersionStatus,
 )
+from app.models.mixins import utc_now
 from app.repositories.ai_report_repository import (
     AIReportRepository,
     ai_report_repository,
@@ -39,6 +42,13 @@ from app.schemas.ai_report import (
 from app.security.actor import ActorContext
 from app.services.ai_report_validation_service import (
     ai_report_validation_service,
+)
+from app.services.report_version_provenance import (
+    build_authoritative_source_snapshot,
+    build_legacy_source_snapshot,
+    public_source_versions,
+    seed_metadata,
+    source_snapshot_digest,
 )
 
 REPORT_SECTION_DEFINITIONS: tuple[
@@ -150,33 +160,6 @@ class AIReportService:
         actor: ActorContext,
         payload: AIReportCreateRequest,
     ) -> AIReportJob:
-        try:
-            self.repository.require_create_sources_owned(
-                session,
-                actor.tenant_id,
-                session_id=payload.session_id,
-                scenario_version_id=(
-                    payload.scenario_version_id
-                ),
-                calculation_run_id=(
-                    payload.calculation_run_id
-                ),
-                review_run_id=(
-                    payload.review_run_id
-                ),
-            )
-            job = self.repository.create_job(
-                session,
-                actor.tenant_id,
-                title=payload.title,
-                report_type=payload.report_type,
-                session_id=payload.session_id,
-            )
-        except LookupError as exc:
-            raise NotFoundError(
-                "ai_report_source",
-                "linked",
-            ) from exc
         metadata = dict(payload.metadata)
         metadata["_draft_sections"] = [
             row.model_dump(mode="json")
@@ -186,27 +169,63 @@ class AIReportService:
             row.model_dump(mode="json")
             for row in payload.citations
         ]
-        metadata.setdefault(
-            "allowed_numbers",
-            [],
-        )
-        self.repository.create_version(
-            session,
-            actor.tenant_id,
-            report_job_id=job.id,
-            template_version="1.0",
-            content_digest=_digest(metadata),
-            metadata=metadata,
-            scenario_version_id=(
-                payload.scenario_version_id
-            ),
-            calculation_run_id=(
-                payload.calculation_run_id
-            ),
-            review_run_id=(
-                payload.review_run_id
-            ),
-        )
+        metadata.setdefault("allowed_numbers", [])
+
+        try:
+            sources = self.repository.load_create_sources_owned(
+                session,
+                actor.tenant_id,
+                session_id=payload.session_id,
+                scenario_version_id=payload.scenario_version_id,
+                calculation_run_id=payload.calculation_run_id,
+                review_run_id=payload.review_run_id,
+            )
+            job = self.repository.create_job(
+                session,
+                actor.tenant_id,
+                title=payload.title,
+                report_type=payload.report_type,
+                session_id=payload.session_id,
+            )
+            source_snapshot = build_authoritative_source_snapshot(
+                report_type=payload.report_type,
+                template_version="1.0",
+                metadata=metadata,
+                ai_session=sources["session"],
+                scenario_version=sources["scenario_version"],
+                calculation_run=sources["calculation_run"],
+                calculation=sources["calculation"],
+                review_run=sources["review_run"],
+            )
+            calculation = sources["calculation"]
+            inventory_snapshot_at = (
+                calculation.inventory_snapshot_at
+                if calculation is not None
+                else None
+            )
+            self.repository.create_version(
+                session,
+                actor.tenant_id,
+                report_job_id=job.id,
+                template_version="1.0",
+                content_digest=_digest(metadata),
+                metadata=metadata,
+                source_snapshot=source_snapshot,
+                input_digest=source_snapshot_digest(
+                    source_snapshot
+                ),
+                inventory_snapshot_at=inventory_snapshot_at,
+                created_by=actor.user_id,
+                scenario_version_id=payload.scenario_version_id,
+                calculation_run_id=payload.calculation_run_id,
+                review_run_id=payload.review_run_id,
+            )
+        except LookupError as exc:
+            raise NotFoundError(
+                "ai_report_source",
+                "linked",
+            ) from exc
+
         session.commit()
         session.refresh(job)
         return job
@@ -252,32 +271,33 @@ class AIReportService:
             )
         return row
 
-    def generate(
+    def _is_version_generated(
         self,
         session: Session,
         actor: ActorContext,
-        report_job_id: int,
-    ) -> AIReportVersion:
-        job = self.get_job(
-            session,
-            actor,
-            report_job_id,
+        version: AIReportVersion,
+    ) -> bool:
+        if version.generated_at is not None:
+            return True
+        return bool(
+            self.repository.list_sections(
+                session,
+                actor.tenant_id,
+                version.id,
+            )
         )
-        version = self.latest_version(
-            session,
-            actor,
-            report_job_id,
-        )
-        job.status = (
-            AIReportJobStatus
-            .BUILDING_SKELETON
-        )
-        job.progress_percent = 10
-        session.commit()
 
-        metadata = dict(
-            version.metadata_json or {}
-        )
+    def _generate_version(
+        self,
+        session: Session,
+        actor: ActorContext,
+        job: AIReportJob,
+        version: AIReportVersion,
+    ) -> AIReportVersion:
+        job.status = AIReportJobStatus.BUILDING_SKELETON
+        job.progress_percent = 10
+
+        metadata = dict(version.metadata_json or {})
         supplied_sections = {
             str(row["section_code"]): row
             for row in metadata.get(
@@ -305,10 +325,8 @@ class AIReportService:
             actor.tenant_id,
             version.id,
         )
-        job.status = (
-            AIReportJobStatus
-            .GENERATING_SECTIONS
-        )
+        job.status = AIReportJobStatus.GENERATING_SECTIONS
+
         for index, (
             section_code,
             default_title,
@@ -342,20 +360,15 @@ class AIReportService:
                 content=content,
                 source_type=source_type,
             )
-            section_tables[section_code] = (
-                list(
-                    supplied.get(
-                        "tables",
-                        [],
-                    )
+            section_tables[section_code] = list(
+                supplied.get(
+                    "tables",
+                    [],
                 )
             )
-            section_citations[
-                section_code
-            ] = [
+            section_citations[section_code] = [
                 str(value)
-                for value
-                in supplied.get(
+                for value in supplied.get(
                     "citations",
                     [],
                 )
@@ -364,9 +377,7 @@ class AIReportService:
         for citation in supplied_citations:
             citation_data = dict(citation)
             citation_id = str(
-                citation_data.pop(
-                    "citation_id"
-                )
+                citation_data.pop("citation_id")
             )
             source_type = str(
                 citation_data.pop(
@@ -375,9 +386,7 @@ class AIReportService:
                 )
             )
             source_name = str(
-                citation_data.pop(
-                    "source_name"
-                )
+                citation_data.pop("source_name")
             )
             self.repository.add_citation(
                 session,
@@ -389,13 +398,14 @@ class AIReportService:
                 **citation_data,
             )
 
-        metadata["_section_tables"] = (
-            section_tables
-        )
-        metadata["_section_citations"] = (
-            section_citations
-        )
+        metadata["_section_tables"] = section_tables
+        metadata["_section_citations"] = section_citations
         version.metadata_json = metadata
+
+        # serialize() reads sections/citations through repository helpers
+        # that intentionally use populate_existing=True for tenant-safe
+        # ownership checks. Record generation provenance only after those
+        # reads so unsaved values cannot be refreshed back to legacy NULL.
         report = self.serialize(
             session,
             actor,
@@ -403,14 +413,175 @@ class AIReportService:
             version,
         )
         version.content_digest = _digest(report)
-        job.status = (
-            AIReportJobStatus
-            .VALIDATING_NUMBERS
+        version.generation_mode = (
+            AIExecutionMode.RULE_FALLBACK
         )
+        version.generated_at = utc_now()
+        job.status = AIReportJobStatus.VALIDATING_NUMBERS
         job.progress_percent = 75
-        session.commit()
-        session.refresh(version)
+        session.flush()
         return version
+
+    def generate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> AIReportVersion:
+        job = self.get_job(
+            session,
+            actor,
+            report_job_id,
+        )
+        version = self.latest_version(
+            session,
+            actor,
+            report_job_id,
+        )
+
+        if version.status is AIReportVersionStatus.FINAL:
+            raise BusinessValidationError(
+                "final report version is immutable",
+                code="REPORT_FINAL_VERSION_IMMUTABLE",
+            )
+
+        if self._is_version_generated(
+            session,
+            actor,
+            version,
+        ):
+            raise BusinessValidationError(
+                "report version has already been generated",
+                code="REPORT_VERSION_ALREADY_GENERATED",
+            )
+
+        try:
+            result = self._generate_version(
+                session,
+                actor,
+                job,
+                version,
+            )
+            session.commit()
+            session.refresh(result)
+            return result
+        except Exception:
+            session.rollback()
+            raise
+
+    def regenerate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> AIReportVersion:
+        job = self.repository.get_job_for_update(
+            session,
+            actor.tenant_id,
+            report_job_id,
+        )
+        if job is None:
+            raise NotFoundError(
+                "ai_report_job",
+                report_job_id,
+            )
+
+        parent = self.repository.latest_version(
+            session,
+            actor.tenant_id,
+            report_job_id,
+        )
+        if parent is None:
+            raise NotFoundError(
+                "ai_report_version",
+                report_job_id,
+            )
+
+        if not self._is_version_generated(
+            session,
+            actor,
+            parent,
+        ):
+            raise BusinessValidationError(
+                "latest report version is not ready for regeneration",
+                code="REPORT_REGENERATE_SOURCE_NOT_READY",
+            )
+
+        metadata = seed_metadata(parent.metadata_json)
+
+        if (
+            parent.source_snapshot_json is not None
+            and parent.input_digest
+        ):
+            source_snapshot = copy.deepcopy(
+                parent.source_snapshot_json
+            )
+            input_digest = parent.input_digest
+        else:
+            source_snapshot = build_legacy_source_snapshot(
+                job,
+                parent,
+            )
+            input_digest = source_snapshot_digest(
+                source_snapshot
+            )
+
+        job.status = AIReportJobStatus.CREATED
+        job.progress_percent = 0
+        job.error_code = None
+        job.error_message = None
+
+        # create_version() re-checks report-job ownership with
+        # populate_existing=True. Flush the reset execution state first so
+        # that ownership refresh cannot resurrect a prior failure payload.
+        session.flush()
+
+        child = self.repository.create_version(
+            session,
+            actor.tenant_id,
+            report_job_id=job.id,
+            parent_version_id=parent.id,
+            template_version=parent.template_version,
+            content_digest=_digest(metadata),
+            metadata=metadata,
+            source_snapshot=source_snapshot,
+            input_digest=input_digest,
+            inventory_snapshot_at=parent.inventory_snapshot_at,
+            prompt_versions=copy.deepcopy(
+                parent.prompt_versions_json
+            ),
+            created_by=actor.user_id,
+            scenario_version_id=parent.scenario_version_id,
+            calculation_run_id=parent.calculation_run_id,
+            review_run_id=parent.review_run_id,
+        )
+
+        session.commit()
+        session.refresh(child)
+
+        try:
+            result = self._generate_version(
+                session,
+                actor,
+                job,
+                child,
+            )
+            session.commit()
+            session.refresh(result)
+            return result
+        except Exception:
+            session.rollback()
+            failed_job = self.repository.get_job(
+                session,
+                actor.tenant_id,
+                report_job_id,
+            )
+            if failed_job is not None:
+                failed_job.status = AIReportJobStatus.FAILED
+                failed_job.error_code = "REPORT_GENERATION_FAILED"
+                failed_job.error_message = "Report generation failed"
+                session.commit()
+            raise
 
     def validate(
         self,
@@ -428,19 +599,33 @@ class AIReportService:
             actor,
             report_job_id,
         )
+
+        if version.status is AIReportVersionStatus.FINAL:
+            raise BusinessValidationError(
+                "final report version is immutable",
+                code="REPORT_FINAL_VERSION_IMMUTABLE",
+            )
+
+        if not self._is_version_generated(
+            session,
+            actor,
+            version,
+        ):
+            raise BusinessValidationError(
+                "report generation is required before validation",
+                code="REPORT_GENERATION_REQUIRED",
+            )
+
         report = self.serialize(
             session,
             actor,
             job,
             version,
         )
-        metadata = dict(
-            version.metadata_json or {}
-        )
+        metadata = dict(version.metadata_json or {})
         allowed_numbers = {
             str(value)
-            for value
-            in metadata.get(
+            for value in metadata.get(
                 "allowed_numbers",
                 [],
             )
@@ -459,22 +644,15 @@ class AIReportService:
             ai_report_validation_service
             .validate_content(
                 sections=report["sections"],
-                allowed_numbers=(
-                    allowed_numbers
-                ),
-                valid_citation_ids=(
-                    valid_citations
-                ),
+                allowed_numbers=allowed_numbers,
+                valid_citation_ids=valid_citations,
             )
         )
         persisted = [
-            self.repository
-            .add_validation_finding(
+            self.repository.add_validation_finding(
                 session,
                 actor.tenant_id,
-                report_version_id=(
-                    version.id
-                ),
+                report_version_id=version.id,
                 code=row.code,
                 severity=row.severity,
                 message=row.message,
@@ -483,23 +661,14 @@ class AIReportService:
             )
             for row in drafts
         ]
+
         if persisted:
-            version.status = (
-                AIReportVersionStatus.DRAFT
-            )
-            job.status = (
-                AIReportJobStatus
-                .PARTIALLY_COMPLETED
-            )
+            version.status = AIReportVersionStatus.DRAFT
+            job.status = AIReportJobStatus.PARTIALLY_COMPLETED
         else:
-            version.status = (
-                AIReportVersionStatus
-                .REVIEWED
-            )
-            job.status = (
-                AIReportJobStatus
-                .READY_FOR_REVIEW
-            )
+            version.status = AIReportVersionStatus.REVIEWED
+            job.status = AIReportJobStatus.READY_FOR_REVIEW
+
         job.progress_percent = 100
         session.commit()
         return persisted
@@ -589,9 +758,7 @@ class AIReportService:
         job: AIReportJob,
         version: AIReportVersion,
     ) -> dict[str, Any]:
-        metadata = dict(
-            version.metadata_json or {}
-        )
+        metadata = dict(version.metadata_json or {})
         section_tables = metadata.get(
             "_section_tables",
             {},
@@ -602,20 +769,15 @@ class AIReportService:
         )
         public_metadata = {
             key: value
-            for key, value
-            in metadata.items()
+            for key, value in metadata.items()
             if not key.startswith("_")
         }
         sections = [
             {
-                "section_code": (
-                    row.section_code
-                ),
+                "section_code": row.section_code,
                 "title": row.title,
                 "content": row.content,
-                "source_type": (
-                    row.source_type
-                ),
+                "source_type": row.source_type,
                 "citations": list(
                     section_citations.get(
                         row.section_code,
@@ -629,8 +791,7 @@ class AIReportService:
                     )
                 ),
             }
-            for row
-            in self.repository.list_sections(
+            for row in self.repository.list_sections(
                 session,
                 actor.tenant_id,
                 version.id,
@@ -641,22 +802,13 @@ class AIReportService:
                 "citation_id": row.citation_id,
                 "source_type": row.source_type,
                 "source_name": row.source_name,
-                "document_version": (
-                    row.document_version
-                ),
+                "document_version": row.document_version,
                 "page_number": row.page_number,
-                "chunk_reference": (
-                    row.chunk_reference
-                ),
-                "knowledge_node": (
-                    row.knowledge_node
-                ),
-                "database_record_json": (
-                    row.database_record_json
-                ),
+                "chunk_reference": row.chunk_reference,
+                "knowledge_node": row.knowledge_node,
+                "database_record_json": row.database_record_json,
             }
-            for row
-            in self.repository.list_citations(
+            for row in self.repository.list_citations(
                 session,
                 actor.tenant_id,
                 version.id,
@@ -665,17 +817,26 @@ class AIReportService:
         return {
             "report_id": job.id,
             "report_code": job.report_code,
-            "report_type": (
-                job.report_type.value
-            ),
+            "report_type": job.report_type.value,
             "title": job.title,
             "status": version.status.value,
             "version_id": version.id,
-            "version_number": (
-                version.version_number
+            "version_number": version.version_number,
+            "parent_version_id": version.parent_version_id,
+            "template_version": version.template_version,
+            "input_digest": version.input_digest,
+            "generation_mode": (
+                version.generation_mode.value
+                if version.generation_mode is not None
+                else None
             ),
-            "template_version": (
-                version.template_version
+            "generated_at": (
+                version.generated_at.isoformat()
+                if version.generated_at is not None
+                else None
+            ),
+            "source_versions": public_source_versions(
+                version.source_snapshot_json
             ),
             "metadata": public_metadata,
             "sections": sections,

@@ -399,13 +399,16 @@ def test_report_center_facade_export_delegates_and_authorizes_first(
     ) == files_before_foreign
 
 
-def test_report_center_facade_does_not_add_command_or_regenerate_surface():
+def test_report_center_facade_exposes_only_regenerate_command():
     service = _facade()
 
+    assert hasattr(service, "regenerate"), (
+        "C2B RED A04: ReportCenterQueryService.regenerate "
+        "is absent"
+    )
     for name in (
         "generate",
         "validate",
         "finalize",
-        "regenerate",
     ):
         assert not hasattr(service, name)
