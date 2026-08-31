@@ -181,6 +181,22 @@ def list_report_versions(
     )
 
 
+@router.post("/{report_id}/regenerate")
+def regenerate_report(
+    report_id: int,
+    session: SessionDep,
+    actor: ContributorDep,
+):
+    return success_response(
+        report_center_query_service.regenerate(
+            session,
+            actor,
+            report_id,
+        ),
+        actor=actor,
+    )
+
+
 @router.get("/{report_id}/exports/{format}")
 def export_report(
     report_id: int,

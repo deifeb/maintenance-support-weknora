@@ -10,6 +10,7 @@ from pydantic import (
 )
 
 from app.models.enums import (
+    AIExecutionMode,
     AIReportJobStatus,
     AIReportType,
     AIReportVersionStatus,
@@ -95,8 +96,12 @@ class ReportVersionSummaryRead(BaseModel):
     id: int
     version_number: int
     status: AIReportVersionStatus
+    parent_version_id: int | None
     template_version: str
     content_digest: str
+    input_digest: str | None
+    generation_mode: AIExecutionMode | None
+    generated_at: datetime | None
 
 
 class ReportJobStatusRead(BaseModel):

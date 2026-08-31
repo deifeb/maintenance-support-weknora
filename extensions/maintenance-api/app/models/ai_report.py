@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.enums import (
+    AIExecutionMode,
     AIExportFormat,
     AIReportJobStatus,
     AIReportType,
@@ -70,6 +71,16 @@ class AIReportVersion(
     report_job_id: Mapped[int] = mapped_column(
         ForeignKey("ai_report_jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    parent_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_report_versions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    source_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    input_digest: Mapped[str | None] = mapped_column(String(64))
+    generation_mode: Mapped[AIExecutionMode | None] = mapped_column(
+        Enum(AIExecutionMode, native_enum=False, length=24)
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[AIReportVersionStatus] = mapped_column(
         Enum(AIReportVersionStatus, native_enum=False, length=20),

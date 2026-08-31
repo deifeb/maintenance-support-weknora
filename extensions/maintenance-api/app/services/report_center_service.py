@@ -114,8 +114,12 @@ class ReportCenterQueryService:
             id=version.id,
             version_number=version.version_number,
             status=version.status,
+            parent_version_id=version.parent_version_id,
             template_version=version.template_version,
             content_digest=version.content_digest,
+            input_digest=version.input_digest,
+            generation_mode=version.generation_mode,
+            generated_at=version.generated_at,
         )
 
     def _job_status_read(
@@ -207,6 +211,27 @@ class ReportCenterQueryService:
             self._version_summary(row)
             for row in rows
         ]
+
+    def regenerate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> ReportJobStatusRead:
+        version = self.report_service.regenerate(
+            session,
+            actor,
+            report_job_id,
+        )
+        job = self.report_service.get_job(
+            session,
+            actor,
+            report_job_id,
+        )
+        return self._job_status_read(
+            job,
+            version,
+        )
 
     def export(
         self,

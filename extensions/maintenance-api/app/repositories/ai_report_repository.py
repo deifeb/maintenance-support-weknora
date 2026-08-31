@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any, TypeVar
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -16,10 +17,12 @@ from app.models import (
     AIReportVersion,
     AIReviewRun,
     AISession,
+    DemandCalculation,
     DemandCalculationRun,
     DemandScenarioVersion,
 )
 from app.models.enums import (
+    AIExecutionMode,
     AIExportFormat,
     AIReportJobStatus,
     AIReportType,
@@ -68,6 +71,102 @@ def _require_owned(
 
 
 class AIReportRepository:
+    def load_create_sources_owned(
+        self,
+        session: Session,
+        tenant_id: str,
+        *,
+        session_id: int | None = None,
+        scenario_version_id: int | None = None,
+        calculation_run_id: int | None = None,
+        review_run_id: int | None = None,
+    ) -> dict[str, Any | None]:
+        ai_session = (
+            _require_owned(
+                session,
+                tenant_id,
+                AISession,
+                session_id,
+            )
+            if session_id is not None
+            else None
+        )
+        scenario_version = (
+            _require_owned(
+                session,
+                tenant_id,
+                DemandScenarioVersion,
+                scenario_version_id,
+            )
+            if scenario_version_id is not None
+            else None
+        )
+        calculation_run = (
+            _require_owned(
+                session,
+                tenant_id,
+                DemandCalculationRun,
+                calculation_run_id,
+            )
+            if calculation_run_id is not None
+            else None
+        )
+        calculation = None
+        if calculation_run is not None:
+            calculation = _require_owned(
+                session,
+                tenant_id,
+                DemandCalculation,
+                calculation_run.calculation_id,
+            )
+
+        review_run = (
+            _require_owned(
+                session,
+                tenant_id,
+                AIReviewRun,
+                review_run_id,
+            )
+            if review_run_id is not None
+            else None
+        )
+        if review_run is not None:
+            if review_run.session_id is not None:
+                _require_owned(
+                    session,
+                    tenant_id,
+                    AISession,
+                    review_run.session_id,
+                )
+            if review_run.scenario_version_id is not None:
+                _require_owned(
+                    session,
+                    tenant_id,
+                    DemandScenarioVersion,
+                    review_run.scenario_version_id,
+                )
+            if review_run.calculation_run_id is not None:
+                linked_run = _require_owned(
+                    session,
+                    tenant_id,
+                    DemandCalculationRun,
+                    review_run.calculation_run_id,
+                )
+                _require_owned(
+                    session,
+                    tenant_id,
+                    DemandCalculation,
+                    linked_run.calculation_id,
+                )
+
+        return {
+            "session": ai_session,
+            "scenario_version": scenario_version,
+            "calculation_run": calculation_run,
+            "calculation": calculation,
+            "review_run": review_run,
+        }
+
     def require_create_sources_owned(
         self,
         session: Session,
@@ -78,26 +177,14 @@ class AIReportRepository:
         calculation_run_id: int | None = None,
         review_run_id: int | None = None,
     ) -> None:
-        linked_sources = (
-            (AISession, session_id),
-            (
-                DemandScenarioVersion,
-                scenario_version_id,
-            ),
-            (
-                DemandCalculationRun,
-                calculation_run_id,
-            ),
-            (AIReviewRun, review_run_id),
+        self.load_create_sources_owned(
+            session,
+            tenant_id,
+            session_id=session_id,
+            scenario_version_id=scenario_version_id,
+            calculation_run_id=calculation_run_id,
+            review_run_id=review_run_id,
         )
-        for model, identifier in linked_sources:
-            if identifier is not None:
-                _require_owned(
-                    session,
-                    tenant_id,
-                    model,
-                    identifier,
-                )
 
     def create_job(
         self,
@@ -140,6 +227,23 @@ class AIReportRepository:
             tenant_id,
             AIReportJob,
             report_job_id,
+        )
+
+    def get_job_for_update(
+        self,
+        session: Session,
+        tenant_id: str,
+        report_job_id: int,
+    ) -> AIReportJob | None:
+        return session.scalar(
+            select(AIReportJob)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AIReportJob.id == report_job_id,
+                AIReportJob.tenant_id == tenant_id,
+            )
+            .with_for_update()
         )
 
     def list_report_center_page(
@@ -357,6 +461,14 @@ class AIReportRepository:
         template_version: str,
         content_digest: str,
         metadata: dict[str, Any] | None = None,
+        parent_version_id: int | None = None,
+        source_snapshot: dict[str, Any] | None = None,
+        input_digest: str | None = None,
+        generation_mode: AIExecutionMode | str | None = None,
+        generated_at: datetime | None = None,
+        inventory_snapshot_at: datetime | None = None,
+        prompt_versions: dict[str, str] | None = None,
+        created_by: str | None = None,
         **links: Any,
     ) -> AIReportVersion:
         _require_owned(
@@ -365,13 +477,21 @@ class AIReportRepository:
             AIReportJob,
             report_job_id,
         )
+        if parent_version_id is not None:
+            parent = _require_owned(
+                session,
+                tenant_id,
+                AIReportVersion,
+                parent_version_id,
+            )
+            if parent.report_job_id != report_job_id:
+                raise LookupError(
+                    "report version parent belongs to another report job"
+                )
+
         link_models = {
-            "scenario_version_id": (
-                DemandScenarioVersion
-            ),
-            "calculation_run_id": (
-                DemandCalculationRun
-            ),
+            "scenario_version_id": DemandScenarioVersion,
+            "calculation_run_id": DemandCalculationRun,
             "review_run_id": AIReviewRun,
         }
         clean_links = {
@@ -388,32 +508,42 @@ class AIReportRepository:
                     model,
                     int(identifier),
                 )
+
         version = (
             session.scalar(
                 select(
                     func.coalesce(
-                        func.max(
-                            AIReportVersion.version_number
-                        ),
+                        func.max(AIReportVersion.version_number),
                         0,
                     )
                 ).where(
-                    AIReportVersion.tenant_id
-                    == tenant_id,
-                    AIReportVersion.report_job_id
-                    == report_job_id,
+                    AIReportVersion.tenant_id == tenant_id,
+                    AIReportVersion.report_job_id == report_job_id,
                 )
             )
             or 0
         )
+        normalized_mode = (
+            AIExecutionMode(generation_mode)
+            if generation_mode is not None
+            else None
+        )
         row = AIReportVersion(
             tenant_id=tenant_id,
             report_job_id=report_job_id,
+            parent_version_id=parent_version_id,
+            source_snapshot_json=source_snapshot,
+            input_digest=input_digest,
+            generation_mode=normalized_mode,
+            generated_at=generated_at,
             version_number=int(version) + 1,
             status=AIReportVersionStatus.DRAFT,
+            inventory_snapshot_at=inventory_snapshot_at,
             template_version=template_version,
+            prompt_versions_json=prompt_versions,
             content_digest=content_digest,
             metadata_json=metadata,
+            created_by=created_by,
             **clean_links,
         )
         session.add(row)
