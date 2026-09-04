@@ -32,6 +32,7 @@ from app.schemas.report_center import (
 )
 from app.security.actor import ActorContext
 from app.security.permissions import (
+    require_admin,
     require_contributor,
     require_viewer,
 )
@@ -49,6 +50,10 @@ ViewerDep = Annotated[
 ContributorDep = Annotated[
     ActorContext,
     Depends(require_contributor),
+]
+AdminDep = Annotated[
+    ActorContext,
+    Depends(require_admin),
 ]
 
 
@@ -173,6 +178,63 @@ def list_report_versions(
 ):
     return success_response(
         report_center_query_service.versions(
+            session,
+            actor,
+            report_id,
+        ),
+        actor=actor,
+    )
+
+
+@router.post(
+    "/{report_id}/generate",
+    dependencies=[Depends(reject_tenant_override)],
+)
+def generate_report(
+    report_id: int,
+    session: SessionDep,
+    actor: ContributorDep,
+):
+    return success_response(
+        report_center_query_service.generate(
+            session,
+            actor,
+            report_id,
+        ),
+        actor=actor,
+    )
+
+
+@router.post(
+    "/{report_id}/validate",
+    dependencies=[Depends(reject_tenant_override)],
+)
+def validate_report(
+    report_id: int,
+    session: SessionDep,
+    actor: ContributorDep,
+):
+    return success_response(
+        report_center_query_service.validate(
+            session,
+            actor,
+            report_id,
+        ),
+        actor=actor,
+    )
+
+
+@router.post(
+    "/{report_id}/finalize",
+    dependencies=[Depends(reject_tenant_override)],
+)
+def finalize_report(
+    report_id: int,
+    session: SessionDep,
+    actor: AdminDep,
+):
+    return success_response(
+        report_center_query_service.finalize(
             session,
             actor,
             report_id,

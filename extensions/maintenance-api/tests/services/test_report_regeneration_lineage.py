@@ -651,3 +651,148 @@ def test_regenerate_generation_failure_preserves_parent_and_lineage(
     assert versions[1].status is AIReportVersionStatus.DRAFT
     assert job_after.status is AIReportJobStatus.FAILED
     assert job_after.error_code == "REPORT_GENERATION_FAILED"
+
+def test_generate_retry_after_regeneration_failure_clears_stale_error_state(
+    session,
+    actor_context,
+    monkeypatch,
+) -> None:
+    actor = _actor(actor_context)
+    job = _create_job(session, actor)
+    v1 = ai_report_service.generate(session, actor, job.id)
+    original_generate_version = ai_report_service._generate_version
+
+    def boom(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError(
+            "synthetic c2c regeneration generation failure"
+        )
+
+    monkeypatch.setattr(
+        ai_report_service,
+        "_generate_version",
+        boom,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="synthetic c2c regeneration generation failure",
+    ):
+        ai_report_service.regenerate(session, actor, job.id)
+
+    session.expire_all()
+    failed_job = ai_report_service.get_job(
+        session,
+        actor,
+        job.id,
+    )
+    failed_versions = ai_report_service.list_versions(
+        session,
+        actor,
+        job.id,
+    )
+
+    assert failed_job.status.value == "FAILED"
+    assert failed_job.error_code == "REPORT_GENERATION_FAILED"
+    assert failed_job.error_message == "Report generation failed"
+    assert len(failed_versions) == 2
+    v2 = failed_versions[-1]
+    v2_id = v2.id
+    assert v2.parent_version_id == v1.id
+    assert v2.generated_at is None
+
+    monkeypatch.setattr(
+        ai_report_service,
+        "_generate_version",
+        original_generate_version,
+    )
+
+    retried = ai_report_service.generate(
+        session,
+        actor,
+        job.id,
+    )
+    retried_id = retried.id
+
+    session.expire_all()
+    retried_job = ai_report_service.get_job(
+        session,
+        actor,
+        job.id,
+    )
+    retried_versions = ai_report_service.list_versions(
+        session,
+        actor,
+        job.id,
+    )
+
+    assert retried_id == v2_id
+    assert len(retried_versions) == 2
+    assert retried_job.status.value == "VALIDATING_NUMBERS"
+    assert retried_job.progress_percent == 75
+    assert retried_job.error_code is None, (
+        "C2C RED: successful generate retry must clear stale "
+        "REPORT_GENERATION_FAILED"
+    )
+    assert retried_job.error_message is None
+    assert retried_versions[-1].generated_at is not None
+
+
+def test_failed_generate_retry_preserves_persisted_generation_failure_state(
+    session,
+    actor_context,
+    monkeypatch,
+) -> None:
+    actor = _actor(actor_context)
+    job = _create_job(session, actor)
+    ai_report_service.generate(session, actor, job.id)
+
+    def boom(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError(
+            "synthetic c2c persistent retry failure"
+        )
+
+    monkeypatch.setattr(
+        ai_report_service,
+        "_generate_version",
+        boom,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="synthetic c2c persistent retry failure",
+    ):
+        ai_report_service.regenerate(session, actor, job.id)
+
+    session.expire_all()
+    failed_version_id = ai_report_service.list_versions(
+        session,
+        actor,
+        job.id,
+    )[-1].id
+
+    with pytest.raises(
+        RuntimeError,
+        match="synthetic c2c persistent retry failure",
+    ):
+        ai_report_service.generate(session, actor, job.id)
+
+    session.expire_all()
+    failed_job = ai_report_service.get_job(
+        session,
+        actor,
+        job.id,
+    )
+    versions_after = ai_report_service.list_versions(
+        session,
+        actor,
+        job.id,
+    )
+
+    assert failed_job.status.value == "FAILED"
+    assert failed_job.error_code == "REPORT_GENERATION_FAILED"
+    assert failed_job.error_message == "Report generation failed"
+    assert len(versions_after) == 2
+    assert versions_after[-1].id == failed_version_id
+    assert versions_after[-1].generated_at is None

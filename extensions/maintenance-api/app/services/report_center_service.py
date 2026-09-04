@@ -212,6 +212,74 @@ class ReportCenterQueryService:
             for row in rows
         ]
 
+    def generate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> ReportJobStatusRead:
+        version = self.report_service.generate(
+            session,
+            actor,
+            report_job_id,
+        )
+        job = self.report_service.get_job(
+            session,
+            actor,
+            report_job_id,
+        )
+        return self._job_status_read(
+            job,
+            version,
+        )
+
+    def validate(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> ReportJobStatusRead:
+        self.report_service.validate(
+            session,
+            actor,
+            report_job_id,
+        )
+        job = self.report_service.get_job(
+            session,
+            actor,
+            report_job_id,
+        )
+        version = self.report_service.latest_version(
+            session,
+            actor,
+            report_job_id,
+        )
+        return self._job_status_read(
+            job,
+            version,
+        )
+
+    def finalize(
+        self,
+        session: Session,
+        actor: ActorContext,
+        report_job_id: int,
+    ) -> ReportJobStatusRead:
+        version = self.report_service.finalize(
+            session,
+            actor,
+            report_job_id,
+        )
+        job = self.report_service.get_job(
+            session,
+            actor,
+            report_job_id,
+        )
+        return self._job_status_read(
+            job,
+            version,
+        )
+
     def regenerate(
         self,
         session: Session,

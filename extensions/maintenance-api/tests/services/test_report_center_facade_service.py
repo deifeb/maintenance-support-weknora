@@ -399,16 +399,114 @@ def test_report_center_facade_export_delegates_and_authorizes_first(
     ) == files_before_foreign
 
 
-def test_report_center_facade_exposes_only_regenerate_command():
+def _require_c2c_method(service, name: str):
+    method = getattr(service, name, None)
+    assert callable(method), (
+        f"C2C RED: ReportCenterQueryService.{name} is absent"
+    )
+    return method
+
+
+def test_report_center_facade_exposes_authoritative_lifecycle_commands():
     service = _facade()
 
-    assert hasattr(service, "regenerate"), (
-        "C2B RED A04: ReportCenterQueryService.regenerate "
-        "is absent"
-    )
     for name in (
         "generate",
         "validate",
         "finalize",
+        "regenerate",
     ):
-        assert not hasattr(service, name)
+        _require_c2c_method(service, name)
+
+
+def test_report_center_facade_generate_delegates_to_authority(
+    session,
+    actor_context,
+) -> None:
+    service = _facade()
+    generate = _require_c2c_method(service, "generate")
+    actor = actor_context(
+        tenant_id="tenant-c2c-service-generate",
+        user_id="c2c-contributor",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    job = _create_authoritative_job(
+        session,
+        actor,
+        title="C2C facade generate",
+    )
+
+    result = generate(session, actor, job.id)
+
+    assert result.report_id == job.id
+    assert result.job_status.value == "VALIDATING_NUMBERS"
+    assert result.progress_percent == 75
+    assert result.error_code is None
+    assert result.latest_version.status.value == "DRAFT"
+    assert result.latest_version.generation_mode.value == "RULE_FALLBACK"
+    assert result.latest_version.generated_at is not None
+
+
+def test_report_center_facade_validate_delegates_to_authority(
+    session,
+    actor_context,
+) -> None:
+    service = _facade()
+    validate = _require_c2c_method(service, "validate")
+    actor = actor_context(
+        tenant_id="tenant-c2c-service-validate",
+        user_id="c2c-contributor",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    job = _create_authoritative_job(
+        session,
+        actor,
+        title="C2C facade validate",
+    )
+    ai_report_service.generate(session, actor, job.id)
+
+    result = validate(session, actor, job.id)
+
+    assert result.report_id == job.id
+    assert result.job_status.value == "READY_FOR_REVIEW"
+    assert result.progress_percent == 100
+    assert result.error_code is None
+    assert result.latest_version.status.value == "REVIEWED"
+
+
+def test_report_center_facade_finalize_delegates_to_authority(
+    session,
+    actor_context,
+) -> None:
+    service = _facade()
+    finalize = _require_c2c_method(service, "finalize")
+    contributor = actor_context(
+        tenant_id="tenant-c2c-service-finalize",
+        user_id="c2c-contributor",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    admin = actor_context(
+        tenant_id="tenant-c2c-service-finalize",
+        user_id="c2c-admin",
+        role=MaintenanceRole.ADMIN,
+    )
+    job = _create_authoritative_job(
+        session,
+        contributor,
+        title="C2C facade finalize",
+    )
+    ai_report_service.generate(session, contributor, job.id)
+    findings = ai_report_service.validate(
+        session,
+        contributor,
+        job.id,
+    )
+    assert findings == []
+
+    result = finalize(session, admin, job.id)
+
+    assert result.report_id == job.id
+    assert result.job_status.value == "FINALIZED"
+    assert result.progress_percent == 100
+    assert result.error_code is None
+    assert result.latest_version.status.value == "FINAL"
