@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from app.models import (
     AIReportJob,
@@ -15,7 +15,9 @@ from app.models import (
     DemandScenarioVersion,
 )
 
-SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.0"
+SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.1"
+_COMPATIBLE_AUTHORITATIVE_SCHEMA_VERSION = "1.0"
+_LEGACY_SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.0"
 _AUTHORITATIVE_CAPTURE = "AUTHORITATIVE_CREATE"
 _LEGACY_CAPTURE = "LEGACY_RECONSTRUCTED"
 _LEGACY_COMPLETENESS = "PERSISTED_LINKS_ONLY"
@@ -23,6 +25,9 @@ _ALLOWED_PRIVATE_SEED_KEYS = {
     "_draft_sections",
     "_draft_citations",
 }
+
+if TYPE_CHECKING:
+    from app.services.report_source_policy import ReportSourceRecord
 
 
 def _enum_value(value: Any) -> Any:
@@ -76,12 +81,35 @@ def build_authoritative_source_snapshot(
     report_type: str,
     template_version: str,
     metadata: dict[str, Any] | None,
+    source_records: Sequence[ReportSourceRecord] | None = None,
     ai_session: AISession | None = None,
     scenario_version: DemandScenarioVersion | None = None,
     calculation_run: DemandCalculationRun | None = None,
     calculation: DemandCalculation | None = None,
     review_run: AIReviewRun | None = None,
 ) -> dict[str, Any]:
+    if source_records is not None:
+        return _json_safe(
+            {
+                "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+                "capture_mode": _AUTHORITATIVE_CAPTURE,
+                "report_type": _enum_value(report_type),
+                "template_version": template_version,
+                "sources": [
+                    {
+                        "type": record.source_type.value,
+                        "id": record.source_id,
+                        "version": record.source_version,
+                        "lineage_id": record.source_lineage_id,
+                        "digest": record.source_digest,
+                        "evidence": record.evidence,
+                    }
+                    for record in source_records
+                ],
+                "generation_seed": _generation_seed(metadata),
+            }
+        )
+
     session_source = None
     if ai_session is not None:
         session_source = {
@@ -141,7 +169,7 @@ def build_authoritative_source_snapshot(
 
     return _json_safe(
         {
-            "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": _COMPATIBLE_AUTHORITATIVE_SCHEMA_VERSION,
             "capture_mode": _AUTHORITATIVE_CAPTURE,
             "report_type": _enum_value(report_type),
             "template_version": template_version,
@@ -165,7 +193,7 @@ def build_legacy_source_snapshot(
 ) -> dict[str, Any]:
     return _json_safe(
         {
-            "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": _LEGACY_SOURCE_SNAPSHOT_SCHEMA_VERSION,
             "capture_mode": _LEGACY_CAPTURE,
             "provenance_completeness": _LEGACY_COMPLETENESS,
             "report_type": _enum_value(job.report_type),
@@ -246,12 +274,29 @@ def public_source_versions(
 ) -> dict[str, Any]:
     if not snapshot:
         return {}
-    result = {
+    result: dict[str, Any] = {
         "capture_mode": snapshot.get("capture_mode"),
-        "sources": copy.deepcopy(
-            snapshot.get("sources", {})
-        ),
     }
+    if snapshot.get("schema_version") == SOURCE_SNAPSHOT_SCHEMA_VERSION:
+        sources = snapshot.get("sources", [])
+        result["sources"] = [
+            {
+                key: source.get(key)
+                for key in (
+                    "type",
+                    "id",
+                    "version",
+                    "lineage_id",
+                    "digest",
+                )
+            }
+            for source in sources
+            if isinstance(source, dict)
+        ]
+    else:
+        result["sources"] = copy.deepcopy(
+            snapshot.get("sources", {})
+        )
     if snapshot.get("provenance_completeness"):
         result["provenance_completeness"] = (
             snapshot["provenance_completeness"]
