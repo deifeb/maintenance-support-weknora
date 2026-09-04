@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from app.models import (
     AIReportJob,
@@ -14,8 +14,11 @@ from app.models import (
     DemandCalculationRun,
     DemandScenarioVersion,
 )
+from app.models.enums import AIReportSourceType
 
-SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.0"
+SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.1"
+_COMPATIBLE_AUTHORITATIVE_SCHEMA_VERSION = "1.0"
+_LEGACY_SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.0"
 _AUTHORITATIVE_CAPTURE = "AUTHORITATIVE_CREATE"
 _LEGACY_CAPTURE = "LEGACY_RECONSTRUCTED"
 _LEGACY_COMPLETENESS = "PERSISTED_LINKS_ONLY"
@@ -23,6 +26,44 @@ _ALLOWED_PRIVATE_SEED_KEYS = {
     "_draft_sections",
     "_draft_citations",
 }
+_PUBLIC_SOURCE_FIELDS = (
+    "type",
+    "id",
+    "version",
+    "lineage_id",
+    "digest",
+)
+_LEGACY_PUBLIC_SOURCE_FIELDS = {
+    "session": ("id", "version", "session_code"),
+    "scenario_version": (
+        "id",
+        "version",
+        "version_code",
+        "formula_version",
+        "input_schema_version",
+    ),
+    "calculation_run": (
+        "id",
+        "calculation_id",
+        "attempt_number",
+        "run_mode",
+        "engine_version",
+        "formula_version",
+        "input_snapshot_hash",
+        "inventory_snapshot_at",
+    ),
+    "review_run": (
+        "id",
+        "version",
+        "rule_set_version",
+        "scenario_version_id",
+        "calculation_run_id",
+    ),
+    "inventory": ("snapshot_at",),
+}
+
+if TYPE_CHECKING:
+    from app.services.report_source_policy import ReportSourceRecord
 
 
 def _enum_value(value: Any) -> Any:
@@ -76,12 +117,36 @@ def build_authoritative_source_snapshot(
     report_type: str,
     template_version: str,
     metadata: dict[str, Any] | None,
+    source_records: Sequence[ReportSourceRecord] | None = None,
     ai_session: AISession | None = None,
     scenario_version: DemandScenarioVersion | None = None,
     calculation_run: DemandCalculationRun | None = None,
     calculation: DemandCalculation | None = None,
     review_run: AIReviewRun | None = None,
 ) -> dict[str, Any]:
+    if source_records is not None:
+        return _json_safe(
+            {
+                "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+                "capture_mode": _AUTHORITATIVE_CAPTURE,
+                "provenance_completeness": "AUTHORITATIVE",
+                "report_type": _enum_value(report_type),
+                "template_version": template_version,
+                "sources": [
+                    {
+                        "type": record.source_type.value,
+                        "id": record.source_id,
+                        "version": record.source_version,
+                        "lineage_id": record.source_lineage_id,
+                        "digest": record.source_digest,
+                        "evidence": record.evidence,
+                    }
+                    for record in source_records
+                ],
+                "generation_seed": _generation_seed(metadata),
+            }
+        )
+
     session_source = None
     if ai_session is not None:
         session_source = {
@@ -141,7 +206,7 @@ def build_authoritative_source_snapshot(
 
     return _json_safe(
         {
-            "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": _COMPATIBLE_AUTHORITATIVE_SCHEMA_VERSION,
             "capture_mode": _AUTHORITATIVE_CAPTURE,
             "report_type": _enum_value(report_type),
             "template_version": template_version,
@@ -165,7 +230,7 @@ def build_legacy_source_snapshot(
 ) -> dict[str, Any]:
     return _json_safe(
         {
-            "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
+            "schema_version": _LEGACY_SOURCE_SNAPSHOT_SCHEMA_VERSION,
             "capture_mode": _LEGACY_CAPTURE,
             "provenance_completeness": _LEGACY_COMPLETENESS,
             "report_type": _enum_value(job.report_type),
@@ -244,16 +309,111 @@ def source_snapshot_digest(
 def public_source_versions(
     snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not snapshot:
+    if not isinstance(snapshot, dict):
         return {}
-    result = {
-        "capture_mode": snapshot.get("capture_mode"),
-        "sources": copy.deepcopy(
-            snapshot.get("sources", {})
-        ),
-    }
-    if snapshot.get("provenance_completeness"):
-        result["provenance_completeness"] = (
-            snapshot["provenance_completeness"]
-        )
-    return _json_safe(result)
+    schema_version = snapshot.get("schema_version")
+    if schema_version not in {
+        _LEGACY_SOURCE_SNAPSHOT_SCHEMA_VERSION,
+        SOURCE_SNAPSHOT_SCHEMA_VERSION,
+    }:
+        return {}
+
+    if schema_version == SOURCE_SNAPSHOT_SCHEMA_VERSION:
+        capture_mode = snapshot.get("capture_mode")
+        if capture_mode != _AUTHORITATIVE_CAPTURE:
+            return {}
+        if snapshot.get("provenance_completeness") != "AUTHORITATIVE":
+            return {}
+        sources = snapshot.get("sources")
+        if not isinstance(sources, list):
+            return {}
+        projection: list[dict[str, Any]] = []
+        for source in sources:
+            if not isinstance(source, dict):
+                return {}
+            if not all(
+                key in source
+                and _is_required_public_scalar(source[key])
+                for key in ("type", "id", "version")
+            ):
+                return {}
+            if not _is_known_source_type(source["type"]):
+                return {}
+            if any(
+                not _is_public_scalar(source.get(key))
+                for key in ("lineage_id", "digest")
+            ) or not _is_valid_source_digest(source.get("digest")):
+                return {}
+            projection.append(
+                {
+                    key: source.get(key)
+                    for key in _PUBLIC_SOURCE_FIELDS
+                }
+            )
+        return {
+            "capture_mode": capture_mode,
+            "provenance_completeness": "AUTHORITATIVE",
+            "sources": projection,
+        }
+    else:
+        capture_mode = snapshot.get("capture_mode")
+        if not _is_public_scalar(capture_mode):
+            return {}
+        sources = snapshot.get("sources")
+        if not isinstance(sources, dict):
+            return {}
+        projection = {}
+        for source_name, fields in _LEGACY_PUBLIC_SOURCE_FIELDS.items():
+            if source_name not in sources:
+                continue
+            source = sources.get(source_name)
+            if source is None:
+                projection[source_name] = None
+                continue
+            if not isinstance(source, dict):
+                return {}
+            projection[source_name] = {
+                key: source.get(key)
+                for key in fields
+                if key in source
+                and _is_public_scalar(source.get(key))
+            }
+        result: dict[str, Any] = {
+            "capture_mode": capture_mode,
+            "sources": projection,
+        }
+        completeness = snapshot.get("provenance_completeness")
+        if completeness is not None and _is_public_scalar(completeness):
+            result["provenance_completeness"] = completeness
+        return result
+
+
+def _is_public_scalar(value: Any) -> bool:
+    return value is None or isinstance(
+        value,
+        (str, int, float, bool),
+    )
+
+
+def _is_required_public_scalar(value: Any) -> bool:
+    return value is not None and _is_public_scalar(value)
+
+
+def _is_known_source_type(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        AIReportSourceType(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_source_digest(value: Any) -> bool:
+    if value is None:
+        return True
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, Sequence, TypeVar
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from app.models import (
     AIReportExport,
     AIReportJob,
     AIReportSection,
+    AIReportSourceRef,
     AIReportValidationFinding,
     AIReportVersion,
     AIReviewRun,
@@ -30,6 +31,9 @@ from app.models.enums import (
     AISeverity,
 )
 from app.repositories.base import tenant_loader_criteria
+
+if TYPE_CHECKING:
+    from app.services.report_source_policy import ReportSourceRecord
 
 ModelT = TypeVar("ModelT")
 
@@ -549,6 +553,89 @@ class AIReportRepository:
         session.add(row)
         session.flush()
         return row
+
+    def create_source_refs(
+        self,
+        session: Session,
+        tenant_id: str,
+        report_version_id: int,
+        records: Sequence[ReportSourceRecord],
+    ) -> list[AIReportSourceRef]:
+        _require_owned(
+            session,
+            tenant_id,
+            AIReportVersion,
+            report_version_id,
+        )
+        records = tuple(records)
+        record_keys = {
+            (
+                record.source_type,
+                record.source_id,
+                record.source_version,
+            )
+            for record in records
+        }
+        existing_keys = set(
+            session.execute(
+                select(
+                    AIReportSourceRef.source_type,
+                    AIReportSourceRef.source_id,
+                    AIReportSourceRef.source_version,
+                ).where(
+                    AIReportSourceRef.tenant_id == tenant_id,
+                    AIReportSourceRef.report_version_id
+                    == report_version_id,
+                )
+            ).tuples()
+        )
+        if records and existing_keys:
+            raise ValueError(
+                "report version source references are immutable"
+            )
+        if len(record_keys) != len(records):
+            raise ValueError("duplicate report source reference")
+        rows = [
+            AIReportSourceRef(
+                tenant_id=tenant_id,
+                report_version_id=report_version_id,
+                source_type=record.source_type,
+                source_id=record.source_id,
+                source_version=record.source_version,
+                source_lineage_id=record.source_lineage_id,
+                source_digest=record.source_digest,
+                ordinal=ordinal,
+            )
+            for ordinal, record in enumerate(records)
+        ]
+        session.add_all(rows)
+        session.flush()
+        return rows
+
+    def list_source_refs(
+        self,
+        session: Session,
+        tenant_id: str,
+        report_version_id: int,
+    ) -> list[AIReportSourceRef]:
+        _require_owned(
+            session,
+            tenant_id,
+            AIReportVersion,
+            report_version_id,
+        )
+        return list(
+            session.scalars(
+                select(AIReportSourceRef)
+                .options(tenant_loader_criteria(tenant_id))
+                .where(
+                    AIReportSourceRef.tenant_id == tenant_id,
+                    AIReportSourceRef.report_version_id
+                    == report_version_id,
+                )
+                .order_by(AIReportSourceRef.ordinal)
+            ).all()
+        )
 
     def clear_version_content(
         self,
