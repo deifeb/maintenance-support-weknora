@@ -13,6 +13,7 @@ from app.models.ai_report import (
     AIReportExport,
     AIReportJob,
     AIReportSection,
+    AIReportSourceRef,
     AIReportValidationFinding,
     AIReportVersion,
 )
@@ -175,6 +176,7 @@ __all__ = [
     "AIReportExport",
     "AIReportJob",
     "AIReportSection",
+    "AIReportSourceRef",
     "AIReportValidationFinding",
     "AIReportVersion",
     "ImportTask",
