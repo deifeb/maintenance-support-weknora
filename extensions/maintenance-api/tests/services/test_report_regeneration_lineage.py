@@ -149,7 +149,7 @@ def test_create_report_captures_authoritative_source_snapshot(
     assert len(version.input_digest) == 64
     assert version.generation_mode is None
     assert version.generated_at is None
-    assert version.source_snapshot_json["schema_version"] == "1.0"
+    assert version.source_snapshot_json["schema_version"] == "1.1"
     assert (
         version.source_snapshot_json["capture_mode"]
         == "AUTHORITATIVE_CREATE"

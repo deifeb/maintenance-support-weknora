@@ -43,6 +43,7 @@ from app.security.actor import ActorContext
 from app.services.ai_report_validation_service import (
     ai_report_validation_service,
 )
+from app.services.report_source_policy import build_source_records
 from app.services.report_version_provenance import (
     build_authoritative_source_snapshot,
     build_legacy_source_snapshot,
@@ -187,15 +188,18 @@ class AIReportService:
                 report_type=payload.report_type,
                 session_id=payload.session_id,
             )
-            source_snapshot = build_authoritative_source_snapshot(
-                report_type=payload.report_type,
-                template_version="1.0",
-                metadata=metadata,
+            source_records = build_source_records(
                 ai_session=sources["session"],
                 scenario_version=sources["scenario_version"],
                 calculation_run=sources["calculation_run"],
                 calculation=sources["calculation"],
                 review_run=sources["review_run"],
+            )
+            source_snapshot = build_authoritative_source_snapshot(
+                report_type=payload.report_type,
+                template_version="1.0",
+                metadata=metadata,
+                source_records=source_records,
             )
             calculation = sources["calculation"]
             inventory_snapshot_at = (
@@ -203,7 +207,7 @@ class AIReportService:
                 if calculation is not None
                 else None
             )
-            self.repository.create_version(
+            version = self.repository.create_version(
                 session,
                 actor.tenant_id,
                 report_job_id=job.id,
@@ -219,6 +223,12 @@ class AIReportService:
                 scenario_version_id=payload.scenario_version_id,
                 calculation_run_id=payload.calculation_run_id,
                 review_run_id=payload.review_run_id,
+            )
+            self.repository.create_source_refs(
+                session,
+                actor.tenant_id,
+                version.id,
+                source_records,
             )
         except LookupError as exc:
             raise NotFoundError(

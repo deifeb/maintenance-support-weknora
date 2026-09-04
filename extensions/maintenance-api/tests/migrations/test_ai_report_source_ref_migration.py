@@ -8,7 +8,6 @@ from alembic.script import ScriptDirectory
 from app.core.config import get_settings
 from sqlalchemy import create_engine, inspect
 
-
 REVISION = "20260904_17"
 PREVIOUS_REVISION = "20260830_16"
 
