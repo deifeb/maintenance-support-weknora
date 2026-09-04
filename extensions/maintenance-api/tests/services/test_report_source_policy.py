@@ -8,7 +8,6 @@ from app.schemas.ai_report import AIReportCreateRequest
 from app.security.actor import MaintenanceRole
 from app.services.ai_report_service import ai_report_service
 from app.services.report_source_policy import ReportSourceRecord, build_source_records
-from sqlalchemy.exc import IntegrityError
 
 
 def test_current_report_sources_become_stable_ordered_records() -> None:
@@ -126,6 +125,10 @@ def test_create_persists_source_refs_with_the_snapshot(
         for ref in refs
     ] == [("AI_SESSION", "1", 0)]
     assert version.source_snapshot_json["schema_version"] == "1.1"
+    assert (
+        version.source_snapshot_json["provenance_completeness"]
+        == "AUTHORITATIVE"
+    )
 
 
 def test_source_ref_requires_tenant_scoped_version(
@@ -166,7 +169,10 @@ def test_source_ref_unique_within_report_version(
     )
     session.commit()
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(
+        ValueError,
+        match="duplicate report source reference",
+    ):
         ai_report_repository.create_source_refs(
             session,
             actor.tenant_id,

@@ -64,6 +64,11 @@ def test_source_ref_migration_round_trips(tmp_path, monkeypatch) -> None:
             for index in inspector.get_indexes("ai_report_source_refs")
         )
         assert any(
+            index["column_names"]
+            == ["report_version_id", "ordinal"]
+            for index in inspector.get_indexes("ai_report_source_refs")
+        )
+        assert any(
             constraint["column_names"]
             == [
                 "report_version_id",

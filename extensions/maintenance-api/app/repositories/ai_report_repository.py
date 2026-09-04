@@ -567,6 +567,33 @@ class AIReportRepository:
             AIReportVersion,
             report_version_id,
         )
+        records = tuple(records)
+        record_keys = {
+            (
+                record.source_type,
+                record.source_id,
+                record.source_version,
+            )
+            for record in records
+        }
+        existing_keys = set(
+            session.execute(
+                select(
+                    AIReportSourceRef.source_type,
+                    AIReportSourceRef.source_id,
+                    AIReportSourceRef.source_version,
+                ).where(
+                    AIReportSourceRef.tenant_id == tenant_id,
+                    AIReportSourceRef.report_version_id
+                    == report_version_id,
+                )
+            ).tuples()
+        )
+        if (
+            len(record_keys) != len(records)
+            or record_keys.intersection(existing_keys)
+        ):
+            raise ValueError("duplicate report source reference")
         rows = [
             AIReportSourceRef(
                 tenant_id=tenant_id,

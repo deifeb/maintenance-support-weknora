@@ -154,6 +154,10 @@ def test_create_report_captures_authoritative_source_snapshot(
         version.source_snapshot_json["capture_mode"]
         == "AUTHORITATIVE_CREATE"
     )
+    assert (
+        version.source_snapshot_json["provenance_completeness"]
+        == "AUTHORITATIVE"
+    )
 
 
 def test_regenerate_appends_version_on_same_job(
@@ -319,6 +323,10 @@ def test_regenerate_preserves_input_digest_for_copied_snapshot(
     v2 = regenerate(session, actor, job.id)
 
     assert v1.source_snapshot_json == v2.source_snapshot_json
+    assert (
+        v2.source_snapshot_json["provenance_completeness"]
+        == "AUTHORITATIVE"
+    )
     assert v1.input_digest == v2.input_digest
     assert v1.content_digest
     assert v2.content_digest

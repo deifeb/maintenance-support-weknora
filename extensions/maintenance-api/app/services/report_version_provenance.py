@@ -25,6 +25,20 @@ _ALLOWED_PRIVATE_SEED_KEYS = {
     "_draft_sections",
     "_draft_citations",
 }
+_PUBLIC_SOURCE_FIELDS = (
+    "type",
+    "id",
+    "version",
+    "lineage_id",
+    "digest",
+)
+_LEGACY_PUBLIC_SOURCE_FIELDS = {
+    "session": ("id", "version"),
+    "scenario_version": ("id", "version"),
+    "calculation_run": ("id",),
+    "review_run": ("id", "version"),
+    "inventory": (),
+}
 
 if TYPE_CHECKING:
     from app.services.report_source_policy import ReportSourceRecord
@@ -93,6 +107,7 @@ def build_authoritative_source_snapshot(
             {
                 "schema_version": SOURCE_SNAPSHOT_SCHEMA_VERSION,
                 "capture_mode": _AUTHORITATIVE_CAPTURE,
+                "provenance_completeness": "AUTHORITATIVE",
                 "report_type": _enum_value(report_type),
                 "template_version": template_version,
                 "sources": [
@@ -272,33 +287,72 @@ def source_snapshot_digest(
 def public_source_versions(
     snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not snapshot:
+    if not isinstance(snapshot, dict):
         return {}
-    result: dict[str, Any] = {
-        "capture_mode": snapshot.get("capture_mode"),
-    }
-    if snapshot.get("schema_version") == SOURCE_SNAPSHOT_SCHEMA_VERSION:
-        sources = snapshot.get("sources", [])
-        result["sources"] = [
-            {
-                key: source.get(key)
-                for key in (
-                    "type",
-                    "id",
-                    "version",
-                    "lineage_id",
-                    "digest",
-                )
-            }
-            for source in sources
-            if isinstance(source, dict)
-        ]
+    schema_version = snapshot.get("schema_version")
+    if schema_version not in {
+        _LEGACY_SOURCE_SNAPSHOT_SCHEMA_VERSION,
+        SOURCE_SNAPSHOT_SCHEMA_VERSION,
+    }:
+        return {}
+
+    capture_mode = snapshot.get("capture_mode")
+    if not _is_public_scalar(capture_mode):
+        return {}
+
+    result: dict[str, Any] = {"capture_mode": capture_mode}
+    completeness = snapshot.get("provenance_completeness")
+    if completeness is not None:
+        if not _is_public_scalar(completeness):
+            return {}
+        result["provenance_completeness"] = completeness
+
+    if schema_version == SOURCE_SNAPSHOT_SCHEMA_VERSION:
+        sources = snapshot.get("sources")
+        if not isinstance(sources, list):
+            return {}
+        projection: list[dict[str, Any]] = []
+        for source in sources:
+            if not isinstance(source, dict):
+                return {}
+            if any(
+                not _is_public_scalar(source.get(key))
+                for key in _PUBLIC_SOURCE_FIELDS
+            ):
+                return {}
+            projection.append(
+                {
+                    key: source.get(key)
+                    for key in _PUBLIC_SOURCE_FIELDS
+                }
+            )
+        result["sources"] = projection
     else:
-        result["sources"] = copy.deepcopy(
-            snapshot.get("sources", {})
-        )
-    if snapshot.get("provenance_completeness"):
-        result["provenance_completeness"] = (
-            snapshot["provenance_completeness"]
-        )
-    return _json_safe(result)
+        sources = snapshot.get("sources")
+        if not isinstance(sources, dict):
+            return {}
+        projection = {}
+        for source_name, fields in _LEGACY_PUBLIC_SOURCE_FIELDS.items():
+            if source_name not in sources:
+                continue
+            source = sources.get(source_name)
+            if source is None:
+                projection[source_name] = None
+                continue
+            if not isinstance(source, dict):
+                return {}
+            projection[source_name] = {
+                key: source.get(key)
+                for key in fields
+                if key in source
+                and _is_public_scalar(source.get(key))
+            }
+        result["sources"] = projection
+    return result
+
+
+def _is_public_scalar(value: Any) -> bool:
+    return value is None or isinstance(
+        value,
+        (str, int, float, bool),
+    )
