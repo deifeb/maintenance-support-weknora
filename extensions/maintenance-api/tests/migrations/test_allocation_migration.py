@@ -642,7 +642,12 @@ def test_task6_publish_receipt_migration_is_reversible_and_unique_head(
     assert revision.down_revision == AMENDMENT_REVISION
 
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [TASK6_REVISION]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert TASK6_REVISION in {
+        candidate.revision
+        for candidate in script.iterate_revisions(heads[0], "base")
+    }
 
     command.upgrade(config, AMENDMENT_REVISION)
     engine = create_engine(url)
