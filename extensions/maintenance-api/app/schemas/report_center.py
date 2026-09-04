@@ -12,12 +12,14 @@ from pydantic import (
 from app.models.enums import (
     AIExecutionMode,
     AIReportJobStatus,
+    AIReportSourceType,
     AIReportType,
     AIReportVersionStatus,
 )
 from app.schemas.ai_report import (
     AIReportCitationInput,
     AIReportSectionInput,
+    ReportSourceRefInput,
 )
 
 ReportCenterSortBy = Literal[
@@ -41,6 +43,11 @@ class ReportCenterQuery(BaseModel):
     scenario_version_id: int | None = Field(default=None, gt=0)
     calculation_run_id: int | None = Field(default=None, gt=0)
     review_run_id: int | None = Field(default=None, gt=0)
+    source_type: AIReportSourceType | None = None
+    source_id: int | None = Field(default=None, gt=0)
+    source_version: str | None = Field(
+        default=None, min_length=1, max_length=128
+    )
     sort_by: ReportCenterSortBy = "created_at"
     sort_order: ReportCenterSortOrder = "desc"
 
@@ -81,6 +88,9 @@ class ReportJobCreateRequest(BaseModel):
     scenario_version_id: int | None = None
     calculation_run_id: int | None = None
     review_run_id: int | None = None
+    source_refs: list[ReportSourceRefInput] = Field(
+        default_factory=list
+    )
     sections: list[AIReportSectionInput] = Field(
         default_factory=list
     )

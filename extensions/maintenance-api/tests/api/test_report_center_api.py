@@ -530,7 +530,7 @@ def test_report_list_rejects_unbounded_or_unsupported_query_values(
         "page_size=201",
         "sort_by=metadata_json",
         "sort_order=sideways",
-        "report_type=MODEL_COMPARISON",
+        "report_type=UNKNOWN_REPORT_TYPE",
         "job_status=UNKNOWN_STATUS",
         "version_status=UNKNOWN_STATUS",
     ):

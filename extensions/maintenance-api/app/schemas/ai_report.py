@@ -1,6 +1,16 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.enums import AIReportSourceType
+
+
+class ReportSourceRefInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: AIReportSourceType
+    id: int = Field(gt=0)
+    version: str | None = None
 
 
 class AIReportSectionInput(BaseModel):
@@ -38,6 +48,9 @@ class AIReportCreateRequest(BaseModel):
     scenario_version_id: int | None = None
     calculation_run_id: int | None = None
     review_run_id: int | None = None
+    source_refs: list[ReportSourceRefInput] = Field(
+        default_factory=list
+    )
     sections: list[
         AIReportSectionInput
     ] = Field(default_factory=list)
