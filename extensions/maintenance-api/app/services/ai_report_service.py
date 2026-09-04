@@ -44,6 +44,7 @@ from app.services.ai_report_validation_service import (
     ai_report_validation_service,
 )
 from app.services.report_source_policy import build_source_records
+from app.services.report_template_registry import get_template
 from app.services.report_version_provenance import (
     build_authoritative_source_snapshot,
     build_legacy_source_snapshot,
@@ -52,84 +53,7 @@ from app.services.report_version_provenance import (
     source_snapshot_digest,
 )
 
-REPORT_SECTION_DEFINITIONS: tuple[
-    tuple[str, str],
-    ...,
-] = (
-    (
-        "report_information",
-        "报告基本信息",
-    ),
-    (
-        "management_summary",
-        "管理摘要",
-    ),
-    (
-        "mission_and_configuration",
-        "任务场景与装备构型",
-    ),
-    (
-        "data_and_parameter_sources",
-        "数据与参数来源",
-    ),
-    (
-        "calculation_method",
-        "需求计算方法",
-    ),
-    (
-        "calculation_results",
-        "需求计算结果",
-    ),
-    (
-        "inventory_and_repair_analysis",
-        "库存与修理资源分析",
-    ),
-    (
-        "gap_and_support_risk",
-        "需求缺口与保障风险",
-    ),
-    (
-        "review_findings",
-        "智能审查结果",
-    ),
-    (
-        "model_comparison_and_uncertainty",
-        "模型对比与不确定性",
-    ),
-    (
-        "support_recommendations",
-        "保障建议",
-    ),
-    (
-        "decision_items",
-        "需确认与决策事项",
-    ),
-    (
-        "conclusion",
-        "结论",
-    ),
-    (
-        "appendix_demand_items",
-        "附录A：器材需求明细",
-    ),
-    (
-        "appendix_parameters",
-        "附录B：计算参数与模型版本",
-    ),
-    (
-        "appendix_citations",
-        "附录C：证据和引用",
-    ),
-    (
-        "appendix_audit",
-        "附录D：审计与确认记录",
-    ),
-)
-
-_DEFAULT_SECTION_CONTENT = (
-    "本章节由确定性报告骨架生成，"
-    "尚无补充内容。"
-)
+_DEFAULT_SECTION_CONTENT = "本章节由确定性报告骨架生成，尚无补充内容。"
 
 
 def _digest(value: Any) -> str:
@@ -146,14 +70,9 @@ class AIReportService:
     def __init__(
         self,
         *,
-        repository: (
-            AIReportRepository | None
-        ) = None,
+        repository: (AIReportRepository | None) = None,
     ) -> None:
-        self.repository = (
-            repository
-            or ai_report_repository
-        )
+        self.repository = repository or ai_report_repository
 
     def create(
         self,
@@ -161,15 +80,10 @@ class AIReportService:
         actor: ActorContext,
         payload: AIReportCreateRequest,
     ) -> AIReportJob:
+        template = get_template(payload.report_type)
         metadata = dict(payload.metadata)
-        metadata["_draft_sections"] = [
-            row.model_dump(mode="json")
-            for row in payload.sections
-        ]
-        metadata["_draft_citations"] = [
-            row.model_dump(mode="json")
-            for row in payload.citations
-        ]
+        metadata["_draft_sections"] = [row.model_dump(mode="json") for row in payload.sections]
+        metadata["_draft_citations"] = [row.model_dump(mode="json") for row in payload.citations]
         metadata.setdefault("allowed_numbers", [])
 
         try:
@@ -197,27 +111,23 @@ class AIReportService:
             )
             source_snapshot = build_authoritative_source_snapshot(
                 report_type=payload.report_type,
-                template_version="1.0",
+                template_version=template.version,
                 metadata=metadata,
                 source_records=source_records,
             )
             calculation = sources["calculation"]
             inventory_snapshot_at = (
-                calculation.inventory_snapshot_at
-                if calculation is not None
-                else None
+                calculation.inventory_snapshot_at if calculation is not None else None
             )
             version = self.repository.create_version(
                 session,
                 actor.tenant_id,
                 report_job_id=job.id,
-                template_version="1.0",
+                template_version=template.version,
                 content_digest=_digest(metadata),
                 metadata=metadata,
                 source_snapshot=source_snapshot,
-                input_digest=source_snapshot_digest(
-                    source_snapshot
-                ),
+                input_digest=source_snapshot_digest(source_snapshot),
                 inventory_snapshot_at=inventory_snapshot_at,
                 created_by=actor.user_id,
                 scenario_version_id=payload.scenario_version_id,
@@ -337,29 +247,22 @@ class AIReportService:
         )
         job.status = AIReportJobStatus.GENERATING_SECTIONS
 
-        for index, (
-            section_code,
-            default_title,
-        ) in enumerate(
-            REPORT_SECTION_DEFINITIONS,
+        for index, section in enumerate(
+            get_template(
+                job.report_type,
+                version.template_version,
+            ).sections,
             1,
         ):
+            section_code = section.code
+            default_title = section.title
             supplied = supplied_sections.get(
                 section_code,
                 {},
             )
-            content = str(
-                supplied.get("content")
-                or _DEFAULT_SECTION_CONTENT
-            )
-            title = str(
-                supplied.get("title")
-                or default_title
-            )
-            source_type = str(
-                supplied.get("source_type")
-                or "DETERMINISTIC"
-            )
+            content = str(supplied.get("content") or _DEFAULT_SECTION_CONTENT)
+            title = str(supplied.get("title") or default_title)
+            source_type = str(supplied.get("source_type") or "DETERMINISTIC")
             self.repository.add_section(
                 session,
                 actor.tenant_id,
@@ -386,18 +289,14 @@ class AIReportService:
 
         for citation in supplied_citations:
             citation_data = dict(citation)
-            citation_id = str(
-                citation_data.pop("citation_id")
-            )
+            citation_id = str(citation_data.pop("citation_id"))
             source_type = str(
                 citation_data.pop(
                     "source_type",
                     "WEKNORA_DOCUMENT",
                 )
             )
-            source_name = str(
-                citation_data.pop("source_name")
-            )
+            source_name = str(citation_data.pop("source_name"))
             self.repository.add_citation(
                 session,
                 actor.tenant_id,
@@ -423,9 +322,7 @@ class AIReportService:
             version,
         )
         version.content_digest = _digest(report)
-        version.generation_mode = (
-            AIExecutionMode.RULE_FALLBACK
-        )
+        version.generation_mode = AIExecutionMode.RULE_FALLBACK
         version.generated_at = utc_now()
         job.status = AIReportJobStatus.VALIDATING_NUMBERS
         job.progress_percent = 75
@@ -522,22 +419,15 @@ class AIReportService:
 
         metadata = seed_metadata(parent.metadata_json)
 
-        if (
-            parent.source_snapshot_json is not None
-            and parent.input_digest
-        ):
-            source_snapshot = copy.deepcopy(
-                parent.source_snapshot_json
-            )
+        if parent.source_snapshot_json is not None and parent.input_digest:
+            source_snapshot = copy.deepcopy(parent.source_snapshot_json)
             input_digest = parent.input_digest
         else:
             source_snapshot = build_legacy_source_snapshot(
                 job,
                 parent,
             )
-            input_digest = source_snapshot_digest(
-                source_snapshot
-            )
+            input_digest = source_snapshot_digest(source_snapshot)
 
         job.status = AIReportJobStatus.CREATED
         job.progress_percent = 0
@@ -560,9 +450,7 @@ class AIReportService:
             source_snapshot=source_snapshot,
             input_digest=input_digest,
             inventory_snapshot_at=parent.inventory_snapshot_at,
-            prompt_versions=copy.deepcopy(
-                parent.prompt_versions_json
-            ),
+            prompt_versions=copy.deepcopy(parent.prompt_versions_json),
             created_by=actor.user_id,
             scenario_version_id=parent.scenario_version_id,
             calculation_run_id=parent.calculation_run_id,
@@ -643,23 +531,17 @@ class AIReportService:
                 [],
             )
         }
-        valid_citations = {
-            str(row["citation_id"])
-            for row in report["citations"]
-        }
+        valid_citations = {str(row["citation_id"]) for row in report["citations"]}
 
         self.repository.clear_validation_findings(
             session,
             actor.tenant_id,
             version.id,
         )
-        drafts = (
-            ai_report_validation_service
-            .validate_content(
-                sections=report["sections"],
-                allowed_numbers=allowed_numbers,
-                valid_citation_ids=valid_citations,
-            )
+        drafts = ai_report_validation_service.validate_content(
+            sections=report["sections"],
+            allowed_numbers=allowed_numbers,
+            valid_citation_ids=valid_citations,
         )
         persisted = [
             self.repository.add_validation_finding(
@@ -702,47 +584,21 @@ class AIReportService:
             actor,
             report_job_id,
         )
-        findings = (
-            self.repository
-            .list_validation_findings(
-                session,
-                actor.tenant_id,
-                version.id,
-            )
+        findings = self.repository.list_validation_findings(
+            session,
+            actor.tenant_id,
+            version.id,
         )
-        unresolved = [
-            row
-            for row in findings
-            if not row.resolved
-        ]
-        if (
-            version.status
-            is not AIReportVersionStatus
-            .REVIEWED
-            or unresolved
-        ):
+        unresolved = [row for row in findings if not row.resolved]
+        if version.status is not AIReportVersionStatus.REVIEWED or unresolved:
             raise BusinessValidationError(
-                (
-                    "report must pass number "
-                    "and citation validation "
-                    "before finalization"
-                ),
-                code=(
-                    "REPORT_VALIDATION_REQUIRED"
-                ),
-                details={
-                    "unresolved_findings": (
-                        len(unresolved)
-                    )
-                },
+                ("report must pass number and citation validation before finalization"),
+                code=("REPORT_VALIDATION_REQUIRED"),
+                details={"unresolved_findings": (len(unresolved))},
             )
-        version.status = (
-            AIReportVersionStatus.FINAL
-        )
+        version.status = AIReportVersionStatus.FINAL
         version.finalized_by = actor.user_id
-        job.status = (
-            AIReportJobStatus.FINALIZED
-        )
+        job.status = AIReportJobStatus.FINALIZED
         session.commit()
         session.refresh(version)
         return version
@@ -780,11 +636,7 @@ class AIReportService:
             "_section_citations",
             {},
         )
-        public_metadata = {
-            key: value
-            for key, value in metadata.items()
-            if not key.startswith("_")
-        }
+        public_metadata = {key: value for key, value in metadata.items() if not key.startswith("_")}
         sections = [
             {
                 "section_code": row.section_code,
@@ -839,18 +691,12 @@ class AIReportService:
             "template_version": version.template_version,
             "input_digest": version.input_digest,
             "generation_mode": (
-                version.generation_mode.value
-                if version.generation_mode is not None
-                else None
+                version.generation_mode.value if version.generation_mode is not None else None
             ),
             "generated_at": (
-                version.generated_at.isoformat()
-                if version.generated_at is not None
-                else None
+                version.generated_at.isoformat() if version.generated_at is not None else None
             ),
-            "source_versions": public_source_versions(
-                version.source_snapshot_json
-            ),
+            "source_versions": public_source_versions(version.source_snapshot_json),
             "metadata": public_metadata,
             "sections": sections,
             "citations": citations,
@@ -878,26 +724,18 @@ class AIReportService:
             job,
             version,
         )
-        report["job_status"] = (
-            job.status.value
-        )
-        report["progress_percent"] = (
-            job.progress_percent
-        )
+        report["job_status"] = job.status.value
+        report["progress_percent"] = job.progress_percent
         report["findings"] = [
             {
                 "id": row.id,
                 "code": row.code,
-                "severity": (
-                    row.severity.value
-                ),
+                "severity": (row.severity.value),
                 "message": row.message,
                 "details": row.details_json,
                 "resolved": row.resolved,
             }
-            for row
-            in self.repository
-            .list_validation_findings(
+            for row in self.repository.list_validation_findings(
                 session,
                 actor.tenant_id,
                 version.id,
@@ -930,71 +768,37 @@ class AIReportService:
         )
         normalized = export_format.upper()
         if normalized == "DOCX":
-            content = export_report_docx(
-                report
-            )
-            content_type = (
-                "application/vnd."
-                "openxmlformats-officedocument."
-                "wordprocessingml.document"
-            )
+            content = export_report_docx(report)
+            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             extension = "docx"
         elif normalized == "JSON":
-            content = export_report_json(
-                report
-            ).encode("utf-8")
-            content_type = (
-                "application/json; "
-                "charset=utf-8"
-            )
+            content = export_report_json(report).encode("utf-8")
+            content_type = "application/json; charset=utf-8"
             extension = "json"
         elif normalized in {
             "MARKDOWN",
             "MD",
         }:
             normalized = "MARKDOWN"
-            content = export_report_markdown(
-                report
-            ).encode("utf-8")
-            content_type = (
-                "text/markdown; "
-                "charset=utf-8"
-            )
+            content = export_report_markdown(report).encode("utf-8")
+            content_type = "text/markdown; charset=utf-8"
             extension = "md"
         else:
             raise BusinessValidationError(
-                (
-                    "unsupported report "
-                    "export format"
-                ),
-                code=(
-                    "REPORT_EXPORT_FORMAT_INVALID"
-                ),
-                details={
-                    "format": export_format
-                },
+                ("unsupported report export format"),
+                code=("REPORT_EXPORT_FORMAT_INVALID"),
+                details={"format": export_format},
             )
 
-        file_name = (
-            f"{job.report_code}-"
-            f"v{version.version_number}."
-            f"{extension}"
-        )
-        output_dir = Path(
-            get_settings()
-            .ai_report_export_dir
-        )
+        file_name = f"{job.report_code}-v{version.version_number}.{extension}"
+        output_dir = Path(get_settings().ai_report_export_dir)
         output_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
-        output_path = (
-            output_dir / file_name
-        )
+        output_path = output_dir / file_name
         output_path.write_bytes(content)
-        content_digest = hashlib.sha256(
-            content
-        ).hexdigest()
+        content_digest = hashlib.sha256(content).hexdigest()
         self.repository.add_export(
             session,
             actor.tenant_id,
