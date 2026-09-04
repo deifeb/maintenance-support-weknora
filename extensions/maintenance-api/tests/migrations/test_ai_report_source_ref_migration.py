@@ -36,45 +36,51 @@ def test_source_ref_revision_is_the_only_head() -> None:
 
 def test_source_ref_migration_round_trips(tmp_path, monkeypatch) -> None:
     config, url = _config(tmp_path / "source-ref.db", monkeypatch)
-    command.upgrade(config, PREVIOUS_REVISION)
-    command.upgrade(config, REVISION)
-    inspector = inspect(create_engine(url))
-    assert "ai_report_source_refs" in inspector.get_table_names()
-    assert {
-        "tenant_id",
-        "report_version_id",
-        "source_type",
-        "source_id",
-        "source_version",
-        "source_lineage_id",
-        "source_digest",
-        "ordinal",
-    } <= {
-        column["name"]
-        for column in inspector.get_columns("ai_report_source_refs")
-    }
-    assert any(
-        fk["referred_table"] == "ai_report_versions"
-        for fk in inspector.get_foreign_keys("ai_report_source_refs")
-    )
-    assert any(
-        index["column_names"] == ["tenant_id", "source_type", "source_id"]
-        for index in inspector.get_indexes("ai_report_source_refs")
-    )
-    assert any(
-        constraint["column_names"]
-        == [
+    engine = create_engine(url)
+    try:
+        command.upgrade(config, PREVIOUS_REVISION)
+        command.upgrade(config, REVISION)
+        inspector = inspect(engine)
+        assert "ai_report_source_refs" in inspector.get_table_names()
+        assert {
+            "tenant_id",
             "report_version_id",
             "source_type",
             "source_id",
             "source_version",
-        ]
-        for constraint in inspector.get_unique_constraints(
-            "ai_report_source_refs"
+            "source_lineage_id",
+            "source_digest",
+            "ordinal",
+        } <= {
+            column["name"]
+            for column in inspector.get_columns("ai_report_source_refs")
+        }
+        assert any(
+            fk["referred_table"] == "ai_report_versions"
+            for fk in inspector.get_foreign_keys("ai_report_source_refs")
         )
-    )
-    command.downgrade(config, PREVIOUS_REVISION)
-    assert "ai_report_source_refs" not in inspect(
-        create_engine(url)
-    ).get_table_names()
-    command.upgrade(config, REVISION)
+        assert any(
+            index["column_names"]
+            == ["tenant_id", "source_type", "source_id"]
+            for index in inspector.get_indexes("ai_report_source_refs")
+        )
+        assert any(
+            constraint["column_names"]
+            == [
+                "report_version_id",
+                "source_type",
+                "source_id",
+                "source_version",
+            ]
+            for constraint in inspector.get_unique_constraints(
+                "ai_report_source_refs"
+            )
+        )
+        command.downgrade(config, PREVIOUS_REVISION)
+        assert "ai_report_source_refs" not in inspect(
+            engine
+        ).get_table_names()
+        command.upgrade(config, REVISION)
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
