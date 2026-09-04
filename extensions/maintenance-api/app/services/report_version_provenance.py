@@ -14,6 +14,7 @@ from app.models import (
     DemandCalculationRun,
     DemandScenarioVersion,
 )
+from app.models.enums import AIReportSourceType
 
 SOURCE_SNAPSHOT_SCHEMA_VERSION = "1.1"
 _COMPATIBLE_AUTHORITATIVE_SCHEMA_VERSION = "1.0"
@@ -33,11 +34,32 @@ _PUBLIC_SOURCE_FIELDS = (
     "digest",
 )
 _LEGACY_PUBLIC_SOURCE_FIELDS = {
-    "session": ("id", "version"),
-    "scenario_version": ("id", "version"),
-    "calculation_run": ("id",),
-    "review_run": ("id", "version"),
-    "inventory": (),
+    "session": ("id", "version", "session_code"),
+    "scenario_version": (
+        "id",
+        "version",
+        "version_code",
+        "formula_version",
+        "input_schema_version",
+    ),
+    "calculation_run": (
+        "id",
+        "calculation_id",
+        "attempt_number",
+        "run_mode",
+        "engine_version",
+        "formula_version",
+        "input_snapshot_hash",
+        "inventory_snapshot_at",
+    ),
+    "review_run": (
+        "id",
+        "version",
+        "rule_set_version",
+        "scenario_version_id",
+        "calculation_run_id",
+    ),
+    "inventory": ("snapshot_at",),
 }
 
 if TYPE_CHECKING:
@@ -296,18 +318,12 @@ def public_source_versions(
     }:
         return {}
 
-    capture_mode = snapshot.get("capture_mode")
-    if not _is_public_scalar(capture_mode):
-        return {}
-
-    result: dict[str, Any] = {"capture_mode": capture_mode}
-    completeness = snapshot.get("provenance_completeness")
-    if completeness is not None:
-        if not _is_public_scalar(completeness):
-            return {}
-        result["provenance_completeness"] = completeness
-
     if schema_version == SOURCE_SNAPSHOT_SCHEMA_VERSION:
+        capture_mode = snapshot.get("capture_mode")
+        if capture_mode != _AUTHORITATIVE_CAPTURE:
+            return {}
+        if snapshot.get("provenance_completeness") != "AUTHORITATIVE":
+            return {}
         sources = snapshot.get("sources")
         if not isinstance(sources, list):
             return {}
@@ -315,10 +331,18 @@ def public_source_versions(
         for source in sources:
             if not isinstance(source, dict):
                 return {}
+            if not all(
+                key in source
+                and _is_required_public_scalar(source[key])
+                for key in ("type", "id", "version")
+            ):
+                return {}
+            if not _is_known_source_type(source["type"]):
+                return {}
             if any(
                 not _is_public_scalar(source.get(key))
-                for key in _PUBLIC_SOURCE_FIELDS
-            ):
+                for key in ("lineage_id", "digest")
+            ) or not _is_valid_source_digest(source.get("digest")):
                 return {}
             projection.append(
                 {
@@ -326,8 +350,15 @@ def public_source_versions(
                     for key in _PUBLIC_SOURCE_FIELDS
                 }
             )
-        result["sources"] = projection
+        return {
+            "capture_mode": capture_mode,
+            "provenance_completeness": "AUTHORITATIVE",
+            "sources": projection,
+        }
     else:
+        capture_mode = snapshot.get("capture_mode")
+        if not _is_public_scalar(capture_mode):
+            return {}
         sources = snapshot.get("sources")
         if not isinstance(sources, dict):
             return {}
@@ -347,12 +378,42 @@ def public_source_versions(
                 if key in source
                 and _is_public_scalar(source.get(key))
             }
-        result["sources"] = projection
-    return result
+        result: dict[str, Any] = {
+            "capture_mode": capture_mode,
+            "sources": projection,
+        }
+        completeness = snapshot.get("provenance_completeness")
+        if completeness is not None and _is_public_scalar(completeness):
+            result["provenance_completeness"] = completeness
+        return result
 
 
 def _is_public_scalar(value: Any) -> bool:
     return value is None or isinstance(
         value,
         (str, int, float, bool),
+    )
+
+
+def _is_required_public_scalar(value: Any) -> bool:
+    return value is not None and _is_public_scalar(value)
+
+
+def _is_known_source_type(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        AIReportSourceType(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_valid_source_digest(value: Any) -> bool:
+    if value is None:
+        return True
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
     )

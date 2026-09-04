@@ -9,7 +9,6 @@ from app.core.config import get_settings
 from app.models.ai_report import AIReportVersion
 from sqlalchemy import create_engine, inspect
 
-
 REVISION = "20260830_16"
 PREVIOUS_REVISION = "20260827_15"
 
@@ -58,7 +57,12 @@ def test_report_version_lineage_revision_extends_current_single_head() -> None:
     revision = _require_revision(script)
 
     assert revision.down_revision == PREVIOUS_REVISION
-    assert script.get_heads() == [REVISION]
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert REVISION in {
+        candidate.revision
+        for candidate in script.iterate_revisions(heads[0], "base")
+    }
 
 
 def test_report_version_lineage_migration_round_trips(

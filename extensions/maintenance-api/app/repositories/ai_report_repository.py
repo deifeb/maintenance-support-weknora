@@ -589,10 +589,11 @@ class AIReportRepository:
                 )
             ).tuples()
         )
-        if (
-            len(record_keys) != len(records)
-            or record_keys.intersection(existing_keys)
-        ):
+        if records and existing_keys:
+            raise ValueError(
+                "report version source references are immutable"
+            )
+        if len(record_keys) != len(records):
             raise ValueError("duplicate report source reference")
         rows = [
             AIReportSourceRef(

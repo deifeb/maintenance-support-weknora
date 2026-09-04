@@ -68,6 +68,17 @@ def _record() -> ReportSourceRecord:
     )
 
 
+def _second_record() -> ReportSourceRecord:
+    return ReportSourceRecord(
+        source_type=AIReportSourceType.SCENARIO_VERSION,
+        source_id="2",
+        source_version="1",
+        source_lineage_id=None,
+        source_digest="b" * 64,
+        evidence={},
+    )
+
+
 def _create_version_for(session, actor):
     job = ai_report_repository.create_job(
         session,
@@ -171,7 +182,7 @@ def test_source_ref_unique_within_report_version(
 
     with pytest.raises(
         ValueError,
-        match="duplicate report source reference",
+        match="immutable",
     ):
         ai_report_repository.create_source_refs(
             session,
@@ -188,3 +199,33 @@ def test_source_ref_unique_within_report_version(
             version.id,
         )
     ) == 1
+
+
+def test_source_ref_batch_is_immutable_after_initial_insert(
+    session,
+    actor_context,
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="author",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    version = _create_version_for(session, actor)
+    ai_report_repository.create_source_refs(
+        session,
+        actor.tenant_id,
+        version.id,
+        (_record(),),
+    )
+    session.commit()
+
+    with pytest.raises(
+        ValueError,
+        match="immutable",
+    ):
+        ai_report_repository.create_source_refs(
+            session,
+            actor.tenant_id,
+            version.id,
+            (_second_record(),),
+        )
