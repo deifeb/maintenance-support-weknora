@@ -505,7 +505,10 @@ class ReportSourceService:
                         "version",
                     ),
                 )
-                for decision in _value(row, "decisions", ())
+                for decision in sorted(
+                    _value(row, "decisions", ()),
+                    key=lambda current: _value(current, "id"),
+                )
             ]
             return {
                 **_fields(
@@ -535,16 +538,33 @@ class ReportSourceService:
                         "spare_part_name_snapshot",
                         "spare_part_unit_snapshot",
                         "criticality_level_snapshot",
+                        "source_calculation_group_id",
+                        "source_group_child_id",
+                        "source_calculation_id",
+                        "source_calculation_run_id",
+                        "source_result_id",
+                        "reliability_model",
+                        "execution_mode",
                         "original_quantity",
                         "final_quantity",
                         "decision_type",
+                        "decision_reason",
                         "decision_risk",
+                        "requires_admin_confirmation",
+                        "confirmed_by_admin",
                         "risk_rule_version",
+                        "source_snapshot_json",
                         "decision_snapshot_json",
+                        "interval_snapshot_json",
+                        "parameter_snapshot_json",
+                        "warning_snapshot_json",
                         "inventory_snapshot_json",
                     ),
                 )
-                for item in _value(row, "items", ())
+                for item in sorted(
+                    _value(row, "items", ()),
+                    key=lambda current: _value(current, "id"),
+                )
             ]
             return {
                 **_fields(

@@ -451,3 +451,108 @@ def test_nested_persisted_evidence_omits_sensitive_keys(source_service):
     assert "provider_token" not in serialized
     assert "file_path" not in serialized
     assert "approved" in serialized
+
+
+def test_spare_part_risk_keeps_persisted_source_context_without_sensitive_keys(
+    source_service,
+):
+    demand_list = source_service.demand_list_repository.rows[("tenant-a", 1)]
+    demand_list.items = [
+        SimpleNamespace(
+            id=10,
+            version=1,
+            spare_part_id=20,
+            spare_part_code_snapshot="SP-20",
+            spare_part_name_snapshot="Part 20",
+            spare_part_unit_snapshot="EA",
+            criticality_level_snapshot="HIGH",
+            source_calculation_group_id=30,
+            source_group_child_id=31,
+            source_calculation_id=32,
+            source_calculation_run_id=33,
+            source_result_id=34,
+            reliability_model="WEIBULL",
+            execution_mode="SIMULATION",
+            original_quantity=2,
+            final_quantity=3,
+            decision_type="MANUAL_QUANTITY",
+            decision_reason="shortage mitigation",
+            decision_risk="HIGH",
+            requires_admin_confirmation=True,
+            confirmed_by_admin=True,
+            risk_rule_version="risk-1",
+            source_snapshot_json={
+                "shortage_risk_level": "HIGH",
+                "available_quantity": "2",
+                "repair_pipeline_demand": "4",
+                "selected_reliability_profile_id": 40,
+                "selected_repair_profile_id": 41,
+                "provider_token": "secret-token",
+            },
+            decision_snapshot_json={"approved": True},
+            interval_snapshot_json={"selected_child_id": 31},
+            parameter_snapshot_json={"weibull_shape": "1.8"},
+            warning_snapshot_json=["INV-003"],
+            inventory_snapshot_json={"usable_inventory": "2", "net_demand_gap": "1"},
+        )
+    ]
+
+    result = source_service.resolve_for_create(
+        object(),
+        SimpleNamespace(tenant_id="tenant-a"),
+        _payload(
+            AIReportType.SPARE_PART_RISK,
+            (AIReportSourceType.DEMAND_LIST, 1, None),
+        ),
+    )
+
+    item = result.records[0].evidence["items"][0]
+    assert item["source_snapshot_json"] == {
+        "shortage_risk_level": "HIGH",
+        "available_quantity": "2",
+        "repair_pipeline_demand": "4",
+        "selected_reliability_profile_id": 40,
+        "selected_repair_profile_id": 41,
+    }
+    assert item["inventory_snapshot_json"] == {
+        "usable_inventory": "2",
+        "net_demand_gap": "1",
+    }
+    assert item["reliability_model"] == "WEIBULL"
+    assert item["parameter_snapshot_json"] == {"weibull_shape": "1.8"}
+
+
+def test_group_decisions_and_demand_list_items_have_stable_evidence_order(
+    source_service,
+):
+    group = source_service.calculation_group_repository.rows[("tenant-a", 1)]
+    demand_list = source_service.demand_list_repository.rows[("tenant-a", 1)]
+    group.decisions = [
+        SimpleNamespace(id=20, spare_part_id=200),
+        SimpleNamespace(id=10, spare_part_id=100),
+    ]
+    demand_list.items = [
+        SimpleNamespace(id=20, spare_part_id=200),
+        SimpleNamespace(id=10, spare_part_id=100),
+    ]
+    payload = _payload(
+        AIReportType.MANAGEMENT_DECISION,
+        (AIReportSourceType.DEMAND_LIST, 1, None),
+        (AIReportSourceType.CALCULATION_GROUP, 1, None),
+    )
+
+    first = source_service.resolve_for_create(
+        object(), SimpleNamespace(tenant_id="tenant-a"), payload
+    )
+    group.decisions.reverse()
+    demand_list.items.reverse()
+    second = source_service.resolve_for_create(
+        object(), SimpleNamespace(tenant_id="tenant-a"), payload
+    )
+
+    first_group, first_list = first.records
+    second_group, second_list = second.records
+    assert [row["id"] for row in first_group.evidence["decisions"]] == [10, 20]
+    assert [row["id"] for row in first_list.evidence["items"]] == [10, 20]
+    assert first_group.source_digest == second_group.source_digest
+    assert first_list.source_digest == second_list.source_digest
