@@ -219,6 +219,21 @@ def _public_string_value(value: str) -> str | object:
     return value
 
 
+def _public_payload_scalar(value: Any) -> Any:
+    if isinstance(value, str):
+        value = _public_string_value(value)
+    return None if value is _OMITTED_METADATA_VALUE else value
+
+
+def _public_source_versions(
+    snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    projected = _public_metadata_value(
+        public_source_versions(snapshot)
+    )
+    return projected if isinstance(projected, dict) else {}
+
+
 def _public_section_scalar(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -303,7 +318,9 @@ def _public_section_citations(
 
 def _public_citation(citation: Any) -> dict[str, Any]:
     return {
-        field: getattr(citation, field)
+        field: _public_payload_scalar(
+            getattr(citation, field)
+        )
         for field in _PUBLIC_CITATION_FIELDS
     }
 
@@ -947,10 +964,14 @@ class AIReportService:
         public_metadata = _public_metadata(metadata)
         sections = [
             {
-                "section_code": row.section_code,
-                "title": row.title,
-                "content": row.content,
-                "source_type": row.source_type,
+                "section_code": _public_payload_scalar(
+                    row.section_code
+                ),
+                "title": _public_payload_scalar(row.title),
+                "content": _public_payload_scalar(row.content),
+                "source_type": _public_payload_scalar(
+                    row.source_type
+                ),
                 "citations": _public_section_citations(
                     section_citations,
                     row.section_code,
@@ -976,22 +997,34 @@ class AIReportService:
         ]
         return {
             "report_id": job.id,
-            "report_code": job.report_code,
-            "report_type": job.report_type.value,
-            "title": job.title,
-            "status": version.status.value,
+            "report_code": _public_payload_scalar(job.report_code),
+            "report_type": _public_payload_scalar(
+                job.report_type.value
+            ),
+            "title": _public_payload_scalar(job.title),
+            "status": _public_payload_scalar(version.status.value),
             "version_id": version.id,
             "version_number": version.version_number,
             "parent_version_id": version.parent_version_id,
-            "template_version": version.template_version,
-            "input_digest": version.input_digest,
-            "generation_mode": (
-                version.generation_mode.value if version.generation_mode is not None else None
+            "template_version": _public_payload_scalar(
+                version.template_version
             ),
-            "generated_at": (
-                version.generated_at.isoformat() if version.generated_at is not None else None
+            "input_digest": _public_payload_scalar(
+                version.input_digest
             ),
-            "source_versions": public_source_versions(version.source_snapshot_json),
+            "generation_mode": _public_payload_scalar(
+                version.generation_mode.value
+                if version.generation_mode is not None
+                else None
+            ),
+            "generated_at": _public_payload_scalar(
+                version.generated_at.isoformat()
+                if version.generated_at is not None
+                else None
+            ),
+            "source_versions": _public_source_versions(
+                version.source_snapshot_json
+            ),
             "metadata": public_metadata,
             "sections": sections,
             "citations": citations,

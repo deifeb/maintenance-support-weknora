@@ -179,6 +179,22 @@ def test_report_detail_exposes_only_public_source_projection(
             },
         )
     )
+    session.add(
+        AIReportCitation(
+            tenant_id=job.tenant_id,
+            report_version_id=version.id,
+            citation_id="E-REDACTED",
+            source_type="WEKNORA_DOCUMENT",
+            source_name=_COMPACT_JWT,
+            document_version="2026.09",
+            page_number=7,
+            chunk_reference="C:/citation-path-must-not-leak",
+            knowledge_node="provider-token-citation-must-not-leak",
+            database_record_json={
+                "provider_token": "citation-record-token-must-not-leak"
+            },
+        )
+    )
     session.commit()
 
     response = client.get(
@@ -199,6 +215,9 @@ def test_report_detail_exposes_only_public_source_projection(
         "nested-token-must-not-leak",
         "citation-token-must-not-leak",
         "citation-tenant-must-not-leak",
+        "citation-path-must-not-leak",
+        "provider-token-citation-must-not-leak",
+        "citation-record-token-must-not-leak",
         "database_record_json",
         "table-tenant-must-not-leak",
         "table-token-must-not-leak",
@@ -238,6 +257,15 @@ def test_report_detail_exposes_only_public_source_projection(
     }
     assert detail["citations"] == [
         {
+            "citation_id": "E-REDACTED",
+            "source_type": "WEKNORA_DOCUMENT",
+            "source_name": None,
+            "document_version": "2026.09",
+            "page_number": 7,
+            "chunk_reference": None,
+            "knowledge_node": None,
+        },
+        {
             "citation_id": "E-SAFE",
             "source_type": "WEKNORA_DOCUMENT",
             "source_name": "Safe evidence",
@@ -245,7 +273,7 @@ def test_report_detail_exposes_only_public_source_projection(
             "page_number": 4,
             "chunk_reference": None,
             "knowledge_node": None,
-        }
+        },
     ]
     assert detail["sections"] == [
         {
@@ -296,6 +324,9 @@ def test_report_detail_exposes_only_public_source_projection(
             "nested-token-must-not-leak",
             "citation-token-must-not-leak",
             "citation-tenant-must-not-leak",
+            "citation-path-must-not-leak",
+            "provider-token-citation-must-not-leak",
+            "citation-record-token-must-not-leak",
             "database_record_json",
             "table-tenant-must-not-leak",
             "table-token-must-not-leak",
