@@ -81,6 +81,34 @@ Complete result: `9 passed, 1 warning in 10.09s`; Ruff reported `All checks
 passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
 existing FastAPI/Starlette TestClient deprecation warning.
 
+## Fourth-Round Review Remediation: Compact JWT Values
+
+The fourth review found that a standard compact JWT has no `jwt` keyword and
+could therefore pass the sensitive-string marker filter when used as a section
+table title, column, cell, or section citation.
+
+Implementation commit: `a3dcec529 fix(maintenance): block compact JWT section values`.
+
+- Section scalar projection now detects compact base64url JWT candidates and
+  validates that their decoded header is a JSON object with an `alg` field.
+  This blocks both standalone and embedded complete JWT values without relying
+  on a literal `jwt` marker.
+- A regression uses a real three-segment JWT in the title, a column, a cell,
+  and a section citation. Detail, JSON, Markdown, and DOCX are all asserted to
+  omit it while preserving safe section content.
+
+Fresh verification command:
+
+```powershell
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py tests/exporters/test_ai_report_exports.py tests/exporters/test_report_version_provenance_exports.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app/services/ai_report_service.py app/exporters/ai_report_json.py app/exporters/ai_report_markdown.py app/exporters/ai_report_docx.py tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py
+git diff --check HEAD^ HEAD
+```
+
+Complete result: `9 passed, 1 warning in 8.65s`; Ruff reported `All checks
+passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
+existing FastAPI/Starlette TestClient deprecation warning.
+
 ## Third-Round Review Remediation: Sensitive Section Scalars
 
 The third review found that section title, column, cell, and citation strings
