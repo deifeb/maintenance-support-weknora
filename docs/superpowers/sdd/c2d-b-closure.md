@@ -7,7 +7,8 @@ implementation change was required.
 ## Revision and scope
 
 - Base SHA: `4c564d3e78bc72d38ae0f48bd7912bb7106ade71`
-- Head SHA before the closure commit: `4c564d3e78bc72d38ae0f48bd7912bb7106ade71`
+- Verification head before the closure commit: `4c564d3e78bc72d38ae0f48bd7912bb7106ade71`
+- Completed closure commit/head: `24c4839efe97ff726978e6623ebec110f50a45a0`
 - Changed test: `extensions/maintenance-api/tests/services/test_report_regeneration_lineage.py`
 - Added evidence: this document
 - `extensions/maintenance-api/tests/api/test_report_center_regenerate_api.py`: unchanged
@@ -46,6 +47,10 @@ using httpx with `starlette.testclient`; it does not affect test results.
 
 ## Commit
 
-The closure commit is recorded by the supervising agent after staging only the
+The closure commit `24c4839efe97ff726978e6623ebec110f50a45a0`
+(`docs(maintenance): close c2d-b execution`) is complete and staged only the
 scoped test and this document. The pre-existing modification to
-`.superpowers/sdd/progress.md` is intentionally unstaged.
+`.superpowers/sdd/progress.md` was intentionally unstaged.
+
+This document correction is applied in a separate follow-up commit and does
+not alter the closure commit or its verification evidence.
