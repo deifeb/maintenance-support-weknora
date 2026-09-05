@@ -171,3 +171,39 @@ git diff --check HEAD^ HEAD
 Complete result: `9 passed, 1 warning in 8.85s`; Ruff reported `All checks
 passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
 existing FastAPI/Starlette TestClient deprecation warning.
+
+## Sixth-Round Review Remediation: Citation Strings and Serialize Audit
+
+The sixth review found that public citation fields were copied directly from
+the citation record. A compact JWT in `source_name`, an absolute path in
+`chunk_reference`, or a sensitive marker in `knowledge_node` could therefore
+reach the detail response and all exports.
+
+Implementation commit: `eeb194ccf fix(maintenance): redact public citation fields`.
+
+- Every displayed citation string now uses `_public_string_value()` via the
+  shared `_public_payload_scalar()` helper. Rejected citation values are
+  returned as `null`, preserving the established citation object shape;
+  `database_record_json` remains absent from the public projection.
+- The API regression keeps a safe citation and adds an unsafe citation with a
+  real compact JWT source name, an absolute-path chunk reference, sensitive
+  knowledge-node text, and a private record payload. Detail, JSON, Markdown,
+  and DOCX retain the safe citation while exposing none of the probes.
+- A focused audit of every `AIReportService.serialize()` payload boundary found
+  no remaining direct external string passthrough: report/version and section
+  scalars use `_public_payload_scalar()`, metadata and section structures use
+  their existing strict projections, citations use the shared scalar helper,
+  and source snapshots remain allowlisted by `public_source_versions()` before
+  recursive public-value sanitization.
+
+Fresh verification command:
+
+```powershell
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py tests/exporters/test_ai_report_exports.py tests/exporters/test_report_version_provenance_exports.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app/services/ai_report_service.py app/exporters/ai_report_json.py app/exporters/ai_report_markdown.py app/exporters/ai_report_docx.py tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py
+git diff --check HEAD^ HEAD
+```
+
+Complete result: `9 passed, 1 warning in 9.91s`; Ruff reported `All checks
+passed!`; `git diff --check` had no output. The one warning is the existing
+FastAPI/Starlette TestClient deprecation warning.
