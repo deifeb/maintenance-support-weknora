@@ -10,7 +10,7 @@ implementation change was required.
 - Verification head before the closure commit: `4c564d3e78bc72d38ae0f48bd7912bb7106ade71`
 - Completed closure commit/head: `24c4839efe97ff726978e6623ebec110f50a45a0`
 - Follow-up correction work is included in the subsequent implementation
-  commit documented in the Task 5 report.
+  commit `59fc37128` (`fix(maintenance): enforce c2d-b source resolution`).
 - Changed test: `extensions/maintenance-api/tests/services/test_report_regeneration_lineage.py`
 - Added evidence: this document
 - `extensions/maintenance-api/tests/api/test_report_center_regenerate_api.py`: unchanged
