@@ -150,11 +150,7 @@ def _public_metadata_value(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        return (
-            _OMITTED_METADATA_VALUE
-            if _is_path_like(value)
-            else value
-        )
+        return _public_string_value(value)
     if isinstance(value, list):
         return [
             projected
@@ -209,11 +205,7 @@ def _contains_compact_jwt(value: str) -> bool:
     return False
 
 
-def _public_section_scalar(value: Any) -> Any:
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if not isinstance(value, str):
-        return _OMITTED_METADATA_VALUE
+def _public_string_value(value: str) -> str | object:
     normalized = value.casefold()
     if (
         _is_path_like(value)
@@ -225,6 +217,14 @@ def _public_section_scalar(value: Any) -> Any:
     ):
         return _OMITTED_METADATA_VALUE
     return value
+
+
+def _public_section_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if not isinstance(value, str):
+        return _OMITTED_METADATA_VALUE
+    return _public_string_value(value)
 
 
 def _public_table_cells(value: Any) -> list[Any]:

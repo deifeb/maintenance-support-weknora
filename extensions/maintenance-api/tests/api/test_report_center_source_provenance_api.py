@@ -78,9 +78,11 @@ def test_report_detail_exposes_only_public_source_projection(
             },
             "source_path": "C:/metadata-path-must-not-leak",
             "display": {
-                "label": "Safe nested label",
+                "label": _COMPACT_JWT,
+                "safe_label": "Safe nested label",
                 "provider_token": "nested-token-must-not-leak",
             },
+            "safe_tags": ["Safe tag", _COMPACT_JWT],
             "_section_tables": {
                 "summary": [
                     {
@@ -231,7 +233,8 @@ def test_report_detail_exposes_only_public_source_projection(
     detail = response.json()["data"]
     assert detail["metadata"] == {
         "purpose": "Safe purpose",
-        "display": {"label": "Safe nested label"},
+        "display": {"safe_label": "Safe nested label"},
+        "safe_tags": ["Safe tag"],
     }
     assert detail["citations"] == [
         {
@@ -281,6 +284,7 @@ def test_report_detail_exposes_only_public_source_projection(
     }
     for output in exports.values():
         assert "Safe purpose" in output
+        assert "Safe tag" in output
         assert "Safe evidence" in output
         assert "Part" in output
         assert "Widget" in output
