@@ -599,6 +599,8 @@ class AIReportRepository:
         tenant_id: str,
         report_version_id: int,
         records: Sequence[ReportSourceRecord],
+        *,
+        ordinals: Sequence[int] | None = None,
     ) -> list[AIReportSourceRef]:
         _require_owned(
             session,
@@ -607,6 +609,14 @@ class AIReportRepository:
             report_version_id,
         )
         records = tuple(records)
+        if ordinals is None:
+            ordinals = tuple(range(len(records)))
+        else:
+            ordinals = tuple(ordinals)
+            if len(ordinals) != len(records):
+                raise ValueError(
+                    "report source reference ordinals must match records"
+                )
         record_keys = {
             (
                 record.source_type,
@@ -645,7 +655,7 @@ class AIReportRepository:
                 source_digest=record.source_digest,
                 ordinal=ordinal,
             )
-            for ordinal, record in enumerate(records)
+            for record, ordinal in zip(records, ordinals, strict=True)
         ]
         session.add_all(rows)
         session.flush()

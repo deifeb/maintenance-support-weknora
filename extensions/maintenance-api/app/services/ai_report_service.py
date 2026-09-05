@@ -44,7 +44,10 @@ from app.security.actor import ActorContext
 from app.services.ai_report_validation_service import (
     ai_report_validation_service,
 )
-from app.services.report_source_policy import build_source_records
+from app.services.report_source_policy import (
+    ReportSourceRecord,
+    build_source_records,
+)
 from app.services.report_source_service import ResolvedReportSources
 from app.services.report_template_registry import get_template
 from app.services.report_version_provenance import (
@@ -499,6 +502,30 @@ class AIReportService:
             scenario_version_id=parent.scenario_version_id,
             calculation_run_id=parent.calculation_run_id,
             review_run_id=parent.review_run_id,
+        )
+        parent_refs = self.repository.list_source_refs(
+            session,
+            actor.tenant_id,
+            parent.id,
+        )
+        self.repository.create_source_refs(
+            session,
+            actor.tenant_id,
+            child.id,
+            tuple(
+                ReportSourceRecord(
+                    source_type=row.source_type,
+                    source_id=row.source_id,
+                    source_version=row.source_version,
+                    source_lineage_id=row.source_lineage_id,
+                    source_digest=row.source_digest,
+                    evidence=copy.deepcopy(
+                        getattr(row, "evidence_json", {})
+                    ),
+                )
+                for row in parent_refs
+            ),
+            ordinals=tuple(row.ordinal for row in parent_refs),
         )
 
         session.commit()

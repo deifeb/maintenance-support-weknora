@@ -17,6 +17,8 @@ from app.models.enums import (
     AIReportVersionStatus,
     AISeverity,
 )
+from app.repositories.ai_report_repository import ai_report_repository
+from app.repositories.ai_session_repository import AISessionRepository
 from app.schemas.ai_report import AIReportCreateRequest
 from app.security.actor import MaintenanceRole
 from app.services.ai_report_service import ai_report_service
@@ -208,6 +210,51 @@ def test_regeneration_does_not_resolve_current_source_after_c2d_b(
     child = ai_report_service.regenerate(session, actor, job.id)
 
     assert child.parent_version_id == seeded_report.id
+
+
+def test_regeneration_copies_persisted_source_ref_to_child_version(
+    session,
+    actor_context,
+) -> None:
+    actor = _actor(actor_context)
+    source = AISessionRepository().create_session(
+        session,
+        actor.tenant_id,
+        title="C2D-C lineage source",
+        sensitivity_level="INTERNAL",
+        created_by=actor.user_id,
+    )
+    job = ai_report_service.create(
+        session,
+        actor,
+        AIReportCreateRequest(
+            title="C2D-C source-ref lineage",
+            report_type="MANAGEMENT_DECISION",
+            session_id=source.id,
+        ),
+    )
+    parent = ai_report_service.generate(session, actor, job.id)
+    parent_refs = ai_report_repository.list_source_refs(
+        session,
+        actor.tenant_id,
+        parent.id,
+    )
+
+    child = ai_report_service.regenerate(session, actor, job.id)
+    child_refs = ai_report_repository.list_source_refs(
+        session,
+        actor.tenant_id,
+        child.id,
+    )
+
+    assert [ref.report_version_id for ref in child_refs] == [child.id]
+    assert [
+        (ref.source_type, ref.source_id, ref.source_version, ref.ordinal)
+        for ref in child_refs
+    ] == [
+        (ref.source_type, ref.source_id, ref.source_version, ref.ordinal)
+        for ref in parent_refs
+    ]
 
 
 def test_regenerate_builds_linear_parent_chain(
