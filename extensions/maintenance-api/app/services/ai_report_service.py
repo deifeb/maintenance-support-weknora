@@ -84,6 +84,24 @@ _SENSITIVE_METADATA_KEY_PARTS = (
     "directory",
     "file_path",
 )
+_SENSITIVE_SECTION_STRING_PARTS = (
+    "tenant",
+    "jwt",
+    "token",
+    "credential",
+    "secret",
+    "password",
+    "passwd",
+    "authorization",
+    "bearer",
+    "api_key",
+    "apikey",
+    "access_key",
+    "private_key",
+    "client_secret",
+    "database_record",
+    "source_snapshot",
+)
 _OMITTED_METADATA_VALUE = object()
 
 
@@ -163,10 +181,17 @@ def _public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_section_scalar(value: Any) -> Any:
-    projected = _public_metadata_value(value)
-    if isinstance(projected, (dict, list)):
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if not isinstance(value, str):
         return _OMITTED_METADATA_VALUE
-    return projected
+    normalized = value.casefold()
+    if _is_path_like(value) or any(
+        part in normalized
+        for part in _SENSITIVE_SECTION_STRING_PARTS
+    ):
+        return _OMITTED_METADATA_VALUE
+    return value
 
 
 def _public_table_cells(value: Any) -> list[Any]:
@@ -174,13 +199,12 @@ def _public_table_cells(value: Any) -> list[Any]:
         return []
     return [
         ""
-        if projected is _OMITTED_METADATA_VALUE
+        if (
+            projected := _public_section_scalar(item)
+        )
+        is _OMITTED_METADATA_VALUE
         else projected
         for item in value
-        if not isinstance(
-            projected := _public_section_scalar(item),
-            (dict, list),
-        )
     ]
 
 

@@ -79,8 +79,20 @@ def test_report_detail_exposes_only_public_source_projection(
                 "summary": [
                     {
                         "title": "Safe table",
-                        "columns": ["Part", "Quantity"],
-                        "rows": [["Widget", 3]],
+                        "columns": [
+                            "Part",
+                            "tenant-id-column-must-not-leak",
+                            "jwt-column-must-not-leak",
+                            "Quantity",
+                        ],
+                        "rows": [
+                            [
+                                "Widget",
+                                "provider-credential-cell-must-not-leak",
+                                "secret-cell-must-not-leak",
+                                3,
+                            ]
+                        ],
                         "tenant_id": "table-tenant-must-not-leak",
                         "internal_metadata": {
                             "provider_token": "table-token-must-not-leak"
@@ -100,6 +112,10 @@ def test_report_detail_exposes_only_public_source_projection(
             "_section_citations": {
                 "summary": [
                     "E-SAFE",
+                    "tenant-id-section-citation-must-not-leak",
+                    "jwt-section-citation-must-not-leak",
+                    "provider-credential-section-citation-must-not-leak",
+                    "secret-section-citation-must-not-leak",
                     {
                         "provider_token": "section-citation-token-must-not-leak"
                     },
@@ -182,6 +198,14 @@ def test_report_detail_exposes_only_public_source_projection(
         "table-snapshot-must-not-leak",
         "table-record-must-not-leak",
         "section-citation-token-must-not-leak",
+        "tenant-id-column-must-not-leak",
+        "jwt-column-must-not-leak",
+        "provider-credential-cell-must-not-leak",
+        "secret-cell-must-not-leak",
+        "tenant-id-section-citation-must-not-leak",
+        "jwt-section-citation-must-not-leak",
+        "provider-credential-section-citation-must-not-leak",
+        "secret-section-citation-must-not-leak",
     ):
         assert unsafe not in body
     assert response.json()["data"]["source_versions"] == {
@@ -223,8 +247,8 @@ def test_report_detail_exposes_only_public_source_projection(
             "tables": [
                 {
                     "title": "Safe table",
-                    "columns": ["Part", "Quantity"],
-                    "rows": [["Widget", 3]],
+                    "columns": ["Part", "", "", "Quantity"],
+                    "rows": [["Widget", "", "", 3]],
                 }
             ],
         }
@@ -269,6 +293,14 @@ def test_report_detail_exposes_only_public_source_projection(
             "table-snapshot-must-not-leak",
             "table-record-must-not-leak",
             "section-citation-token-must-not-leak",
+            "tenant-id-column-must-not-leak",
+            "jwt-column-must-not-leak",
+            "provider-credential-cell-must-not-leak",
+            "secret-cell-must-not-leak",
+            "tenant-id-section-citation-must-not-leak",
+            "jwt-section-citation-must-not-leak",
+            "provider-credential-section-citation-must-not-leak",
+            "secret-section-citation-must-not-leak",
         ):
             assert unsafe not in output
 
