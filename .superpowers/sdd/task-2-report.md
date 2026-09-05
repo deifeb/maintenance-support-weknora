@@ -80,3 +80,36 @@ git diff --check HEAD^ HEAD
 Complete result: `9 passed, 1 warning in 10.09s`; Ruff reported `All checks
 passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
 existing FastAPI/Starlette TestClient deprecation warning.
+
+## Third-Round Review Remediation: Sensitive Section Scalars
+
+The third review found that section title, column, cell, and citation strings
+still reused a metadata helper that only rejected path-like values. This could
+return tenant IDs, JWTs, tokens, credentials, or secrets when they appeared as
+otherwise allowed scalar values.
+
+Implementation commit: `de72a1703 fix(maintenance): redact sensitive section scalars`.
+
+- Section scalar values now use an independent strict rule: only primitive
+  values are accepted, and strings containing tenant, JWT, token, credential,
+  secret, password, authorization, bearer, API/access/private/client-key,
+  database-record, or source-snapshot markers (and path-like values) are
+  rejected.
+- Rejected table scalars become empty cells, preserving safe table shape
+  without returning the source value. Rejected section citation strings are
+  omitted.
+- The API regression injects sensitive scalar values into otherwise allowed
+  column names, table cells, and section citations, and verifies detail, JSON,
+  Markdown, and DOCX keep safe values but contain none of the probes.
+
+Fresh verification command:
+
+```powershell
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py tests/exporters/test_ai_report_exports.py tests/exporters/test_report_version_provenance_exports.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app/services/ai_report_service.py app/exporters/ai_report_json.py app/exporters/ai_report_markdown.py app/exporters/ai_report_docx.py tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py
+git diff --check HEAD^ HEAD
+```
+
+Complete result: `9 passed, 1 warning in 8.85s`; Ruff reported `All checks
+passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
+existing FastAPI/Starlette TestClient deprecation warning.
