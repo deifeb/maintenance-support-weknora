@@ -81,6 +81,36 @@ Complete result: `9 passed, 1 warning in 10.09s`; Ruff reported `All checks
 passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
 existing FastAPI/Starlette TestClient deprecation warning.
 
+## Fifth-Round Review Remediation: Ordinary Metadata Scalars
+
+The fifth review found that ordinary metadata strings still used a path-only
+projection, allowing a compact JWT below an otherwise safe nested key such as
+`display.label` to reach detail and every export.
+
+Implementation commit: `e86f125f7 fix(maintenance): redact sensitive report metadata values`.
+
+- Metadata and section serializers now share `_public_string_value()`, which
+  applies path, compact-JWT, and sensitive-marker checks in one place.
+- Mapping entries whose scalar is rejected are omitted. List elements whose
+  scalar is rejected are omitted; safe siblings remain present. Section tables
+  retain their existing blank-cell semantics to preserve table shape.
+- The API regression injects a compact JWT into a nested plain metadata label
+  and a sibling list with no sensitive key names. It verifies detail, JSON,
+  Markdown, and DOCX omit the JWT while retaining the safe nested label and
+  list element.
+
+Fresh verification command:
+
+```powershell
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py tests/exporters/test_ai_report_exports.py tests/exporters/test_report_version_provenance_exports.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app/services/ai_report_service.py app/exporters/ai_report_json.py app/exporters/ai_report_markdown.py app/exporters/ai_report_docx.py tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py
+git diff --check HEAD^ HEAD
+```
+
+Complete result: `9 passed, 1 warning in 8.87s`; Ruff reported `All checks
+passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
+existing FastAPI/Starlette TestClient deprecation warning.
+
 ## Fourth-Round Review Remediation: Compact JWT Values
 
 The fourth review found that a standard compact JWT has no `jwt` keyword and
