@@ -162,6 +162,88 @@ def _public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_section_scalar(value: Any) -> Any:
+    projected = _public_metadata_value(value)
+    if isinstance(projected, (dict, list)):
+        return _OMITTED_METADATA_VALUE
+    return projected
+
+
+def _public_table_cells(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    return [
+        ""
+        if projected is _OMITTED_METADATA_VALUE
+        else projected
+        for item in value
+        if not isinstance(
+            projected := _public_section_scalar(item),
+            (dict, list),
+        )
+    ]
+
+
+def _public_section_table(table: Any) -> dict[str, Any] | None:
+    if not isinstance(table, dict):
+        return None
+    projected: dict[str, Any] = {}
+    if "title" in table:
+        title = _public_section_scalar(table["title"])
+        if title is not _OMITTED_METADATA_VALUE:
+            projected["title"] = title
+    if "columns" in table:
+        projected["columns"] = _public_table_cells(
+            table["columns"]
+        )
+    if "rows" in table and isinstance(table["rows"], list):
+        projected["rows"] = [
+            _public_table_cells(row)
+            for row in table["rows"]
+            if isinstance(row, list)
+        ]
+    return projected or None
+
+
+def _public_section_tables(
+    section_tables: Any,
+    section_code: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(section_tables, dict):
+        return []
+    tables = section_tables.get(section_code)
+    if not isinstance(tables, list):
+        return []
+    return [
+        table
+        for item in tables
+        if (
+            table := _public_section_table(item)
+        )
+        is not None
+    ]
+
+
+def _public_section_citations(
+    section_citations: Any,
+    section_code: str,
+) -> list[str]:
+    if not isinstance(section_citations, dict):
+        return []
+    citations = section_citations.get(section_code)
+    if not isinstance(citations, list):
+        return []
+    return [
+        citation
+        for value in citations
+        if isinstance(value, str)
+        and isinstance(
+            citation := _public_section_scalar(value),
+            str,
+        )
+    ]
+
+
 def _public_citation(citation: Any) -> dict[str, Any]:
     return {
         field: getattr(citation, field)
@@ -812,17 +894,13 @@ class AIReportService:
                 "title": row.title,
                 "content": row.content,
                 "source_type": row.source_type,
-                "citations": list(
-                    section_citations.get(
-                        row.section_code,
-                        [],
-                    )
+                "citations": _public_section_citations(
+                    section_citations,
+                    row.section_code,
                 ),
-                "tables": list(
-                    section_tables.get(
-                        row.section_code,
-                        [],
-                    )
+                "tables": _public_section_tables(
+                    section_tables,
+                    row.section_code,
                 ),
             }
             for row in self.repository.list_sections(

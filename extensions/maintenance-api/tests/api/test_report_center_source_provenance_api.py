@@ -4,7 +4,12 @@ from collections.abc import Callable
 from io import BytesIO
 from types import SimpleNamespace
 
-from app.models import AIReportCitation, AIReportJob, AIReportVersion
+from app.models import (
+    AIReportCitation,
+    AIReportJob,
+    AIReportSection,
+    AIReportVersion,
+)
 from app.models.enums import (
     AIReportJobStatus,
     AIReportType,
@@ -70,6 +75,36 @@ def test_report_detail_exposes_only_public_source_projection(
                 "label": "Safe nested label",
                 "provider_token": "nested-token-must-not-leak",
             },
+            "_section_tables": {
+                "summary": [
+                    {
+                        "title": "Safe table",
+                        "columns": ["Part", "Quantity"],
+                        "rows": [["Widget", 3]],
+                        "tenant_id": "table-tenant-must-not-leak",
+                        "internal_metadata": {
+                            "provider_token": "table-token-must-not-leak"
+                        },
+                        "evidence": {
+                            "credential": "table-credential-must-not-leak"
+                        },
+                        "source_snapshot_json": {
+                            "tenant_id": "table-snapshot-must-not-leak"
+                        },
+                        "database_record_json": {
+                            "token": "table-record-must-not-leak"
+                        },
+                    }
+                ]
+            },
+            "_section_citations": {
+                "summary": [
+                    "E-SAFE",
+                    {
+                        "provider_token": "section-citation-token-must-not-leak"
+                    },
+                ]
+            },
         },
         source_snapshot_json={
             "schema_version": "1.1",
@@ -93,6 +128,17 @@ def test_report_detail_exposes_only_public_source_projection(
     )
     session.add(version)
     session.flush()
+    session.add(
+        AIReportSection(
+            tenant_id=job.tenant_id,
+            report_version_id=version.id,
+            section_code="summary",
+            title="Safe section",
+            order_index=0,
+            content="Safe section content",
+            source_type="DETERMINISTIC",
+        )
+    )
     session.add(
         AIReportCitation(
             tenant_id=job.tenant_id,
@@ -130,6 +176,12 @@ def test_report_detail_exposes_only_public_source_projection(
         "citation-token-must-not-leak",
         "citation-tenant-must-not-leak",
         "database_record_json",
+        "table-tenant-must-not-leak",
+        "table-token-must-not-leak",
+        "table-credential-must-not-leak",
+        "table-snapshot-must-not-leak",
+        "table-record-must-not-leak",
+        "section-citation-token-must-not-leak",
     ):
         assert unsafe not in body
     assert response.json()["data"]["source_versions"] == {
@@ -161,6 +213,22 @@ def test_report_detail_exposes_only_public_source_projection(
             "knowledge_node": None,
         }
     ]
+    assert detail["sections"] == [
+        {
+            "section_code": "summary",
+            "title": "Safe section",
+            "content": "Safe section content",
+            "source_type": "DETERMINISTIC",
+            "citations": ["E-SAFE"],
+            "tables": [
+                {
+                    "title": "Safe table",
+                    "columns": ["Part", "Quantity"],
+                    "rows": [["Widget", 3]],
+                }
+            ],
+        }
+    ]
     monkeypatch.setattr(
         "app.services.ai_report_service.get_settings",
         lambda: SimpleNamespace(ai_report_export_dir=str(tmp_path)),
@@ -184,6 +252,9 @@ def test_report_detail_exposes_only_public_source_projection(
     for output in exports.values():
         assert "Safe purpose" in output
         assert "Safe evidence" in output
+        assert "Safe table" in output
+        assert "Widget" in output
+        assert "E-SAFE" in output
         for unsafe in (
             "metadata-tenant-must-not-leak",
             "metadata-token-must-not-leak",
@@ -192,6 +263,12 @@ def test_report_detail_exposes_only_public_source_projection(
             "citation-token-must-not-leak",
             "citation-tenant-must-not-leak",
             "database_record_json",
+            "table-tenant-must-not-leak",
+            "table-token-must-not-leak",
+            "table-credential-must-not-leak",
+            "table-snapshot-must-not-leak",
+            "table-record-must-not-leak",
+            "section-citation-token-must-not-leak",
         ):
             assert unsafe not in output
 
