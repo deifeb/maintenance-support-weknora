@@ -71,3 +71,32 @@ automatic-supersede, or export-filename behavior changed.
 The only test warning is the existing third-party
 `StarletteDeprecationWarning`: `starlette.testclient` imports `httpx` and
 recommends `httpx2`. It is not emitted by repository application or test code.
+
+## Root-level POSIX path follow-up
+
+Final review found that the previous POSIX matcher missed a root-level
+single-file path when text followed it. The regression first failed with
+`Stored at /report.json (archived)` in ordinary `display.location_note`,
+`Before (/report.json) after` in section content, and
+`Before\n/report.json\nAfter` in a citation source name. These paths are not
+placed under a denylisted metadata key. The matcher now recognizes the POSIX
+path at its non-alphanumeric boundary and all three values are omitted from
+detail, JSON, Markdown, and DOCX while normal safe sibling values remain.
+
+Test-first and final verification commands:
+
+```powershell
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/services/test_report_regeneration_source_refs.py tests/exporters/test_ai_report_source_provenance.py tests/api/test_report_center_source_provenance_api.py tests/services/test_report_regeneration_lineage.py tests/api/test_report_center_regenerate_api.py tests/api/test_report_center_lifecycle_api.py tests/api/test_report_center_facade_api.py tests/api/test_report_center_api.py tests/services/test_ai_report_service.py tests/exporters/test_ai_report_exports.py tests/migrations -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app tests
+git diff --check 1b6a25e32..HEAD
+```
+
+Results: initial focused run `1 failed, 1 passed, 1 warning` as expected;
+fixed focused run `2 passed, 1 warning`; complete matrix `123 passed, 1
+warning in 348.99s`; Ruff passed; whitespace check emitted no output.
+
+Implementation commit:
+
+- `dcc0588c335408a7bb0bddfdd6db35ae58382154`
+  `fix(maintenance): close root posix provenance leak`
