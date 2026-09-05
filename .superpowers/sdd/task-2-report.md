@@ -51,3 +51,32 @@ metadata tenant/internal/nested-token, and path probes. The fresh focused
 verification completed with `9 passed, 1 warning`; Ruff and `git diff --check`
 passed. The warning remains the existing FastAPI/Starlette TestClient
 deprecation warning.
+
+## Second-Round Review Remediation: Section Payloads
+
+The second review found that `_section_tables` and `_section_citations` were
+read from private metadata and copied directly into serialized sections. This
+bypassed the metadata projection and could expose nested tenant, internal,
+token, evidence, snapshot, or database-record values.
+
+Implementation commit: `de10c8017 fix(maintenance): sanitize report section exports`.
+
+- Section tables now project only `title`, `columns`, and `rows`; unsupported,
+  nested, path-like, and sensitive values are omitted or safely blanked.
+- Section citations now project only non-path string citation IDs.
+- The API regression seeds a section table with nested tenant/internal/token,
+  evidence/credential, source-snapshot, and database-record probes plus an
+  unsafe structured section citation. It verifies detail, JSON, Markdown, and
+  DOCX retain safe table/citation content and expose none of those probes.
+
+Fresh verification command:
+
+```powershell
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py tests/exporters/test_ai_report_exports.py tests/exporters/test_report_version_provenance_exports.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app/services/ai_report_service.py app/exporters/ai_report_json.py app/exporters/ai_report_markdown.py app/exporters/ai_report_docx.py tests/api/test_report_center_source_provenance_api.py tests/exporters/test_ai_report_source_provenance.py
+git diff --check HEAD^ HEAD
+```
+
+Complete result: `9 passed, 1 warning in 10.09s`; Ruff reported `All checks
+passed!`; `git diff --check HEAD^ HEAD` had no output. The one warning is the
+existing FastAPI/Starlette TestClient deprecation warning.
