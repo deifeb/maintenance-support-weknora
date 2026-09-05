@@ -59,6 +59,32 @@ from app.services.report_version_provenance import (
 )
 
 _DEFAULT_SECTION_CONTENT = "本章节由确定性报告骨架生成，尚无补充内容。"
+_PUBLIC_CITATION_FIELDS = (
+    "citation_id",
+    "source_type",
+    "source_name",
+    "document_version",
+    "page_number",
+    "chunk_reference",
+    "knowledge_node",
+)
+_SENSITIVE_METADATA_KEY_PARTS = (
+    "tenant",
+    "internal",
+    "credential",
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "api_key",
+    "apikey",
+    "jwt",
+    "evidence",
+    "path",
+    "directory",
+    "file_path",
+)
+_OMITTED_METADATA_VALUE = object()
 
 
 def _digest(value: Any) -> str:
@@ -69,6 +95,78 @@ def _digest(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _is_sensitive_metadata_key(key: Any) -> bool:
+    if not isinstance(key, str) or key.startswith("_"):
+        return True
+    normalized = key.lower()
+    return any(
+        part in normalized
+        for part in _SENSITIVE_METADATA_KEY_PARTS
+    )
+
+
+def _is_path_like(value: str) -> bool:
+    normalized = value.strip()
+    return (
+        normalized.startswith(("/", "\\\\", "file://"))
+        or (
+            len(normalized) >= 3
+            and normalized[1] == ":"
+            and normalized[2] in ("/", "\\")
+        )
+    )
+
+
+def _public_metadata_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return (
+            _OMITTED_METADATA_VALUE
+            if _is_path_like(value)
+            else value
+        )
+    if isinstance(value, list):
+        return [
+            projected
+            for item in value
+            if (
+                projected := _public_metadata_value(item)
+            )
+            is not _OMITTED_METADATA_VALUE
+        ]
+    if isinstance(value, dict):
+        return {
+            key: projected
+            for key, item in value.items()
+            if not _is_sensitive_metadata_key(key)
+            and (
+                projected := _public_metadata_value(item)
+            )
+            is not _OMITTED_METADATA_VALUE
+        }
+    return _OMITTED_METADATA_VALUE
+
+
+def _public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: projected
+        for key, value in metadata.items()
+        if not _is_sensitive_metadata_key(key)
+        and (
+            projected := _public_metadata_value(value)
+        )
+        is not _OMITTED_METADATA_VALUE
+    }
+
+
+def _public_citation(citation: Any) -> dict[str, Any]:
+    return {
+        field: getattr(citation, field)
+        for field in _PUBLIC_CITATION_FIELDS
+    }
 
 
 class AIReportService:
@@ -707,7 +805,7 @@ class AIReportService:
             "_section_citations",
             {},
         )
-        public_metadata = {key: value for key, value in metadata.items() if not key.startswith("_")}
+        public_metadata = _public_metadata(metadata)
         sections = [
             {
                 "section_code": row.section_code,
@@ -734,16 +832,7 @@ class AIReportService:
             )
         ]
         citations = [
-            {
-                "citation_id": row.citation_id,
-                "source_type": row.source_type,
-                "source_name": row.source_name,
-                "document_version": row.document_version,
-                "page_number": row.page_number,
-                "chunk_reference": row.chunk_reference,
-                "knowledge_node": row.knowledge_node,
-                "database_record_json": row.database_record_json,
-            }
+            _public_citation(row)
             for row in self.repository.list_citations(
                 session,
                 actor.tenant_id,
