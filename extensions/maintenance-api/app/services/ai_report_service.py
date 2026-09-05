@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -102,6 +104,13 @@ _SENSITIVE_SECTION_STRING_PARTS = (
     "database_record",
     "source_snapshot",
 )
+_COMPACT_JWT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_-])"
+    r"(?P<token>[A-Za-z0-9_-]+(?:={0,2})?\."
+    r"[A-Za-z0-9_-]+(?:={0,2})?\."
+    r"[A-Za-z0-9_-]+(?:={0,2})?)"
+    r"(?![A-Za-z0-9_-])"
+)
 _OMITTED_METADATA_VALUE = object()
 
 
@@ -180,15 +189,39 @@ def _public_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _contains_compact_jwt(value: str) -> bool:
+    for match in _COMPACT_JWT_PATTERN.finditer(value):
+        header_segment = match.group("token").split(".", 1)[0]
+        padding = "=" * (-len(header_segment) % 4)
+        try:
+            header = json.loads(
+                base64.urlsafe_b64decode(
+                    header_segment + padding
+                )
+            )
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if (
+            isinstance(header, dict)
+            and isinstance(header.get("alg"), str)
+        ):
+            return True
+    return False
+
+
 def _public_section_scalar(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if not isinstance(value, str):
         return _OMITTED_METADATA_VALUE
     normalized = value.casefold()
-    if _is_path_like(value) or any(
-        part in normalized
-        for part in _SENSITIVE_SECTION_STRING_PARTS
+    if (
+        _is_path_like(value)
+        or _contains_compact_jwt(value)
+        or any(
+            part in normalized
+            for part in _SENSITIVE_SECTION_STRING_PARTS
+        )
     ):
         return _OMITTED_METADATA_VALUE
     return value

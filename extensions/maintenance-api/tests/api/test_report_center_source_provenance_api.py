@@ -20,6 +20,12 @@ from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+_COMPACT_JWT = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+    "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0."
+    "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+)
+
 
 def _viewer_headers(
     internal_auth_headers: Callable[..., dict[str, str]],
@@ -78,18 +84,18 @@ def test_report_detail_exposes_only_public_source_projection(
             "_section_tables": {
                 "summary": [
                     {
-                        "title": "Safe table",
+                        "title": _COMPACT_JWT,
                         "columns": [
                             "Part",
                             "tenant-id-column-must-not-leak",
-                            "jwt-column-must-not-leak",
+                            _COMPACT_JWT,
                             "Quantity",
                         ],
                         "rows": [
                             [
                                 "Widget",
                                 "provider-credential-cell-must-not-leak",
-                                "secret-cell-must-not-leak",
+                                _COMPACT_JWT,
                                 3,
                             ]
                         ],
@@ -113,7 +119,7 @@ def test_report_detail_exposes_only_public_source_projection(
                 "summary": [
                     "E-SAFE",
                     "tenant-id-section-citation-must-not-leak",
-                    "jwt-section-citation-must-not-leak",
+                    _COMPACT_JWT,
                     "provider-credential-section-citation-must-not-leak",
                     "secret-section-citation-must-not-leak",
                     {
@@ -206,6 +212,7 @@ def test_report_detail_exposes_only_public_source_projection(
         "jwt-section-citation-must-not-leak",
         "provider-credential-section-citation-must-not-leak",
         "secret-section-citation-must-not-leak",
+        _COMPACT_JWT,
     ):
         assert unsafe not in body
     assert response.json()["data"]["source_versions"] == {
@@ -246,7 +253,6 @@ def test_report_detail_exposes_only_public_source_projection(
             "citations": ["E-SAFE"],
             "tables": [
                 {
-                    "title": "Safe table",
                     "columns": ["Part", "", "", "Quantity"],
                     "rows": [["Widget", "", "", 3]],
                 }
@@ -276,7 +282,7 @@ def test_report_detail_exposes_only_public_source_projection(
     for output in exports.values():
         assert "Safe purpose" in output
         assert "Safe evidence" in output
-        assert "Safe table" in output
+        assert "Part" in output
         assert "Widget" in output
         assert "E-SAFE" in output
         for unsafe in (
@@ -301,6 +307,7 @@ def test_report_detail_exposes_only_public_source_projection(
             "jwt-section-citation-must-not-leak",
             "provider-credential-section-citation-must-not-leak",
             "secret-section-citation-must-not-leak",
+            _COMPACT_JWT,
         ):
             assert unsafe not in output
 
