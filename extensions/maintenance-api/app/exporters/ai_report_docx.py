@@ -45,6 +45,26 @@ def _format_source_versions(report: dict[str, Any]) -> str:
     capture_mode = source_versions.get("capture_mode")
     if capture_mode not in (None, ""):
         parts.append(f"capture_mode={capture_mode}")
+    completeness = source_versions.get("provenance_completeness")
+    if completeness not in (None, ""):
+        parts.append(f"provenance_completeness={completeness}")
+
+    authoritative_sources = source_versions.get("sources")
+    if isinstance(authoritative_sources, list):
+        for source in authoritative_sources:
+            if not isinstance(source, dict):
+                continue
+            source_type = source.get("type")
+            if source_type in (None, ""):
+                continue
+            entry = _format_source_entry(
+                str(source_type),
+                source,
+                ("id", "version", "lineage_id", "digest"),
+            )
+            if entry:
+                parts.append(entry)
+        return "; ".join(parts) or "Unavailable"
 
     definitions = (
         ("session", ("id", "version")),
