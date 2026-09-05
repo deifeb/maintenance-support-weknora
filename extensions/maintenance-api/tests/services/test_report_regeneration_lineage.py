@@ -186,6 +186,30 @@ def test_regenerate_appends_version_on_same_job(
     assert v2.id != v1.id
 
 
+def test_regeneration_does_not_resolve_current_source_after_c2d_b(
+    session,
+    actor_context,
+    monkeypatch,
+) -> None:
+    actor = _actor(actor_context)
+    job = _create_job(session, actor)
+    seeded_report = ai_report_service.generate(
+        session,
+        actor,
+        job.id,
+    )
+
+    monkeypatch.setattr(
+        "app.services.report_source_service.ReportSourceService.resolve_for_create",
+        lambda *args, **kwargs: pytest.fail(
+            "regeneration must not resolve current sources"
+        ),
+    )
+    child = ai_report_service.regenerate(session, actor, job.id)
+
+    assert child.parent_version_id == seeded_report.id
+
+
 def test_regenerate_builds_linear_parent_chain(
     session,
     actor_context,
