@@ -10,7 +10,7 @@ from app.models import (
     DemandCalculationRun,
     DemandScenarioVersion,
 )
-from app.models.enums import AIReportSourceType
+from app.models.enums import AIReportSourceType, AIReportType
 from app.services.report_version_provenance import source_snapshot_digest
 
 
@@ -22,6 +22,63 @@ class ReportSourceRecord:
     source_lineage_id: str | None
     source_digest: str | None
     evidence: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ReportSourcePolicy:
+    required: tuple[AIReportSourceType, ...]
+    optional: tuple[AIReportSourceType, ...]
+
+    @property
+    def order(self) -> tuple[AIReportSourceType, ...]:
+        return self.required + self.optional
+
+    @property
+    def allowed(self) -> frozenset[AIReportSourceType]:
+        return frozenset(self.order)
+
+
+_ALL_SOURCE_TYPES = tuple(AIReportSourceType)
+
+
+REPORT_SOURCE_POLICIES: dict[AIReportType, ReportSourcePolicy] = {
+    AIReportType.DEMAND_CALCULATION: ReportSourcePolicy(
+        required=(AIReportSourceType.CALCULATION_RUN,),
+        optional=(AIReportSourceType.SCENARIO_VERSION,),
+    ),
+    AIReportType.MODEL_COMPARISON: ReportSourcePolicy(
+        required=(AIReportSourceType.CALCULATION_GROUP,),
+        optional=(),
+    ),
+    AIReportType.DEMAND_REVIEW: ReportSourcePolicy(
+        required=(AIReportSourceType.DEMAND_REVIEW,),
+        optional=(AIReportSourceType.DEMAND_LIST,),
+    ),
+    AIReportType.INVENTORY_GAP: ReportSourcePolicy(
+        required=(AIReportSourceType.DEMAND_LIST,),
+        optional=(AIReportSourceType.ALLOCATION_PLAN,),
+    ),
+    AIReportType.ALLOCATION_PLAN: ReportSourcePolicy(
+        required=(AIReportSourceType.ALLOCATION_PLAN,),
+        optional=(),
+    ),
+    AIReportType.STOCKTAKE: ReportSourcePolicy(
+        required=(AIReportSourceType.INVENTORY_STOCKTAKE,),
+        optional=(),
+    ),
+    AIReportType.SPARE_PART_RISK: ReportSourcePolicy(
+        required=(AIReportSourceType.DEMAND_LIST,),
+        optional=(AIReportSourceType.DEMAND_REVIEW,),
+    ),
+    AIReportType.MANAGEMENT_DECISION: ReportSourcePolicy(
+        required=(),
+        optional=_ALL_SOURCE_TYPES,
+    ),
+}
+
+
+def get_report_source_policy(report_type: AIReportType | str) -> ReportSourcePolicy:
+    return REPORT_SOURCE_POLICIES[AIReportType(report_type)]
 
 
 def build_source_records(

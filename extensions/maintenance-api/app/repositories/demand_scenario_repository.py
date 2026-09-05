@@ -49,6 +49,22 @@ class DemandScenarioVersionRepository(
     def __init__(self) -> None:
         super().__init__(DemandScenarioVersion)
 
+    def get(
+        self,
+        session: Session,
+        tenant_id: str,
+        source_id: int,
+    ) -> DemandScenarioVersion | None:
+        return session.scalar(
+            select(DemandScenarioVersion)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                DemandScenarioVersion.tenant_id == tenant_id,
+                DemandScenarioVersion.id == source_id,
+            )
+        )
+
     def get_by_business_key(
         self,
         session: Session,

@@ -17,6 +17,14 @@ from app.services.snapshot_service import snapshot_service
 
 
 class AllocationRepository:
+    def get(
+        self,
+        session: Session,
+        tenant_id: str,
+        source_id: int,
+    ) -> AllocationPlan | None:
+        return self.get_plan(session, tenant_id, source_id)
+
     def get_rule(
         self,
         session: Session,

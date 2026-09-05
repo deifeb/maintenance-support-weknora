@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,8 @@ from app.schemas.ai_report import AIReportCreateRequest
 from app.security.actor import MaintenanceRole
 from app.services.ai_report_service import ai_report_service
 from app.services.report_source_policy import ReportSourceRecord, build_source_records
+from app.services.report_source_service import ResolvedReportSources
+from sqlalchemy import event
 
 
 def test_current_report_sources_become_stable_ordered_records() -> None:
@@ -140,6 +143,152 @@ def test_create_persists_source_refs_with_the_snapshot(
         version.source_snapshot_json["provenance_completeness"]
         == "AUTHORITATIVE"
     )
+
+
+def test_create_uses_pre_resolved_sources_without_another_business_read(
+    session,
+    actor_context,
+    monkeypatch,
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="author",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    evidence = {"id": 71, "version_number": 4, "status": "PUBLISHED"}
+    record = ReportSourceRecord(
+        source_type=AIReportSourceType.DEMAND_LIST,
+        source_id="71",
+        source_version="4",
+        source_lineage_id="lineage-71",
+        source_digest="c" * 64,
+        evidence=evidence,
+    )
+    resolved = ResolvedReportSources(
+        records=(record,),
+        session_id=None,
+        scenario_version_id=None,
+        calculation_run_id=None,
+        review_run_id=None,
+    )
+
+    def unexpected_read(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("resolved sources must not be read again")
+
+    monkeypatch.setattr(
+        ai_report_repository,
+        "load_create_sources_owned",
+        unexpected_read,
+    )
+    job = ai_report_service.create(
+        session,
+        actor,
+        AIReportCreateRequest(title="Resolved source report"),
+        resolved_sources=resolved,
+    )
+    version = ai_report_service.latest_version(session, actor, job.id)
+    refs = ai_report_repository.list_source_refs(
+        session,
+        actor.tenant_id,
+        version.id,
+    )
+
+    assert version.source_snapshot_json["sources"][0]["evidence"] == evidence
+    assert [(ref.source_type, ref.source_id) for ref in refs] == [
+        (AIReportSourceType.DEMAND_LIST, "71")
+    ]
+
+
+def test_create_converts_resolved_inventory_snapshot_timestamp(
+    session,
+    actor_context,
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="author",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    record = ReportSourceRecord(
+        source_type=AIReportSourceType.CALCULATION_RUN,
+        source_id="81",
+        source_version="2",
+        source_lineage_id=None,
+        source_digest="d" * 64,
+        evidence={
+            "id": 81,
+            "attempt_number": 2,
+            "inventory_snapshot_at": "2026-09-04T03:00:00+00:00",
+        },
+    )
+    resolved = ResolvedReportSources(
+        records=(record,),
+        session_id=None,
+        scenario_version_id=None,
+        calculation_run_id=None,
+        review_run_id=None,
+    )
+
+    job = ai_report_service.create(
+        session,
+        actor,
+        AIReportCreateRequest(title="Resolved calculation timestamp"),
+        resolved_sources=resolved,
+    )
+    version = ai_report_service.latest_version(session, actor, job.id)
+
+    assert version.inventory_snapshot_at.replace(tzinfo=timezone.utc) == datetime(
+        2026, 9, 4, 3, 0, tzinfo=timezone.utc
+    )
+
+
+def test_create_does_not_requery_pre_resolved_legacy_links(
+    session,
+    actor_context,
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="author",
+        role=MaintenanceRole.CONTRIBUTOR,
+    )
+    payload = _create_payload_with_owned_sources(session, actor)
+    resolved = ResolvedReportSources(
+        records=(
+            ReportSourceRecord(
+                source_type=AIReportSourceType.AI_SESSION,
+                source_id=str(payload.session_id),
+                source_version="1",
+                source_lineage_id=None,
+                source_digest="e" * 64,
+                evidence={"id": payload.session_id, "version": 1},
+            ),
+        ),
+        session_id=payload.session_id,
+        scenario_version_id=None,
+        calculation_run_id=None,
+        review_run_id=None,
+    )
+    source_selects: list[str] = []
+
+    def capture_source_selects(conn, cursor, statement, parameters, context, executemany):
+        del conn, cursor, parameters, context, executemany
+        normalized = statement.casefold()
+        if normalized.lstrip().startswith("select") and "ai_sessions" in normalized:
+            source_selects.append(statement)
+
+    event.listen(session.bind, "before_cursor_execute", capture_source_selects)
+    try:
+        job = ai_report_service.create(
+            session,
+            actor,
+            payload,
+            resolved_sources=resolved,
+        )
+    finally:
+        event.remove(session.bind, "before_cursor_execute", capture_source_selects)
+
+    assert job.session_id == payload.session_id
+    assert source_selects == []
 
 
 def test_source_ref_requires_tenant_scoped_version(

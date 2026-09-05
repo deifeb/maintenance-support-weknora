@@ -71,6 +71,25 @@ class DemandCalculationRunRepository(
     def __init__(self) -> None:
         super().__init__(DemandCalculationRun)
 
+    def get(
+        self,
+        session: Session,
+        tenant_id: str,
+        source_id: int,
+    ) -> DemandCalculationRun | None:
+        return session.scalar(
+            select(DemandCalculationRun)
+            .options(
+                tenant_loader_criteria(tenant_id),
+                selectinload(DemandCalculationRun.calculation),
+            )
+            .execution_options(populate_existing=True)
+            .where(
+                DemandCalculationRun.tenant_id == tenant_id,
+                DemandCalculationRun.id == source_id,
+            )
+        )
+
     def list_for_calculation(
         self,
         session: Session,

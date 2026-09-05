@@ -37,6 +37,7 @@ class CalculationGroupRepository(
                 ).selectinload(
                     CalculationGroupChild.calculation
                 ),
+                selectinload(CalculationGroup.decisions),
             )
             .execution_options(populate_existing=True)
             .where(

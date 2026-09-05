@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ from app.services.ai_report_validation_service import (
     ai_report_validation_service,
 )
 from app.services.report_source_policy import build_source_records
+from app.services.report_source_service import ResolvedReportSources
 from app.services.report_template_registry import get_template
 from app.services.report_version_provenance import (
     build_authoritative_source_snapshot,
@@ -79,45 +81,78 @@ class AIReportService:
         session: Session,
         actor: ActorContext,
         payload: AIReportCreateRequest,
+        resolved_sources: ResolvedReportSources | None = None,
     ) -> AIReportJob:
         template = get_template(payload.report_type)
         metadata = dict(payload.metadata)
         metadata["_draft_sections"] = [row.model_dump(mode="json") for row in payload.sections]
         metadata["_draft_citations"] = [row.model_dump(mode="json") for row in payload.citations]
         metadata.setdefault("allowed_numbers", [])
+        sources_are_pre_resolved = resolved_sources is not None
 
         try:
-            sources = self.repository.load_create_sources_owned(
-                session,
-                actor.tenant_id,
-                session_id=payload.session_id,
-                scenario_version_id=payload.scenario_version_id,
-                calculation_run_id=payload.calculation_run_id,
-                review_run_id=payload.review_run_id,
-            )
+            if resolved_sources is None:
+                sources = self.repository.load_create_sources_owned(
+                    session,
+                    actor.tenant_id,
+                    session_id=payload.session_id,
+                    scenario_version_id=payload.scenario_version_id,
+                    calculation_run_id=payload.calculation_run_id,
+                    review_run_id=payload.review_run_id,
+                )
+                source_records = build_source_records(
+                    ai_session=sources["session"],
+                    scenario_version=sources["scenario_version"],
+                    calculation_run=sources["calculation_run"],
+                    calculation=sources["calculation"],
+                    review_run=sources["review_run"],
+                )
+                session_id = payload.session_id
+                scenario_version_id = payload.scenario_version_id
+                calculation_run_id = payload.calculation_run_id
+                review_run_id = payload.review_run_id
+                calculation = sources["calculation"]
+                inventory_snapshot_at = (
+                    calculation.inventory_snapshot_at if calculation is not None else None
+                )
+            else:
+                source_records = resolved_sources.records
+                session_id = resolved_sources.session_id
+                scenario_version_id = resolved_sources.scenario_version_id
+                calculation_run_id = resolved_sources.calculation_run_id
+                review_run_id = resolved_sources.review_run_id
+                calculation_record = next(
+                    (
+                        record
+                        for record in source_records
+                        if record.source_type.value == "CALCULATION_RUN"
+                    ),
+                    None,
+                )
+                inventory_snapshot_at = (
+                    calculation_record.evidence.get("inventory_snapshot_at")
+                    if calculation_record is not None
+                    else None
+                )
+                if isinstance(inventory_snapshot_at, str):
+                    inventory_snapshot_at = datetime.fromisoformat(
+                        inventory_snapshot_at
+                    )
             job = self.repository.create_job(
                 session,
                 actor.tenant_id,
                 title=payload.title,
                 report_type=payload.report_type,
-                session_id=payload.session_id,
+                session_id=(None if sources_are_pre_resolved else session_id),
             )
-            source_records = build_source_records(
-                ai_session=sources["session"],
-                scenario_version=sources["scenario_version"],
-                calculation_run=sources["calculation_run"],
-                calculation=sources["calculation"],
-                review_run=sources["review_run"],
-            )
+            if sources_are_pre_resolved:
+                job.session_id = session_id
+                session.flush()
             source_snapshot = build_authoritative_source_snapshot(
                 report_type=payload.report_type,
                 template_version=template.version,
                 metadata=metadata,
                 source_records=source_records,
-            )
-            calculation = sources["calculation"]
-            inventory_snapshot_at = (
-                calculation.inventory_snapshot_at if calculation is not None else None
             )
             version = self.repository.create_version(
                 session,
@@ -130,10 +165,19 @@ class AIReportService:
                 input_digest=source_snapshot_digest(source_snapshot),
                 inventory_snapshot_at=inventory_snapshot_at,
                 created_by=actor.user_id,
-                scenario_version_id=payload.scenario_version_id,
-                calculation_run_id=payload.calculation_run_id,
-                review_run_id=payload.review_run_id,
+                scenario_version_id=(
+                    None if sources_are_pre_resolved else scenario_version_id
+                ),
+                calculation_run_id=(
+                    None if sources_are_pre_resolved else calculation_run_id
+                ),
+                review_run_id=(None if sources_are_pre_resolved else review_run_id),
             )
+            if sources_are_pre_resolved:
+                version.scenario_version_id = scenario_version_id
+                version.calculation_run_id = calculation_run_id
+                version.review_run_id = review_run_id
+                session.flush()
             self.repository.create_source_refs(
                 session,
                 actor.tenant_id,
