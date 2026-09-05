@@ -79,6 +79,7 @@ def test_report_detail_exposes_only_public_source_projection(
             "source_path": "C:/metadata-path-must-not-leak",
             "display": {
                 "label": _COMPACT_JWT,
+                "location_note": "Stored at /report.json (archived)",
                 "safe_label": "Safe nested label",
                 "provider_token": "nested-token-must-not-leak",
                 "source_snapshot_json": {
@@ -90,6 +91,10 @@ def test_report_detail_exposes_only_public_source_projection(
                 "safe_sibling": "Safe metadata sibling",
             },
             "safe_tags": ["Safe tag", _COMPACT_JWT],
+            "notes": [
+                "Before\n/report.json\nAfter",
+                "Safe root-level note",
+            ],
             "safe_nested_list": [
                 "Safe list sibling",
                 {
@@ -101,13 +106,6 @@ def test_report_detail_exposes_only_public_source_projection(
                     },
                     "safe_sibling": "Safe list mapping sibling",
                 },
-            ],
-            "embedded_paths": [
-                "Stored at C:/reports/report.json (archived)",
-                "Stored at /var/lib/reports/report.json (archived)",
-                "Stored at \\\\server\\share\\report.json (archived)",
-                "Stored at file:///var/lib/reports/report.json (archived)",
-                "Before (C:/reports/report.json) after\nnext line",
             ],
             "_section_tables": {
                 "summary": [
@@ -185,7 +183,7 @@ def test_report_detail_exposes_only_public_source_projection(
             section_code="summary",
             title="Safe section",
             order_index=0,
-            content="Safe section content",
+            content="Before (/report.json) after",
             source_type="DETERMINISTIC",
         )
     )
@@ -203,6 +201,15 @@ def test_report_detail_exposes_only_public_source_projection(
                 },
                 "tenant_id": "citation-tenant-must-not-leak",
             },
+        )
+    )
+    session.add(
+        AIReportCitation(
+            tenant_id=job.tenant_id,
+            report_version_id=version.id,
+            citation_id="E-ROOT-PATH",
+            source_type="WEKNORA_DOCUMENT",
+            source_name="Before\n/report.json\nAfter",
         )
     )
     session.add(
@@ -239,6 +246,9 @@ def test_report_detail_exposes_only_public_source_projection(
         "metadata-token-must-not-leak",
         "metadata-path-must-not-leak",
         "nested-token-must-not-leak",
+        "Stored at /report.json (archived)",
+        "Before (/report.json) after",
+        "Before\n/report.json\nAfter",
         "nested snapshot payload must not leak",
         "nested record payload must not leak",
         "list snapshot payload must not leak",
@@ -294,6 +304,7 @@ def test_report_detail_exposes_only_public_source_projection(
             "safe_sibling": "Safe metadata sibling",
         },
         "safe_tags": ["Safe tag"],
+        "notes": ["Safe root-level note"],
         "safe_nested_list": [
             "Safe list sibling",
             {"safe_sibling": "Safe list mapping sibling"},
@@ -306,6 +317,15 @@ def test_report_detail_exposes_only_public_source_projection(
             "source_name": None,
             "document_version": "2026.09",
             "page_number": 7,
+            "chunk_reference": None,
+            "knowledge_node": None,
+        },
+        {
+            "citation_id": "E-ROOT-PATH",
+            "source_type": "WEKNORA_DOCUMENT",
+            "source_name": None,
+            "document_version": None,
+            "page_number": None,
             "chunk_reference": None,
             "knowledge_node": None,
         },
@@ -323,7 +343,7 @@ def test_report_detail_exposes_only_public_source_projection(
         {
             "section_code": "summary",
             "title": "Safe section",
-            "content": "Safe section content",
+            "content": None,
             "source_type": "DETERMINISTIC",
             "citations": ["E-SAFE"],
             "tables": [
@@ -357,6 +377,7 @@ def test_report_detail_exposes_only_public_source_projection(
     for output in exports.values():
         assert "Safe purpose" in output
         assert "Safe tag" in output
+        assert "Safe root-level note" in output
         assert "Safe metadata sibling" in output
         assert "Safe list sibling" in output
         assert "Safe list mapping sibling" in output
@@ -369,6 +390,9 @@ def test_report_detail_exposes_only_public_source_projection(
             "metadata-token-must-not-leak",
             "metadata-path-must-not-leak",
             "nested-token-must-not-leak",
+            "Stored at /report.json (archived)",
+            "Before (/report.json) after",
+            "Before\n/report.json\nAfter",
             "nested snapshot payload must not leak",
             "nested record payload must not leak",
             "list snapshot payload must not leak",

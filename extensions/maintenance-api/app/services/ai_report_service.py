@@ -115,7 +115,7 @@ _COMPACT_JWT_PATTERN = re.compile(
 )
 _PATH_LIKE_PATTERN = re.compile(
     r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\r\n]+[\\/]|file://|"
-    r"(?<![A-Za-z0-9])/(?:[^\s/]+(?:/|$)))",
+    r"(?<![A-Za-z0-9])/(?:[^\s/]+(?:/[^\s/]+)*))",
     re.IGNORECASE,
 )
 _OMITTED_METADATA_VALUE = object()
