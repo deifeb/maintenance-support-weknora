@@ -81,8 +81,34 @@ def test_report_detail_exposes_only_public_source_projection(
                 "label": _COMPACT_JWT,
                 "safe_label": "Safe nested label",
                 "provider_token": "nested-token-must-not-leak",
+                "source_snapshot_json": {
+                    "ordinary_value": "nested snapshot payload must not leak"
+                },
+                "database_record_json": {
+                    "ordinary_value": "nested record payload must not leak"
+                },
+                "safe_sibling": "Safe metadata sibling",
             },
             "safe_tags": ["Safe tag", _COMPACT_JWT],
+            "safe_nested_list": [
+                "Safe list sibling",
+                {
+                    "source_snapshot_json": {
+                        "ordinary_value": "list snapshot payload must not leak"
+                    },
+                    "database_record_json": {
+                        "ordinary_value": "list record payload must not leak"
+                    },
+                    "safe_sibling": "Safe list mapping sibling",
+                },
+            ],
+            "embedded_paths": [
+                "Stored at C:/reports/report.json (archived)",
+                "Stored at /var/lib/reports/report.json (archived)",
+                "Stored at \\\\server\\share\\report.json (archived)",
+                "Stored at file:///var/lib/reports/report.json (archived)",
+                "Before (C:/reports/report.json) after\nnext line",
+            ],
             "_section_tables": {
                 "summary": [
                     {
@@ -213,6 +239,17 @@ def test_report_detail_exposes_only_public_source_projection(
         "metadata-token-must-not-leak",
         "metadata-path-must-not-leak",
         "nested-token-must-not-leak",
+        "nested snapshot payload must not leak",
+        "nested record payload must not leak",
+        "list snapshot payload must not leak",
+        "list record payload must not leak",
+        "source_snapshot_json",
+        "database_record_json",
+        "Stored at C:/reports/report.json (archived)",
+        "Stored at /var/lib/reports/report.json (archived)",
+        "Stored at \\\\server\\share\\report.json (archived)",
+        "Stored at file:///var/lib/reports/report.json (archived)",
+        "Before (C:/reports/report.json) after",
         "citation-token-must-not-leak",
         "citation-tenant-must-not-leak",
         "citation-path-must-not-leak",
@@ -252,8 +289,15 @@ def test_report_detail_exposes_only_public_source_projection(
     detail = response.json()["data"]
     assert detail["metadata"] == {
         "purpose": "Safe purpose",
-        "display": {"safe_label": "Safe nested label"},
+        "display": {
+            "safe_label": "Safe nested label",
+            "safe_sibling": "Safe metadata sibling",
+        },
         "safe_tags": ["Safe tag"],
+        "safe_nested_list": [
+            "Safe list sibling",
+            {"safe_sibling": "Safe list mapping sibling"},
+        ],
     }
     assert detail["citations"] == [
         {
@@ -313,6 +357,9 @@ def test_report_detail_exposes_only_public_source_projection(
     for output in exports.values():
         assert "Safe purpose" in output
         assert "Safe tag" in output
+        assert "Safe metadata sibling" in output
+        assert "Safe list sibling" in output
+        assert "Safe list mapping sibling" in output
         assert "Safe evidence" in output
         assert "Part" in output
         assert "Widget" in output
@@ -322,6 +369,17 @@ def test_report_detail_exposes_only_public_source_projection(
             "metadata-token-must-not-leak",
             "metadata-path-must-not-leak",
             "nested-token-must-not-leak",
+            "nested snapshot payload must not leak",
+            "nested record payload must not leak",
+            "list snapshot payload must not leak",
+            "list record payload must not leak",
+            "source_snapshot_json",
+            "database_record_json",
+            "Stored at C:/reports/report.json (archived)",
+            "Stored at /var/lib/reports/report.json (archived)",
+            "Stored at \\\\server\\share\\report.json (archived)",
+            "Stored at file:///var/lib/reports/report.json (archived)",
+            "Before (C:/reports/report.json) after",
             "citation-token-must-not-leak",
             "citation-tenant-must-not-leak",
             "citation-path-must-not-leak",

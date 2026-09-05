@@ -211,4 +211,3 @@ git commit -m "docs(maintenance): close c2d-c execution"
 - Task 2 uses the single fail-closed public projection in detail and every export.
 - Task 3 verifies C2B regeneration, C2C lifecycle, migration, export, lint, and whitespace gates.
 - No task adds frontend, recomputation, source-policy changes, lifecycle changes, source backfill, or C2D-C idempotency.
-

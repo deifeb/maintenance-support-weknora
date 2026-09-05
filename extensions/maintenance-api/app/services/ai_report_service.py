@@ -85,6 +85,8 @@ _SENSITIVE_METADATA_KEY_PARTS = (
     "path",
     "directory",
     "file_path",
+    "source_snapshot",
+    "database_record",
 )
 _SENSITIVE_SECTION_STRING_PARTS = (
     "tenant",
@@ -111,6 +113,11 @@ _COMPACT_JWT_PATTERN = re.compile(
     r"[A-Za-z0-9_-]+(?:={0,2})?)"
     r"(?![A-Za-z0-9_-])"
 )
+_PATH_LIKE_PATTERN = re.compile(
+    r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\r\n]+[\\/]|file://|"
+    r"(?<![A-Za-z0-9])/(?:[^\s/]+(?:/|$)))",
+    re.IGNORECASE,
+)
 _OMITTED_METADATA_VALUE = object()
 
 
@@ -135,15 +142,7 @@ def _is_sensitive_metadata_key(key: Any) -> bool:
 
 
 def _is_path_like(value: str) -> bool:
-    normalized = value.strip()
-    return (
-        normalized.startswith(("/", "\\\\", "file://"))
-        or (
-            len(normalized) >= 3
-            and normalized[1] == ":"
-            and normalized[2] in ("/", "\\")
-        )
-    )
+    return bool(_PATH_LIKE_PATTERN.search(value))
 
 
 def _public_metadata_value(value: Any) -> Any:
