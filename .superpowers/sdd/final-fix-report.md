@@ -1,129 +1,73 @@
-# C2D-A Final Fix Report
+# C2D-C Final Fix Report
 
-## Scope
+Date: 2026-09-05
 
-- `public_source_versions()` now accepts only Snapshot 1.0 and 1.1,
-  projects each through a schema-specific scalar-only allowlist, and fails
-  closed for malformed or unsupported snapshots.
-- New authoritative Snapshot 1.1 records include
-  `provenance_completeness: "AUTHORITATIVE"`.
-- Duplicate source references are rejected before database flush with a
-  deterministic `ValueError`; the database uniqueness constraint remains the
-  concurrency backstop.
-- The migration contract now independently verifies the
-  `(report_version_id, ordinal)` index.
+## Scope and remediation
 
-## TDD Evidence
+- Added `source_snapshot` and `database_record` to the recursive metadata
+  container denylist. Their `*_json` mappings are now omitted whole from
+  ordinary metadata mappings and list elements, without removing safe
+  siblings.
+- Replaced prefix-only path detection with an embedded-path matcher for
+  Windows drive paths, POSIX paths, UNC paths, and `file://` URIs. It applies
+  to paths surrounded by prose, parentheses, and newlines.
+- Extended the report-detail regression to verify no sensitive container or
+  embedded path reaches detail, JSON, Markdown, or DOCX, while safe sibling
+  metadata remains visible.
+- Removed the extra EOF blank line from the C2D-C implementation plan.
 
-### RED
+## Test-first record
 
-Command:
-
-```powershell
-& E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe -m pytest tests/services/test_report_source_snapshot.py tests/services/test_report_source_policy.py tests/services/test_report_regeneration_lineage.py -q
-```
-
-Result: `5 failed, 22 passed, 1 warning in 10.29s`.
-
-Expected failures demonstrated the missing authoritative completeness field on
-direct construction and report creation, an `AttributeError` for malformed
-non-mapping snapshots, and raw legacy source fields leaking through the 1.0
-projection.
-
-Command:
+Before the implementation change, the added API/export regression was run:
 
 ```powershell
-& E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe -m pytest tests/services/test_report_source_policy.py::test_source_ref_unique_within_report_version -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py -q
 ```
 
-Result: failed with the expected database `IntegrityError`, demonstrating that
-duplicate source references had no deterministic validation path.
+Result: `1 failed, 1 passed, 1 warning`. The failure showed that nested
+`source_snapshot_json` and `database_record_json` containers reached the
+detail response.
 
-### GREEN
-
-Focused projection, creation, and regeneration command:
+After the implementation change, the same focused command passed:
 
 ```powershell
-& E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe -m pytest tests/services/test_report_source_snapshot.py tests/services/test_report_source_policy.py tests/services/test_report_regeneration_lineage.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/api/test_report_center_source_provenance_api.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app/services/ai_report_service.py tests/api/test_report_center_source_provenance_api.py
 ```
 
-Result: `27 passed, 1 warning in 9.31s`.
+Result: `2 passed, 1 warning`; Ruff: `All checks passed!`.
 
-Duplicate-source validation command:
+## Required final verification
+
+The Task 3 C2D-C matrix was rerun after the final gate-code change:
 
 ```powershell
-& E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe -m pytest tests/services/test_report_source_policy.py::test_source_ref_unique_within_report_version -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/services/test_report_regeneration_source_refs.py tests/exporters/test_ai_report_source_provenance.py tests/api/test_report_center_source_provenance_api.py tests/services/test_report_regeneration_lineage.py tests/api/test_report_center_regenerate_api.py tests/api/test_report_center_lifecycle_api.py tests/api/test_report_center_facade_api.py tests/api/test_report_center_api.py tests/services/test_ai_report_service.py tests/exporters/test_ai_report_exports.py tests/migrations -q
 ```
 
-Result: `1 passed, 1 warning in 6.93s`.
-
-## Regression and Quality Evidence
-
-- Source, lineage, service, and migration suite: `47 passed, 1 warning in 13.19s`.
-- Report API and report-center API suite: `18 passed, 1 warning in 14.43s`.
-- Report-center facade and regeneration API suite: `16 passed, 1 warning in 20.44s`.
-- Report-center lifecycle API suite: `11 passed, 1 warning in 25.40s`.
-- Ruff on changed files: passed.
-- `git diff --check`: passed.
-- Full `ruff check app tests` remains blocked by the pre-existing import-sort
-  error in `tests/migrations/test_report_version_lineage_migration.py`; that
-  unrelated file was not changed.
-
-## Minor-Finding Disposition
-
-- Addressed: the migration test independently checks the ordered-provenance
-  index, and duplicate references now fail deterministically before flush.
-- Left unchanged: there is no new migration test which seeds a legacy
-  `AIReportVersion` and asserts no source-ref backfill. The migration only
-  creates/drops `ai_report_source_refs` and contains no legacy-row update or
-  insert, so no production change was warranted in this focused fix.
-
-## Follow-up Final-Review Fix
-
-### Scope
-
-- Snapshot 1.0 now preserves every originally supported semantic legacy field
-  through per-source scalar allowlists: session, scenario, calculation-run,
-  review-run, and inventory fields. Unknown, secret-like, and nested values
-  are still omitted.
-- Snapshot 1.1 now requires `AUTHORITATIVE_CREATE`,
-  `provenance_completeness: "AUTHORITATIVE"`, valid required source fields,
-  valid source-type discriminators, and a lowercase SHA-256 digest when one
-  is present. Invalid input returns `{}`.
-- Source-reference batches are immutable after the first nonempty batch,
-  preventing duplicate ordinals from a distinct second batch.
-- The migration test now seeds a legacy report version and proves it survives
-  upgrade/re-upgrade without a fabricated source-reference row.
-
-### TDD Evidence
-
-RED command:
+Result: `123 passed, 1 warning in 288.18s`.
 
 ```powershell
-& E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe -m pytest tests/services/test_report_source_snapshot.py tests/services/test_report_source_policy.py tests/migrations/test_ai_report_source_ref_migration.py -q
+& 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m ruff check app tests
+git diff --check 1b6a25e32..HEAD
 ```
 
-Result: `11 failed, 12 passed, 1 warning in 13.68s`. The failures covered
-dropped safe 1.0 calculation/inventory semantics, missing or invalid required
-1.1 discriminators and fields, invalid digest handling, and acceptance of a
-second distinct source batch.
+Result: Ruff: `All checks passed!`; whitespace check: exit code 0 with no
+output.
 
-GREEN command:
+## Commits and evidence
 
-```powershell
-& E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe -m pytest tests/services/test_report_source_snapshot.py tests/services/test_report_source_policy.py tests/migrations/test_ai_report_source_ref_migration.py -q
-```
+- `4cbba4ee2766e540f35f13264405fbb4ac7ec5cd`
+  `fix(maintenance): close provenance export leaks`
+- `47af21a0d2ee275018c06a974b4ab6ab70906c03`
+  `docs(maintenance): update c2d-c closure evidence`
 
-Result: `23 passed, 1 warning in 12.79s`.
+`docs/superpowers/sdd/c2d-c-closure.md` records the rerun matrix and scope
+audit. No C3, frontend, C2D-B policy/create/list, lifecycle, backfill,
+automatic-supersede, or export-filename behavior changed.
 
-### Regression and Quality Evidence
+## Warning
 
-- Source, migration, lineage, and report service suite: `59 passed, 1 warning in 15.71s`.
-- Report API and report-center API suite: `18 passed, 1 warning in 15.77s`.
-- Ruff on changed files: passed.
-- `git diff --check`: pending final staged verification.
-
-### Remaining Minor Items
-
-- None from the final-review follow-up. The seeded migration test now covers
-  legacy-row preservation and zero source-ref backfill on both upgrade paths.
+The only test warning is the existing third-party
+`StarletteDeprecationWarning`: `starlette.testclient` imports `httpx` and
+recommends `httpx2`. It is not emitted by repository application or test code.
