@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.responses import success_response
 from app.db.session import get_db_session
+from app.models.enums import AIReportType
 from app.schemas.ai_report import (
     AIReportCreateRequest,
 )
@@ -23,6 +24,7 @@ from app.security.permissions import (
 from app.services.ai_report_service import (
     ai_report_service,
 )
+from app.services.report_source_service import report_source_service
 
 router = APIRouter()
 
@@ -36,10 +38,21 @@ def create_report(
     ],
     session: Session = Depends(get_db_session),
 ):
+    resolved_sources = None
+    if (
+        payload.source_refs
+        or AIReportType(payload.report_type) is not AIReportType.MANAGEMENT_DECISION
+    ):
+        resolved_sources = report_source_service.resolve_for_create(
+            session,
+            actor,
+            payload,
+        )
     job = ai_report_service.create(
         session,
         actor,
         payload,
+        resolved_sources=resolved_sources,
     )
     version = (
         ai_report_service.latest_version(

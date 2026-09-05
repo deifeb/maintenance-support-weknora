@@ -383,14 +383,14 @@ class ReportSourceService:
             if (
                 _value(allocation, "source_demand_list_id") != _value(demand_list, "id")
                 or str(_value(allocation, "source_demand_list_version"))
-                != str(_value(demand_list, "version_number"))
+                != str(_value(demand_list, "version"))
             ):
                 _conflict("allocation plan does not belong to the demand-list version")
         if report_type is AIReportType.SPARE_PART_RISK and review is not None:
             if (
                 _value(review, "source_demand_list_id") != _value(demand_list, "id")
                 or str(_value(review, "source_demand_list_version"))
-                != str(_value(demand_list, "version_number"))
+                != str(_value(demand_list, "version"))
             ):
                 _conflict("demand review does not belong to the demand-list version")
 

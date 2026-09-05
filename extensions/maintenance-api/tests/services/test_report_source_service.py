@@ -87,7 +87,8 @@ def source_service():
     )
     demand_list = SimpleNamespace(
         id=1,
-        version_number=5,
+        version=5,
+        version_number=99,
         lineage_id="demand-lineage",
         status="PUBLISHED",
         scenario_version_id=2,

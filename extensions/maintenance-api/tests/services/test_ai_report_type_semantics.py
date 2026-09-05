@@ -1,11 +1,10 @@
 import pytest
-from pydantic import ValidationError
-
 from app.models.enums import AIReportSourceType, AIReportType
 from app.schemas.report_center import (
     ReportCenterQuery,
     ReportJobCreateRequest,
 )
+from pydantic import ValidationError
 
 
 @pytest.mark.parametrize(
@@ -30,16 +29,12 @@ def test_report_source_ref_forbids_unknown_fields() -> None:
         ReportJobCreateRequest(
             title="risk",
             report_type="SPARE_PART_RISK",
-            source_refs=[
-                {"type": "DEMAND_LIST", "id": 1, "extra": True}
-            ],
+            source_refs=[{"type": "DEMAND_LIST", "id": 1, "extra": True}],
         )
 
 
 def test_report_center_query_accepts_source_filters() -> None:
-    query = ReportCenterQuery(
-        source_type="DEMAND_LIST", source_id=7, source_version="3"
-    )
+    query = ReportCenterQuery(source_type="DEMAND_LIST", source_id=7, source_version="3")
 
     assert query.source_type is AIReportSourceType.DEMAND_LIST
     assert query.source_id == 7

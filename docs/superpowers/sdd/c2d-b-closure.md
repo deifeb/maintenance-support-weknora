@@ -9,6 +9,8 @@ implementation change was required.
 - Base SHA: `4c564d3e78bc72d38ae0f48bd7912bb7106ade71`
 - Verification head before the closure commit: `4c564d3e78bc72d38ae0f48bd7912bb7106ade71`
 - Completed closure commit/head: `24c4839efe97ff726978e6623ebec110f50a45a0`
+- Follow-up correction work is included in the subsequent implementation
+  commit documented in the Task 5 report.
 - Changed test: `extensions/maintenance-api/tests/services/test_report_regeneration_lineage.py`
 - Added evidence: this document
 - `extensions/maintenance-api/tests/api/test_report_center_regenerate_api.py`: unchanged
@@ -23,7 +25,7 @@ Focused regression command:
 & 'E:\weknora_projects\maintenance-support-weknora\extensions\maintenance-api\.venv\Scripts\python.exe' -m pytest tests/services/test_report_regeneration_lineage.py -q
 ```
 
-Result: `19 passed, 1 warning in 12.48s`.
+Result: `19 passed, 1 warning in 12.48s` (baseline closure evidence).
 
 Complete C2D-B gate (the exact Task 5 command):
 
@@ -35,11 +37,11 @@ git diff --check
 
 Results:
 
-- Selected tests: `194 passed, 1 warning in 432.64s (0:07:12)`.
+- Baseline selected tests: `194 passed, 1 warning in 432.64s (0:07:12)`.
+- Fresh selected tests after source/API corrections: `194 passed, 1 warning in 387.29s (0:06:27)`.
 - Alembic: `20260904_17 (head)`.
-- Ruff: one pre-existing `I001` import-order violation in
-  `tests/services/test_ai_report_type_semantics.py`; this file is outside the
-  Task 5 scope and was not modified.
+- Ruff: `All checks passed!` after formatting the branch-added test and fixing
+  the route import order.
 - `git diff --check`: no whitespace errors.
 
 The single pytest warning is the existing Starlette deprecation warning for
@@ -53,4 +55,11 @@ scoped test and this document. The pre-existing modification to
 `.superpowers/sdd/progress.md` was intentionally unstaged.
 
 This document correction is applied in a separate follow-up commit and does
-not alter the closure commit or its verification evidence.
+not alter the closure commit or its baseline verification evidence.
+
+## Follow-up source/API corrections
+
+The source-link version comparison now uses the producer-persisted
+`DemandList.version`, and explicit `source_refs` plus strict C2D-B report types
+are resolved before AI report creation. Legacy management-decision creation
+remains unchanged. No regeneration source-reference copying was added.
