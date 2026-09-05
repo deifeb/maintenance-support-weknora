@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Sequence, TypeVar
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -26,6 +26,7 @@ from app.models.enums import (
     AIExecutionMode,
     AIExportFormat,
     AIReportJobStatus,
+    AIReportSourceType,
     AIReportType,
     AIReportVersionStatus,
     AISeverity,
@@ -265,6 +266,9 @@ class AIReportRepository:
         scenario_version_id: int | None = None,
         calculation_run_id: int | None = None,
         review_run_id: int | None = None,
+        source_type: AIReportSourceType | None = None,
+        source_id: int | None = None,
+        source_version: str | None = None,
         sort_by: str = "created_at",
         sort_order: str = "desc",
     ) -> tuple[
@@ -328,6 +332,41 @@ class AIReportRepository:
         if review_run_id is not None:
             conditions.append(
                 AIReportVersion.review_run_id == review_run_id
+            )
+        if any(
+            value is not None
+            for value in (source_type, source_id, source_version)
+        ):
+            latest_version_id_subquery = (
+                select(AIReportVersion.id)
+                .where(
+                    AIReportVersion.tenant_id == tenant_id,
+                    AIReportVersion.report_job_id == AIReportJob.id,
+                )
+                .order_by(AIReportVersion.version_number.desc())
+                .limit(1)
+                .correlate(AIReportJob)
+                .scalar_subquery()
+            )
+            source_conditions = [
+                AIReportSourceRef.tenant_id == tenant_id,
+                AIReportSourceRef.report_version_id
+                == latest_version_id_subquery,
+            ]
+            if source_type is not None:
+                source_conditions.append(
+                    AIReportSourceRef.source_type == source_type
+                )
+            if source_id is not None:
+                source_conditions.append(
+                    AIReportSourceRef.source_id == str(source_id)
+                )
+            if source_version is not None:
+                source_conditions.append(
+                    AIReportSourceRef.source_version == source_version
+                )
+            conditions.append(
+                exists().where(*source_conditions)
             )
 
         sort_columns = {

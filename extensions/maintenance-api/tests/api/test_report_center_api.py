@@ -533,6 +533,9 @@ def test_report_list_rejects_unbounded_or_unsupported_query_values(
         "report_type=UNKNOWN_REPORT_TYPE",
         "job_status=UNKNOWN_STATUS",
         "version_status=UNKNOWN_STATUS",
+        "source_type=UNKNOWN_SOURCE_TYPE",
+        "source_id=0",
+        "source_version=",
     ):
         response = _get(client, headers, query)
         assert response.status_code == 422, query

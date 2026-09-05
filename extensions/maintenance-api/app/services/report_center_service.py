@@ -23,6 +23,10 @@ from app.services.ai_report_service import (
     AIReportService,
     ai_report_service,
 )
+from app.services.report_source_service import (
+    ReportSourceService,
+    report_source_service,
+)
 
 
 class ReportCenterQueryService:
@@ -30,10 +34,14 @@ class ReportCenterQueryService:
         self,
         repository: AIReportRepository | None = None,
         report_service: AIReportService | None = None,
+        source_service: ReportSourceService | None = None,
     ) -> None:
         self.repository = repository or ai_report_repository
         self.report_service = (
             report_service or ai_report_service
+        )
+        self.source_service = (
+            source_service or report_source_service
         )
 
     def list(
@@ -66,6 +74,9 @@ class ReportCenterQueryService:
             scenario_version_id=query.scenario_version_id,
             calculation_run_id=query.calculation_run_id,
             review_run_id=query.review_run_id,
+            source_type=query.source_type,
+            source_id=query.source_id,
+            source_version=query.source_version,
             sort_by=query.sort_by,
             sort_order=query.sort_order,
         )
@@ -146,12 +157,19 @@ class ReportCenterQueryService:
         actor: ActorContext,
         payload: ReportJobCreateRequest,
     ) -> ReportJobStatusRead:
+        request = AIReportCreateRequest(
+            **payload.model_dump(mode="json")
+        )
+        resolved_sources = self.source_service.resolve_for_create(
+            session,
+            actor,
+            request,
+        )
         job = self.report_service.create(
             session,
             actor,
-            AIReportCreateRequest(
-                **payload.model_dump(mode="json")
-            ),
+            request,
+            resolved_sources=resolved_sources,
         )
         version = self.report_service.latest_version(
             session,

@@ -16,6 +16,7 @@ from app.core.responses import success_response
 from app.db.session import get_db_session
 from app.models.enums import (
     AIReportJobStatus,
+    AIReportSourceType,
     AIReportType,
     AIReportVersionStatus,
 )
@@ -94,6 +95,11 @@ def list_reports(
     scenario_version_id: int | None = Query(default=None, gt=0),
     calculation_run_id: int | None = Query(default=None, gt=0),
     review_run_id: int | None = Query(default=None, gt=0),
+    source_type: AIReportSourceType | None = Query(default=None),
+    source_id: int | None = Query(default=None, gt=0),
+    source_version: str | None = Query(
+        default=None, min_length=1, max_length=128
+    ),
     sort_by: ReportCenterSortBy = Query(default="created_at"),
     sort_order: ReportCenterSortOrder = Query(default="desc"),
 ):
@@ -111,6 +117,9 @@ def list_reports(
             scenario_version_id=scenario_version_id,
             calculation_run_id=calculation_run_id,
             review_run_id=review_run_id,
+            source_type=source_type,
+            source_id=source_id,
+            source_version=source_version,
             sort_by=sort_by,
             sort_order=sort_order,
         ),
