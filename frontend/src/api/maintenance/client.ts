@@ -25,11 +25,20 @@ export type MaintenanceRequestLoader =
 export interface MaintenanceClient {
   get<T>(path: string): Promise<MaintenanceResult<T>>
   download(path: string): Promise<Blob>
+  downloadWithMetadata(path: string): Promise<MaintenanceDownload>
   post<T>(path: string, body: unknown, config?: unknown): Promise<MaintenanceResult<T>>
   put<T>(path: string, body: unknown): Promise<MaintenanceResult<T>>
   patch<T>(path: string, body: unknown): Promise<MaintenanceResult<T>>
   delete<T>(path: string, body?: unknown): Promise<MaintenanceResult<T>>
 }
+
+export interface MaintenanceDownload {
+  blob: Blob
+  filename: string
+  contentType: string
+}
+
+const DEFAULT_DOWNLOAD_FILENAME = 'download'
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null
@@ -60,6 +69,41 @@ function isJsonBlob(value: unknown): value is Blob {
     && value instanceof Blob
     && value.type.toLowerCase().includes('json')
   )
+}
+
+function readHeader(value: unknown, name: string): string | undefined {
+  if (typeof Headers !== 'undefined' && value instanceof Headers) {
+    return value.get(name) ?? undefined
+  }
+  if (!isRecord(value)) return undefined
+  const target = name.toLowerCase()
+  for (const [key, header] of Object.entries(value)) {
+    if (key.toLowerCase() === target && typeof header === 'string') return header
+  }
+  return undefined
+}
+
+export function parseAttachmentFilename(
+  contentDisposition: string | undefined,
+  fallback = DEFAULT_DOWNLOAD_FILENAME,
+): string {
+  if (!contentDisposition || !/^attachment(?:\s*;|\s*$)/i.test(contentDisposition)) {
+    return fallback
+  }
+  const match = /(?:^|;)\s*filename\s*=\s*(?:"([^"]*)"|([^;\s]*))/i.exec(contentDisposition)
+  const filename = (match?.[1] ?? match?.[2] ?? '').trim()
+  return filename && !/[\\/\u0000-\u001f\u007f]/.test(filename)
+    ? filename
+    : fallback
+}
+
+function readDownload(value: unknown): {
+  blob: Blob
+  headers: unknown
+} | null {
+  if (value instanceof Blob) return { blob: value, headers: undefined }
+  if (!isRecord(value) || !(value.data instanceof Blob)) return null
+  return { blob: value.data, headers: value.headers }
 }
 
 async function decodeMaintenanceDownloadError(error: unknown): Promise<unknown> {
@@ -212,6 +256,29 @@ export function createMaintenanceClient(
         return await adapter.get<Blob>(`${PREFIX}${path}`, {
           responseType: 'blob',
         })
+      } catch (error) {
+        throw normalizeMaintenanceError(await decodeMaintenanceDownloadError(error))
+      }
+    },
+    async downloadWithMetadata(path: string): Promise<MaintenanceDownload> {
+      try {
+        const adapter = await loadRequestAdapter()
+        const response = await adapter.get<unknown>(`${PREFIX}${path}`, {
+          responseType: 'blob',
+          returnResponse: true,
+        })
+        const download = readDownload(response)
+        if (!download) throw new Error('Invalid maintenance download response')
+        const contentType = readHeader(download.headers, 'content-type')
+          ?? download.blob.type
+          ?? 'application/octet-stream'
+        return {
+          blob: download.blob,
+          filename: parseAttachmentFilename(
+            readHeader(download.headers, 'content-disposition'),
+          ),
+          contentType,
+        }
       } catch (error) {
         throw normalizeMaintenanceError(await decodeMaintenanceDownloadError(error))
       }
