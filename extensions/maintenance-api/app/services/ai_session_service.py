@@ -113,6 +113,26 @@ class AISessionService:
             )
         return row
 
+    def get_message(
+        self,
+        session: Session,
+        actor: ActorContext,
+        session_id: int,
+        message_id: int,
+    ):
+        row = self.repository.get_message(
+            session,
+            actor.tenant_id,
+            session_id,
+            message_id,
+        )
+        if row is None:
+            raise NotFoundError(
+                "ai_message",
+                message_id,
+            )
+        return row
+
     def latest_snapshot(
         self,
         session: Session,

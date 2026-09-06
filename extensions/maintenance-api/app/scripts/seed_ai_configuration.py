@@ -10,8 +10,8 @@ from maintenance_ai.routing import ModelRegistry
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.services.ai_report_service import REPORT_SECTION_DEFINITIONS
 from app.services.ai_tool_registry import ai_tool_registry
+from app.services.report_template_registry import list_templates
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -66,12 +66,7 @@ def seed_ai_configuration(
             f"routes without prompt definitions: {sorted(set(registry.routes) - prompt_functions)}"
         )
 
-    allowed_sections = {code for code, _ in REPORT_SECTION_DEFINITIONS}
-    templates = loaded["report_templates"].get("templates", {})
-    for name, template in templates.items():
-        section_codes = {row["code"] for row in template.get("sections", [])}
-        if section_codes != allowed_sections:
-            raise ValueError(f"report template {name} has invalid section set")
+    templates = list_templates()
 
     normalized = json.dumps(
         loaded,

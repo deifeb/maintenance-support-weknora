@@ -13,6 +13,7 @@ from app.models.ai_report import (
     AIReportExport,
     AIReportJob,
     AIReportSection,
+    AIReportSourceRef,
     AIReportValidationFinding,
     AIReportVersion,
 )
@@ -23,6 +24,14 @@ from app.models.ai_session import (
     AIModelCall,
     AISession,
     AISessionSnapshot,
+)
+from app.models.allocation import (
+    AllocationPlan,
+    AllocationPlanEvent,
+    AllocationPlanLine,
+    AllocationRuleVersion,
+    AllocationSimulation,
+    AllocationSimulationResult,
 )
 from app.models.calculation_group import (
     CalculationGroup,
@@ -41,6 +50,12 @@ from app.models.demand_list import (
     DemandList,
     DemandListEvent,
     DemandListItem,
+)
+from app.models.demand_review import (
+    DemandReview,
+    DemandReviewDecision,
+    DemandReviewEvent,
+    DemandReviewFinding,
 )
 from app.models.demand_scenario import (
     DemandAgeGroup,
@@ -62,7 +77,25 @@ from app.models.import_task import (
     ImportTaskStatus,
     MasterDataImportTask,
 )
-from app.models.inventory import Warehouse, WarehouseInventory
+from app.models.inventory import Warehouse
+from app.models.inventory_ledger import (
+    InventoryBalance,
+    InventoryExpiryRule,
+    InventoryLedgerEntry,
+    InventoryLot,
+    InventoryPolicy,
+    InventoryReservation,
+    InventoryReservationLine,
+    InventoryStocktake,
+    InventoryStocktakeLine,
+    InventoryTargetReceipt,
+    InventoryTargetReceiptStatus,
+    InventoryTransaction,
+    InventoryTransfer,
+    InventoryTransferLine,
+    SerializedItem,
+    WarehouseLocation,
+)
 from app.models.mixins import TenantScopedMixin, VersionedMixin
 from app.models.reliability import ReliabilityProfile
 from app.models.repair import RepairProfile
@@ -71,6 +104,12 @@ from app.models.supplier import Supplier, SupplierOffer
 __all__ = [
     "VersionedMixin",
     "TenantScopedMixin",
+    "AllocationRuleVersion",
+    "AllocationSimulation",
+    "AllocationSimulationResult",
+    "AllocationPlan",
+    "AllocationPlanLine",
+    "AllocationPlanEvent",
     "EquipmentModel",
     "ConfigurationVersion",
     "ConfigurationItem",
@@ -78,7 +117,22 @@ __all__ = [
     "SparePart",
     "ReliabilityProfile",
     "Warehouse",
-    "WarehouseInventory",
+    "WarehouseLocation",
+    "InventoryPolicy",
+    "InventoryExpiryRule",
+    "InventoryLot",
+    "SerializedItem",
+    "InventoryBalance",
+    "InventoryReservation",
+    "InventoryReservationLine",
+    "InventoryTransfer",
+    "InventoryTransferLine",
+    "InventoryStocktake",
+    "InventoryStocktakeLine",
+    "InventoryTargetReceipt",
+    "InventoryTargetReceiptStatus",
+    "InventoryTransaction",
+    "InventoryLedgerEntry",
     "Supplier",
     "SupplierOffer",
     "RepairProfile",
@@ -89,6 +143,10 @@ __all__ = [
     "DemandList",
     "DemandListItem",
     "DemandListEvent",
+    "DemandReview",
+    "DemandReviewFinding",
+    "DemandReviewDecision",
+    "DemandReviewEvent",
     "DemandScenarioTemplate",
     "DemandScenarioVersion",
     "DemandScenarioStage",
@@ -118,6 +176,7 @@ __all__ = [
     "AIReportExport",
     "AIReportJob",
     "AIReportSection",
+    "AIReportSourceRef",
     "AIReportValidationFinding",
     "AIReportVersion",
     "ImportTask",

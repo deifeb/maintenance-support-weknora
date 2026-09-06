@@ -149,3 +149,38 @@ async def test_orchestration_rejects_foreign_session_before_message_write(
         or 0
     )
     assert after == before
+@pytest.mark.asyncio
+async def test_handle_message_exposes_exact_persisted_trigger_message_id(
+    session: Session,
+    actor_context: Callable[..., ActorContext],
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="u1",
+    )
+    ai_session = create_ai_session(
+        session,
+        tenant_id=actor.tenant_id,
+    )
+
+    result = await ai_orchestration_service.handle_message(
+        session,
+        actor,
+        ai_session.id,
+        "sql",
+        permissions=set(),
+    )
+
+    messages = list(
+        session.scalars(
+            select(AIMessage)
+            .where(
+                AIMessage.tenant_id == actor.tenant_id,
+                AIMessage.session_id == ai_session.id,
+            )
+            .order_by(AIMessage.sequence)
+        ).all()
+    )
+
+    assert len(messages) == 1
+    assert result.trigger_message_id == messages[0].id

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.exceptions import BusinessValidationError
+from app.importers.inspection import TEMPLATE_VERSION
 from app.importers.parser import (
     WorkbookParser,
     normalize_code,
@@ -25,13 +26,14 @@ from app.models import (
     ConfigurationItem,
     ConfigurationVersion,
     EquipmentModel,
+    InventoryPolicy,
+    InventoryTargetReceipt,
     Part,
     ReliabilityProfile,
     SparePart,
     Supplier,
     SupplierOffer,
     Warehouse,
-    WarehouseInventory,
 )
 from app.models.enums import (
     ConfigurationStatus,
@@ -48,9 +50,12 @@ from app.schemas.equipment import (
     EquipmentModelCreate,
 )
 from app.schemas.import_data import ImportExecutionResult, ImportIssue, ImportValidationResult
-from app.schemas.inventory import WarehouseCreate, WarehouseInventoryCreate
+from app.schemas.inventory import InventoryQuantities, WarehouseCreate
 from app.schemas.reliability import ReliabilityProfileCreate
 from app.schemas.supplier import SupplierCreate, SupplierOfferCreate
+from app.security.actor import ActorContext
+from app.services.inventory_target_adapter import inventory_target_adapter
+from app.services.snapshot_service import snapshot_service
 
 SHEET_EQUIPMENT = "01_装备型号"
 SHEET_CONFIGURATION = "02_构型版本"
@@ -276,9 +281,7 @@ class MasterDataImportService:
         )
 
     def _inventory(self, row: dict[str, Any]) -> dict[str, Any]:
-        payload = WarehouseInventoryCreate(
-            warehouse_id=1,
-            spare_part_id=1,
+        payload = InventoryQuantities(
             on_hand_quantity=parse_decimal(row.get("on_hand_quantity")),
             reserved_quantity=parse_decimal(row.get("reserved_quantity"), Decimal("0")),
             damaged_quantity=parse_decimal(row.get("damaged_quantity"), Decimal("0")),
@@ -287,15 +290,13 @@ class MasterDataImportService:
             safety_stock=parse_decimal(row.get("safety_stock"), Decimal("0")),
             reorder_point=parse_decimal(row.get("reorder_point"), Decimal("0")),
             maximum_stock=parse_decimal(row.get("maximum_stock")),
-            last_counted_at=parse_datetime(row.get("last_counted_at")),
-            notes=row.get("notes"),
         ).model_dump()
-        payload.pop("warehouse_id")
-        payload.pop("spare_part_id")
         payload.update(
             {
                 "warehouse_code": normalize_code(row.get("warehouse_code")),
                 "spare_part_code": normalize_code(row.get("spare_part_code")),
+                "last_counted_at": parse_datetime(row.get("last_counted_at")),
+                "notes": row.get("notes"),
             }
         )
         return payload
@@ -430,6 +431,7 @@ class MasterDataImportService:
         tenant_id: str,
         normalized: dict[str, list[dict[str, Any]]],
         errors: list[ImportIssue],
+        task_id: str | None = None,
     ) -> None:
         existing: dict[str, set[Any]] = {
             SHEET_EQUIPMENT: self._existing_codes(
@@ -522,21 +524,34 @@ class MasterDataImportService:
             (warehouse_code, spare_code)
             for warehouse_code, spare_code in session.execute(
                 select(Warehouse.code, SparePart.code)
-                .join(
-                    WarehouseInventory,
-                    WarehouseInventory.warehouse_id == Warehouse.id,
-                )
+                .join(InventoryPolicy, InventoryPolicy.warehouse_id == Warehouse.id)
                 .join(
                     SparePart,
-                    WarehouseInventory.spare_part_id == SparePart.id,
+                    InventoryPolicy.spare_part_id == SparePart.id,
                 )
                 .where(
                     Warehouse.tenant_id == tenant_id,
-                    WarehouseInventory.tenant_id == tenant_id,
+                    InventoryPolicy.tenant_id == tenant_id,
                     SparePart.tenant_id == tenant_id,
                 )
             ).all()
         }
+        replayed_inventory_rows = (
+            {
+                row["_row"]
+                for row in normalized[SHEET_INVENTORY]
+                if session.scalar(
+                    select(InventoryTargetReceipt.id).where(
+                        InventoryTargetReceipt.tenant_id == tenant_id,
+                        InventoryTargetReceipt.idempotency_key
+                        == f"import:{task_id}:{SHEET_INVENTORY}:{row['_row']}",
+                    )
+                )
+                is not None
+            }
+            if task_id is not None
+            else set()
+        )
         key_functions: dict[str, Callable[[dict[str, Any]], Any]] = {
             SHEET_EQUIPMENT: lambda row: row["code"],
             SHEET_CONFIGURATION: lambda row: (
@@ -562,6 +577,8 @@ class MasterDataImportService:
         for sheet, rows in normalized.items():
             for row in rows:
                 key = key_functions[sheet](row)
+                if sheet == SHEET_INVENTORY and row["_row"] in replayed_inventory_rows:
+                    continue
                 operation = ImportOperation(row["operation"])
                 exists = key in existing[sheet]
                 if operation == ImportOperation.CREATE and exists:
@@ -821,6 +838,7 @@ class MasterDataImportService:
         content: bytes,
         filename: str,
         mapping: dict[str, dict[str, str]] | None = None,
+        task_id: str | None = None,
     ) -> ImportValidationResult:
         parsed, errors = self._parse(
             content=content,
@@ -828,12 +846,30 @@ class MasterDataImportService:
             mapping=mapping,
         )
         normalized = self._normalized_rows(parsed, errors)
+        return self._validate_normalized(
+            session,
+            tenant_id=tenant_id,
+            normalized=normalized,
+            errors=errors,
+            task_id=task_id,
+        )
+
+    def _validate_normalized(
+        self,
+        session: Session,
+        *,
+        tenant_id: str,
+        normalized: dict[str, list[dict[str, Any]]],
+        errors: list[ImportIssue],
+        task_id: str | None,
+    ) -> ImportValidationResult:
         self._duplicate_key_checks(normalized, errors)
         self._operation_checks(
             session,
             tenant_id=tenant_id,
             normalized=normalized,
             errors=errors,
+            task_id=task_id,
         )
         self._cross_reference_checks(
             session,
@@ -865,6 +901,26 @@ class MasterDataImportService:
         )
 
     @staticmethod
+    def _synchronous_task_id(
+        *,
+        normalized: dict[str, list[dict[str, Any]]],
+        mapping: dict[str, dict[str, str]] | None,
+        template_version: str,
+    ) -> str:
+        command = {
+            "template_version": template_version,
+            "mapping": mapping or {},
+            "sheets": [
+                {
+                    "name": sheet_name,
+                    "rows": normalized.get(sheet_name, []),
+                }
+                for sheet_name in SHEET_SPECS
+            ],
+        }
+        return snapshot_service.canonical_hash(command)
+
+    @staticmethod
     def _apply(
         instance: Any,
         data: dict[str, Any],
@@ -878,17 +934,30 @@ class MasterDataImportService:
         self,
         session: Session,
         *,
-        tenant_id: str,
+        actor: ActorContext,
         content: bytes,
         filename: str,
         mapping: dict[str, dict[str, str]] | None = None,
+        task_id: str | None = None,
     ) -> ImportExecutionResult:
-        validation = self.validate(
-            session,
-            tenant_id=tenant_id,
+        tenant_id = actor.tenant_id
+        parsed, errors = self._parse(
             content=content,
             filename=filename,
             mapping=mapping,
+        )
+        normalized = self._normalized_rows(parsed, errors)
+        stable_task_id = task_id or self._synchronous_task_id(
+            normalized=normalized,
+            mapping=mapping,
+            template_version=TEMPLATE_VERSION,
+        )
+        validation = self._validate_normalized(
+            session,
+            tenant_id=tenant_id,
+            normalized=normalized,
+            errors=errors,
+            task_id=stable_task_id,
         )
         if not validation.valid:
             raise BusinessValidationError(
@@ -899,13 +968,6 @@ class MasterDataImportService:
                 ],
                 code="IMPORT_VALIDATION_FAILED",
             )
-
-        parsed, errors = self._parse(
-            content=content,
-            filename=filename,
-            mapping=mapping,
-        )
-        normalized = self._normalized_rows(parsed, errors)
         created: defaultdict[str, int] = defaultdict(int)
         updated: defaultdict[str, int] = defaultdict(int)
 
@@ -1179,39 +1241,46 @@ class MasterDataImportService:
         for row in normalized[SHEET_INVENTORY]:
             warehouse = warehouse_by_code[row["warehouse_code"]]
             spare = spare_by_code[row["spare_part_code"]]
-            instance = session.scalar(
-                select(WarehouseInventory).where(
-                    WarehouseInventory.tenant_id == tenant_id,
-                    WarehouseInventory.warehouse_id == warehouse.id,
-                    WarehouseInventory.spare_part_id == spare.id,
-                )
-            )
-            data = {
-                field: value
-                for field, value in row.items()
-                if field
-                not in {
-                    "operation",
-                    "_row",
-                    "warehouse_code",
-                    "spare_part_code",
-                }
-            }
-            data.update(
+            quantities = InventoryQuantities.model_validate(
                 {
-                    "tenant_id": tenant_id,
-                    "warehouse_id": warehouse.id,
-                    "spare_part_id": spare.id,
+                    field: row[field]
+                    for field in (
+                        "on_hand_quantity",
+                        "reserved_quantity",
+                        "damaged_quantity",
+                        "quarantined_quantity",
+                        "in_transit_quantity",
+                        "safety_stock",
+                        "reorder_point",
+                        "maximum_stock",
+                    )
                 }
             )
-            if instance is None:
-                instance = WarehouseInventory(**data)
-                session.add(instance)
+            target = inventory_target_adapter.apply_target(
+                session,
+                actor,
+                warehouse_id=warehouse.id,
+                spare_part_id=spare.id,
+                quantities=quantities,
+                notes=row.get("notes"),
+                idempotency_key=(
+                    f"import:{stable_task_id}:"
+                    f"{SHEET_INVENTORY}:{row['_row']}"
+                ),
+                source_payload={
+                    key: value
+                    for key, value in row.items()
+                    if key != "_row"
+                },
+                reason=(
+                    "Master data inventory import "
+                    f"{SHEET_INVENTORY} row {row['_row']}"
+                ),
+            )
+            if target.created_identity:
                 created[SHEET_INVENTORY] += 1
             else:
-                self._apply(instance, data, set())
                 updated[SHEET_INVENTORY] += 1
-            session.flush()
 
         for row in normalized[SHEET_OFFER]:
             supplier = supplier_by_code[row["supplier_code"]]

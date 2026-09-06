@@ -19,6 +19,7 @@ os.environ["INTERNAL_JWT_CLOCK_SKEW_SECONDS"] = "5"
 import app.models  # noqa: F401
 import jwt
 import pytest
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.security.actor import ActorContext, MaintenanceRole
@@ -36,11 +37,28 @@ def database_schema() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
+def reset_settings_cache() -> Generator[None, None, None]:
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+@pytest.fixture(autouse=True)
 def clean_database() -> Generator[None, None, None]:
     yield
-    with engine.begin() as connection:
-        for table in reversed(Base.metadata.sorted_tables):
-            connection.execute(table.delete())
+    with engine.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql(
+                "PRAGMA foreign_keys = OFF"
+            )
+            connection.commit()
+
+        with connection.begin():
+            for table in reversed(
+                Base.metadata.sorted_tables
+            ):
+                connection.execute(table.delete())
+
+    engine.dispose()
 
 
 @pytest.fixture()

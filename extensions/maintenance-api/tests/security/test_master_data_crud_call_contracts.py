@@ -10,7 +10,6 @@ DIRECT_SERVICE_TEST = Path("tests/services/test_services.py")
 NO_ACTOR_SERVICE_CALLS = {
     ("master_data_import_service", "template_bytes"),
     ("master_data_import_service", "validate"),
-    ("master_data_import_service", "apply"),
 }
 
 
@@ -177,6 +176,18 @@ HTTP_ROLE_DEPENDENCIES = {
 }
 MASTER_ROUTE_ROLE_OVERRIDES = {
     (
+        "inventories.py",
+        "create_inventory",
+    ): "require_admin",
+    (
+        "inventories.py",
+        "update_inventory",
+    ): "require_admin",
+    (
+        "inventories.py",
+        "adjust_inventory",
+    ): "require_admin",
+    (
         "imports.py",
         "read_import_task",
     ): "require_contributor",
@@ -184,7 +195,30 @@ MASTER_ROUTE_ROLE_OVERRIDES = {
         "imports.py",
         "download_import_errors",
     ): "require_contributor",
+    (
+        "imports.py",
+        "execute_import",
+    ): "require_admin",
+    (
+        "imports.py",
+        "execute_import_task",
+    ): "require_admin",
 }
+
+
+def test_inventory_adjust_route_delegates_to_inventory_service_only() -> None:
+    path = MASTER_DATA_ROOT / "inventories.py"
+    calls = [
+        item
+        for item in _service_calls(path)
+        if item.function.name == "adjust_inventory"
+    ]
+
+    assert [
+        (item.receiver, item.method)
+        for item in calls
+    ] == [("inventory_service", "adjust")]
+    assert _supplied_actor_expression(calls[0].call) == "actor"
 
 
 def _route_http_method(
@@ -208,8 +242,9 @@ def _route_http_method(
 
 def _route_actor_dependency(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, ast.expr],
 ) -> str | None:
-    matches: list[str] = []
+    matches: list[ast.expr] = []
 
     for argument in [
         *function.args.posonlyargs,
@@ -219,12 +254,8 @@ def _route_actor_dependency(
         if argument.annotation is None:
             continue
 
-        annotation = ast.unparse(argument.annotation)
-        if (
-            argument.arg == "actor"
-            and "ActorContext" in annotation
-        ):
-            matches.append(annotation)
+        if argument.arg == "actor":
+            matches.append(argument.annotation)
 
     assert len(matches) <= 1, (
         f"{function.name} has multiple ActorContext parameters"
@@ -232,14 +263,21 @@ def _route_actor_dependency(
     if not matches:
         return None
 
-    annotation = matches[0]
-    for dependency in {
-        "require_viewer",
-        "require_contributor",
-        "require_admin",
-    }:
-        if dependency in annotation:
-            return dependency
+    roots: list[ast.AST] = [matches[0]]
+    if isinstance(matches[0], ast.Name):
+        alias = aliases.get(matches[0].id)
+        if alias is not None:
+            roots.append(alias)
+    for root in roots:
+        for node in ast.walk(root):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "Depends"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+            ):
+                return node.args[0].id
 
     return "<missing-role-dependency>"
 
@@ -253,6 +291,15 @@ def test_master_data_routes_use_http_role_dependencies() -> None:
             path.read_text(encoding="utf-8"),
             filename=str(path),
         )
+        aliases = {
+            node.targets[0].id: node.value
+            for node in tree.body
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            )
+        }
         for function in tree.body:
             if not isinstance(
                 function,
@@ -272,7 +319,7 @@ def test_master_data_routes_use_http_role_dependencies() -> None:
                 ),
                 HTTP_ROLE_DEPENDENCIES[http_method],
             )
-            actual = _route_actor_dependency(function)
+            actual = _route_actor_dependency(function, aliases)
             if actual != expected:
                 failures.append(
                     f"{path}:{function.lineno}: "
@@ -392,16 +439,20 @@ def test_import_routes_supply_actor_tenant_without_request_tenant_field(
 
         for call in service_calls:
             observed.add(call.func.attr)
-            actual = _keyword_expression(
-                call,
-                "tenant_id",
-            )
-            if actual not in expected_expressions:
+            if call.func.attr == "apply":
+                actual = _keyword_expression(call, "actor")
+                expected = actor_names
+                label = "actor"
+            else:
+                actual = _keyword_expression(call, "tenant_id")
+                expected = expected_expressions
+                label = "tenant_id"
+            if actual not in expected:
                 failures.append(
                     f"{function.name}:{call.lineno}: "
-                    f"{call.func.attr} tenant_id={actual!r}, "
+                    f"{call.func.attr} {label}={actual!r}, "
                     f"expected one of "
-                    f"{sorted(expected_expressions)!r}"
+                    f"{sorted(expected)!r}"
                 )
 
     assert observed == TENANT_SCOPED_IMPORT_METHODS

@@ -63,6 +63,24 @@ class AISessionRepository:
             )
         )
 
+    def get_message(
+        self,
+        session: Session,
+        tenant_id: str,
+        session_id: int,
+        message_id: int,
+    ) -> AIMessage | None:
+        return session.scalar(
+            select(AIMessage)
+            .options(tenant_loader_criteria(tenant_id))
+            .execution_options(populate_existing=True)
+            .where(
+                AIMessage.id == message_id,
+                AIMessage.tenant_id == tenant_id,
+                AIMessage.session_id == session_id,
+            )
+        )
+
     def get_for_update(
         self,
         session: Session,

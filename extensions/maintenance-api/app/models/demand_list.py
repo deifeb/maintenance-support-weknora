@@ -161,6 +161,12 @@ class DemandList(
             name="ck_demand_list_version_number",
         ),
         Index(
+            "uq_demand_lists_tenant_id_id",
+            "tenant_id",
+            "id",
+            unique=True,
+        ),
+        Index(
             "uq_demand_lists_current_published_lineage",
             "tenant_id",
             "lineage_id",
@@ -309,6 +315,12 @@ class DemandListItem(
             "demand_list_id",
             "spare_part_id",
             name="uq_demand_list_item",
+        ),
+        Index(
+            "uq_demand_list_items_tenant_id_id",
+            "tenant_id",
+            "id",
+            unique=True,
         ),
         CheckConstraint(
             "original_quantity >= 0",

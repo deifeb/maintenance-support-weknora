@@ -16,8 +16,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.enums import (
+    AIExecutionMode,
     AIExportFormat,
     AIReportJobStatus,
+    AIReportSourceType,
     AIReportType,
     AIReportVersionStatus,
     AISeverity,
@@ -70,6 +72,16 @@ class AIReportVersion(
     report_job_id: Mapped[int] = mapped_column(
         ForeignKey("ai_report_jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    parent_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ai_report_versions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    source_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    input_digest: Mapped[str | None] = mapped_column(String(64))
+    generation_mode: Mapped[AIExecutionMode | None] = mapped_column(
+        Enum(AIExecutionMode, native_enum=False, length=24)
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[AIReportVersionStatus] = mapped_column(
         Enum(AIReportVersionStatus, native_enum=False, length=20),
@@ -95,6 +107,47 @@ class AIReportVersion(
     finalized_by: Mapped[str | None] = mapped_column(String(128))
     __table_args__ = (
         UniqueConstraint("report_job_id", "version_number", name="uq_ai_report_version"),
+    )
+
+
+class AIReportSourceRef(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
+    __tablename__ = "ai_report_source_refs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_version_id: Mapped[int] = mapped_column(
+        ForeignKey("ai_report_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    source_type: Mapped[AIReportSourceType] = mapped_column(
+        Enum(AIReportSourceType, native_enum=False, length=32), nullable=False
+    )
+    source_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_version: Mapped[str | None] = mapped_column(String(128))
+    source_lineage_id: Mapped[str | None] = mapped_column(String(128))
+    source_digest: Mapped[str | None] = mapped_column(String(64))
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_ai_report_source_refs_tenant_source",
+            "tenant_id",
+            "source_type",
+            "source_id",
+        ),
+        Index(
+            "ix_ai_report_source_refs_version_ordinal",
+            "report_version_id",
+            "ordinal",
+        ),
+        UniqueConstraint(
+            "report_version_id",
+            "source_type",
+            "source_id",
+            "source_version",
+            name="uq_ai_report_source_ref_version_source",
+        ),
     )
 
 

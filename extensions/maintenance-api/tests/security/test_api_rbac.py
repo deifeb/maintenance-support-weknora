@@ -31,6 +31,9 @@ EXPECTED_COUNTS = {
     "master_data": 67,
     "demand": 64,
     "ai": 26,
+    "inventory": 33,
+    "reviews": 7,
+    "allocations": 14,
 }
 MASTER_ROLE_BY_METHOD = {
     "get": "require_viewer",
@@ -42,6 +45,11 @@ MASTER_ROLE_BY_METHOD = {
 MASTER_ROLE_BY_FUNCTION = {
     "read_import_task": "require_contributor",
     "download_import_errors": "require_contributor",
+    "create_inventory": "require_admin",
+    "update_inventory": "require_admin",
+    "adjust_inventory": "require_admin",
+    "execute_import": "require_admin",
+    "execute_import_task": "require_admin",
 }
 DEMAND_ROLE_BY_FUNCTION = {
     "create_draft": "require_contributor",
@@ -110,6 +118,70 @@ DEMAND_ROLE_BY_FUNCTION = {
     "void_demand_list": "require_admin",
 }
 
+REVIEW_ROLE_BY_FUNCTION = {
+    "list_demand_list_reviews": "require_viewer",
+    "run_demand_list_review": "require_contributor",
+    "get_demand_list_review": "require_viewer",
+    "decide_demand_review_finding": "require_contributor",
+    "batch_decide_demand_review_findings": "require_contributor",
+    "derive_demand_list_from_review": "require_admin",
+    "void_demand_list_review": "require_admin",
+}
+
+TASK6_FEATURE_MISSING = "PLAN05_4D_TASK6_FEATURE_MISSING"
+
+ALLOCATION_ROLE_BY_FUNCTION = {
+    "list_rules": "require_viewer",
+    "create_rule": "require_contributor",
+    "simulate_rule": "require_contributor",
+    "publish_rule": "require_admin",
+    "retire_rule": "require_admin",
+    "list_plans": "require_viewer",
+    "create_plan": "require_contributor",
+    "get_plan": "require_viewer",
+    "preview_plan": "require_contributor",
+    "edit_plan_line": "require_contributor",
+    "confirm_plan": "require_contributor",
+    "execute_plan": "require_contributor",
+    "void_plan": "require_contributor",
+    "regenerate_plan": "require_contributor",
+}
+
+INVENTORY_ROLE_BY_FUNCTION = {
+    "list_balances": "require_viewer",
+    "get_balance": "require_viewer",
+    "list_transactions": "require_viewer",
+    "get_transaction": "require_viewer",
+    "list_reservations": "require_viewer",
+    "get_reservation": "require_viewer",
+    "list_transfers": "require_viewer",
+    "get_transfer": "require_viewer",
+    "list_stocktakes": "require_viewer",
+    "get_stocktake": "require_viewer",
+    "create_reservation": "require_contributor",
+    "issue_reservation": "require_contributor",
+    "release_reservation": "require_contributor",
+    "return_reservation": "require_contributor",
+    "cancel_reservation": "require_contributor",
+    "preview_operation": "require_admin",
+    "execute_operation": "require_admin",
+    "preview_reverse_operation": "require_admin",
+    "execute_reverse_operation": "require_admin",
+    "create_transfer": "require_admin",
+    "preview_transfer_dispatch": "require_admin",
+    "execute_transfer_dispatch": "require_admin",
+    "preview_transfer_receive": "require_admin",
+    "execute_transfer_receive": "require_admin",
+    "cancel_transfer": "require_admin",
+    "create_stocktake": "require_contributor",
+    "start_stocktake": "require_contributor",
+    "update_stocktake_line": "require_contributor",
+    "review_stocktake": "require_contributor",
+    "preview_stocktake_confirm": "require_admin",
+    "execute_stocktake_confirm": "require_admin",
+    "rebase_stocktake": "require_contributor",
+    "cancel_stocktake": "require_contributor",
+}
 
 def _files(domain: str) -> tuple[Path, ...]:
     return tuple(
@@ -225,6 +297,12 @@ def _expected_role(
         )
     if domain == "demand":
         return DEMAND_ROLE_BY_FUNCTION.get(function_name)
+    if domain == "inventory":
+        return INVENTORY_ROLE_BY_FUNCTION.get(function_name)
+    if domain == "reviews":
+        return REVIEW_ROLE_BY_FUNCTION.get(function_name)
+    if domain == "allocations":
+        return ALLOCATION_ROLE_BY_FUNCTION.get(function_name)
     return None
 
 
@@ -267,6 +345,8 @@ def _uses_session_get(
 def test_business_route_inventory_is_exact() -> None:
     counts: dict[str, int] = {}
     demand_functions: set[str] = set()
+    inventory_functions: set[str] = set()
+    review_functions: set[str] = set()
 
     for domain in EXPECTED_COUNTS:
         count = 0
@@ -278,12 +358,30 @@ def test_business_route_inventory_is_exact() -> None:
                     function.name
                     for function, _, _ in rows
                 )
+            if domain == "inventory":
+                inventory_functions.update(
+                    function.name
+                    for function, _, _ in rows
+                )
+            if domain == "reviews":
+                review_functions.update(
+                    function.name
+                    for function, _, _ in rows
+                )
         counts[domain] = count
 
-    assert counts == EXPECTED_COUNTS
-    assert sum(counts.values()) == 157
+    assert counts == EXPECTED_COUNTS, (
+        f"{TASK6_FEATURE_MISSING}: route counts {counts}"
+    )
+    assert sum(counts.values()) == 211
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
+    )
+    assert inventory_functions == set(
+        INVENTORY_ROLE_BY_FUNCTION
+    )
+    assert review_functions == set(
+        REVIEW_ROLE_BY_FUNCTION
     )
 
 
@@ -358,3 +456,52 @@ def test_business_success_responses_include_actor_metadata(
                         )
 
     assert failures == [], "\n".join(failures)
+
+
+def test_inventory_read_routes_do_not_accept_tenant_id_argument() -> None:
+    failures: list[str] = []
+
+    for path in _files("inventory"):
+        for function, _, _ in _endpoints(path):
+            arguments = [
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            ]
+            if any(
+                argument.arg == "tenant_id"
+                for argument in arguments
+            ):
+                failures.append(
+                    f"{path.name}:{function.name}"
+                )
+
+    assert failures == []
+
+# PLAN05_4D_TASK6_RED_CONTRACTS
+
+def test_task6_allocation_rbac_inventory_is_exact() -> None:
+    rows = [
+        function.name
+        for path in _files("allocations")
+        for function, _, _ in _endpoints(path)
+    ]
+    if set(rows) != set(ALLOCATION_ROLE_BY_FUNCTION) or len(rows) != 14:
+        raise AssertionError(
+            f"{TASK6_FEATURE_MISSING}: allocation RBAC inventory missing or drifted; "
+            f"expected={sorted(ALLOCATION_ROLE_BY_FUNCTION)}, actual={sorted(rows)}"
+        )
+
+    failures: list[str] = []
+    for path in _files("allocations"):
+        for function, method, aliases in _endpoints(path):
+            dependencies = _dependencies(function, aliases)
+            named = [name for name in dependencies if name in ROLE_DEPENDENCIES]
+            expected = ALLOCATION_ROLE_BY_FUNCTION[function.name]
+            if named != [expected] or "get_actor" in dependencies:
+                failures.append(
+                    f"{path.name}:{function.name}: expected={expected}, actual={dependencies}"
+                )
+    assert failures == [], (
+        f"{TASK6_FEATURE_MISSING}: allocation RBAC mismatches\n" + "\n".join(failures)
+    )

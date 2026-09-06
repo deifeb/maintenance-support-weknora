@@ -252,6 +252,48 @@ func (s *messageService) UpdateMessage(ctx context.Context, message *types.Messa
 	return nil
 }
 
+// FinalizeAssistantMessageIfOpen validates the same tenant/session write
+// scope used by normal message updates, then delegates the race decision to
+// the repository's conditional terminal UPDATE.
+func (s *messageService) FinalizeAssistantMessageIfOpen(
+	ctx context.Context,
+	message *types.Message,
+) (bool, error) {
+	logger.Info(ctx, "Start conditionally finalizing assistant message")
+	logger.Infof(
+		ctx,
+		"Finalizing assistant message, ID: %s, session ID: %s",
+		message.ID,
+		message.SessionID,
+	)
+
+	tenantID := types.MustTenantIDFromContext(ctx)
+	_, err := s.sessionRepo.Get(
+		ctx,
+		tenantID,
+		sessionUserIDForLookup(ctx),
+		message.SessionID,
+	)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to validate session for terminal message update: %v", err)
+		return false, err
+	}
+
+	persisted, err := s.messageRepo.FinalizeAssistantMessageIfOpen(
+		ctx,
+		message,
+	)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{
+			"session_id": message.SessionID,
+			"message_id": message.ID,
+		})
+		return false, err
+	}
+
+	return persisted, nil
+}
+
 // UpdateMessageImages updates only the images JSONB column for a message.
 func (s *messageService) UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error {
 	return s.messageRepo.UpdateMessageImages(ctx, sessionID, messageID, images)

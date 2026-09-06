@@ -145,10 +145,63 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         meta: { ...maintenanceRouteMeta },
       },
       {
+        path: 'inventory-gap/rules',
+        name: 'maintenanceAllocationRules',
+        component: () => import('@/views/maintenance/inventory-gap/AllocationRuleList.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/allocations/:planId',
+        name: 'maintenanceAllocationPlanDetail',
+        component: () => import('@/views/maintenance/inventory-gap/AllocationPlanDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/balances/:balanceId',
+        name: 'maintenanceInventoryBalanceDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryBalanceDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/transactions/:transactionId',
+        name: 'maintenanceInventoryTransactionDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryTransactionDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/reservations/:reservationId',
+        name: 'maintenanceInventoryReservationDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryReservationDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/transfers/:transferId',
+        name: 'maintenanceInventoryTransferDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryTransferDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
+        path: 'inventory-gap/stocktakes/:stocktakeId',
+        name: 'maintenanceInventoryStocktakeDetail',
+        component: () => import('@/views/maintenance/inventory-gap/InventoryStocktakeDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
+      {
         path: 'reviews',
         name: 'maintenanceReviews',
         component: () => import('@/views/maintenance/reviews/ReviewList.vue'),
         meta: { ...maintenanceRouteMeta },
+      },
+      {
+        path: 'reviews/:reviewId',
+        name: 'maintenanceReviewDetail',
+        component: () => import(
+          '@/views/maintenance/reviews/ReviewDetail.vue'
+        ),
+        meta: {
+          ...maintenanceRouteMeta,
+          hideInMaintenanceMenu: true,
+        },
       },
       {
         path: 'reports',

@@ -63,6 +63,14 @@ test('visible Maintenance menu entries agree with route records while detail rou
       'maintenanceCalculationProgress',
       'maintenanceCalculationComparison',
       'maintenanceDemandListDetail',
+      'maintenanceAllocationRules',
+      'maintenanceAllocationPlanDetail',
+      'maintenanceInventoryBalanceDetail',
+      'maintenanceInventoryTransactionDetail',
+      'maintenanceInventoryReservationDetail',
+      'maintenanceInventoryTransferDetail',
+      'maintenanceInventoryStocktakeDetail',
+      'maintenanceReviewDetail',
     ],
   )
 })

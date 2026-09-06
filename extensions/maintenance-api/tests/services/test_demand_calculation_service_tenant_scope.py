@@ -12,11 +12,12 @@ from app.models import (
     DemandCalculationRun,
     DemandScenarioTemplate,
     DemandScenarioVersion,
+    InventoryBalance,
     ReliabilityProfile,
     RepairProfile,
     SparePart,
     Warehouse,
-    WarehouseInventory,
+    WarehouseLocation,
 )
 from app.models.enums import (
     CalculationExecutionType,
@@ -27,9 +28,6 @@ from app.models.enums import (
 )
 from app.repositories.demand_calculation_repository import (
     DemandCalculationRunRepository,
-)
-from app.repositories.inventory_repository import (
-    InventoryRepository,
 )
 from app.repositories.reliability_repository import (
     ReliabilityRepository,
@@ -46,6 +44,7 @@ from app.services.demand_calculation_service import (
     DemandCalculationService,
     calculation_service,
 )
+from app.services.inventory_query_service import InventoryQueryService
 from sqlalchemy.orm import Session
 
 
@@ -159,7 +158,6 @@ def test_calculation_preview_methods_require_actor() -> None:
 def test_calculation_selection_repositories_require_tenant(
 ) -> None:
     matrix = (
-        (InventoryRepository, "list_for_spare"),
         (
             ReliabilityRepository,
             "list_active_for_selection",
@@ -182,6 +180,14 @@ def test_calculation_selection_repositories_require_tenant(
         )
         assert method is not None
         assert "tenant_id" in signature(method).parameters
+
+    for method_name in (
+        "summary_for_part",
+        "summaries_for_parts",
+    ):
+        assert "actor" in signature(
+            getattr(InventoryQueryService, method_name)
+        ).parameters
 
 
 def test_next_attempt_ignores_foreign_runs(
@@ -330,15 +336,33 @@ def test_selection_candidates_ignore_foreign_rows(
         "tenant-b",
         "FOREIGN",
     )
-    local_inventory = WarehouseInventory(
+    local_location = WarehouseLocation(
         tenant_id=actor.tenant_id,
         warehouse_id=local_warehouse.id,
+        code="LOCAL",
+        name="Local",
+        location_type="SHELF",
+    )
+    foreign_location = WarehouseLocation(
+        tenant_id="tenant-b",
+        warehouse_id=foreign_warehouse.id,
+        code="FOREIGN",
+        name="Foreign",
+        location_type="SHELF",
+    )
+    session.add_all((local_location, foreign_location))
+    session.flush()
+    local_inventory = InventoryBalance(
+        tenant_id=actor.tenant_id,
+        warehouse_id=local_warehouse.id,
+        location_id=local_location.id,
         spare_part_id=spare.id,
         on_hand_quantity=Decimal("10"),
     )
-    foreign_inventory = WarehouseInventory(
+    foreign_inventory = InventoryBalance(
         tenant_id="tenant-b",
         warehouse_id=foreign_warehouse.id,
+        location_id=foreign_location.id,
         spare_part_id=spare.id,
         on_hand_quantity=Decimal("999"),
     )
@@ -388,13 +412,10 @@ def test_selection_candidates_ignore_foreign_rows(
     )
     session.commit()
 
-    inventories = (
-        calculation_service.inventory_repository
-        .list_for_spare(
-            session,
-            actor.tenant_id,
-            spare.id,
-        )
+    inventories = calculation_service.inventory_query_service.summary_for_part(
+        session,
+        actor,
+        spare.id,
     )
     reliability = (
         calculation_service._select_reliability(
@@ -414,9 +435,10 @@ def test_selection_candidates_ignore_foreign_rows(
         date.today(),
     )
 
-    assert [row.id for row in inventories] == [
-        local_inventory.id
+    assert [row.warehouse_id for row in inventories] == [
+        local_warehouse.id
     ]
+    assert inventories[0].on_hand_quantity == Decimal("10")
     assert reliability is not None
     assert reliability.id == local_reliability.id
     assert repair is not None

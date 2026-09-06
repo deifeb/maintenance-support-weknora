@@ -217,3 +217,120 @@ def test_ai_session_and_confirmation_reject_foreign_tenant(
                 foreign_scenario.id
             ),
         )
+
+
+def test_get_message_returns_exact_message_not_latest(
+    session: Session,
+    actor_context: Callable[..., ActorContext],
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="alice",
+    )
+    row = ai_session_service.create(
+        session,
+        actor,
+        title="Exact message",
+        sensitivity_level="INTERNAL",
+    )
+    first = ai_session_service.add_message(
+        session,
+        actor,
+        row.id,
+        role="USER",
+        message_type="USER_TEXT",
+        content="first",
+    )
+    second = ai_session_service.add_message(
+        session,
+        actor,
+        row.id,
+        role="USER",
+        message_type="USER_TEXT",
+        content="second",
+    )
+
+    exact = ai_session_service.get_message(
+        session,
+        actor,
+        row.id,
+        first.id,
+    )
+
+    assert exact.id == first.id
+    assert exact.id != second.id
+    assert exact.content == "first"
+
+
+def test_get_message_rejects_session_message_mismatch(
+    session: Session,
+    actor_context: Callable[..., ActorContext],
+) -> None:
+    actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="alice",
+    )
+    source_session = ai_session_service.create(
+        session,
+        actor,
+        title="Source",
+        sensitivity_level="INTERNAL",
+    )
+    other_session = ai_session_service.create(
+        session,
+        actor,
+        title="Other",
+        sensitivity_level="INTERNAL",
+    )
+    message = ai_session_service.add_message(
+        session,
+        actor,
+        source_session.id,
+        role="USER",
+        message_type="USER_TEXT",
+        content="source-message",
+    )
+
+    with pytest.raises(NotFoundError):
+        ai_session_service.get_message(
+            session,
+            actor,
+            other_session.id,
+            message.id,
+        )
+
+
+def test_get_message_rejects_foreign_tenant(
+    session: Session,
+    actor_context: Callable[..., ActorContext],
+) -> None:
+    local_actor = actor_context(
+        tenant_id="tenant-a",
+        user_id="alice",
+    )
+    foreign_actor = actor_context(
+        tenant_id="tenant-b",
+        user_id="bob",
+    )
+    foreign_session = ai_session_service.create(
+        session,
+        foreign_actor,
+        title="Foreign",
+        sensitivity_level="INTERNAL",
+    )
+    foreign_message = ai_session_service.add_message(
+        session,
+        foreign_actor,
+        foreign_session.id,
+        role="USER",
+        message_type="USER_TEXT",
+        content="foreign-message",
+    )
+
+    with pytest.raises(NotFoundError):
+        ai_session_service.get_message(
+            session,
+            local_actor,
+            foreign_session.id,
+            foreign_message.id,
+        )

@@ -26,3 +26,4 @@ class TaskRegistry:
 
 registry = TaskRegistry()
 group_registry = TaskRegistry()
+reservation_expiry_registry = TaskRegistry()

@@ -54,7 +54,6 @@ from app.repositories import (
     DemandCalculationRunRepository,
     DemandRunContributionRepository,
     DemandRunItemResultRepository,
-    InventoryRepository,
     ReliabilityRepository,
     RepairRepository,
     SparePartRepository,
@@ -64,8 +63,10 @@ from app.schemas.demand_calculation import (
     CalculationPreviewRead,
     CalculationPreviewRequest,
 )
+from app.schemas.inventory_ledger import InventorySummaryRead
 from app.security.actor import ActorContext
 from app.services.inventory_gap_service import inventory_gap_service
+from app.services.inventory_query_service import InventoryQueryService
 from app.services.scenario_service import scenario_service
 from app.services.snapshot_service import snapshot_service
 
@@ -132,7 +133,7 @@ class DemandCalculationService:
         self.configuration_item_repository = (
             ConfigurationItemRepository()
         )
-        self.inventory_repository = InventoryRepository()
+        self.inventory_query_service = InventoryQueryService()
         self.spare_part_repository = SparePartRepository()
         self.reliability_repository = (
             ReliabilityRepository()
@@ -437,6 +438,18 @@ class DemandCalculationService:
             for stage in version.stages
             for shock in stage.shocks
         ]
+        inventory_by_spare: dict[int, list[InventorySummaryRead]] = {
+            spare_id: [] for spare_id in aggregate
+        }
+        for inventory in self.inventory_query_service.summaries_for_parts(
+            session,
+            actor,
+            list(aggregate),
+        ):
+            inventory_by_spare.setdefault(
+                inventory.spare_part_id,
+                [],
+            ).append(inventory)
         snapshot_items = []
         for spare_id, row in aggregate.items():
             spare: SparePart = row["spare"]
@@ -485,13 +498,7 @@ class DemandCalculationService:
                 if spare.is_repairable
                 else None
             )
-            inventories = (
-                self.inventory_repository.list_for_spare(
-                    session,
-                    actor.tenant_id,
-                    spare_id,
-                )
-            )
+            inventories = inventory_by_spare[spare_id]
             available = sum(
                 (inventory.available_quantity for inventory in inventories), Decimal("0")
             )

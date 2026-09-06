@@ -8,13 +8,16 @@ from app.models import (
     ConfigurationItem,
     ConfigurationVersion,
     EquipmentModel,
+    InventoryBalance,
+    InventoryLedgerEntry,
+    InventoryPolicy,
+    InventoryTransaction,
     Part,
     ReliabilityProfile,
     SparePart,
     Supplier,
     SupplierOffer,
     Warehouse,
-    WarehouseInventory,
 )
 from app.models.enums import (
     ConfigurationStatus,
@@ -23,6 +26,9 @@ from app.models.enums import (
     ReliabilityModelType,
     WarehouseStatus,
 )
+from app.schemas.inventory import InventoryQuantities
+from app.security.actor import ActorContext, MaintenanceRole
+from app.services.inventory_target_adapter import inventory_target_adapter
 
 
 def _normalize_tenant_id(tenant_id: str) -> str:
@@ -69,6 +75,13 @@ def get_or_create(
 
 def seed(*, tenant_id: str) -> dict[str, int]:
     tenant_id = _normalize_tenant_id(tenant_id)
+    actor = ActorContext(
+        user_id="seed-master-data",
+        tenant_id=tenant_id,
+        role=MaintenanceRole.ADMIN,
+        request_id=f"seed-master-data:{tenant_id}",
+        token_id=f"seed-master-data:{tenant_id}",
+    )
     session = SessionLocal()
     try:
         equipment = [
@@ -290,25 +303,37 @@ def seed(*, tenant_id: str) -> dict[str, int]:
             )
 
         for warehouse in warehouses:
-            for spare in spares[:10]:
-                get_or_create(
+            for spare_index, spare in enumerate(
+                spares[:10],
+                start=1,
+            ):
+                quantities = InventoryQuantities(
+                    on_hand_quantity=Decimal(str(50 + spare_index)),
+                    reserved_quantity=Decimal("2"),
+                    damaged_quantity=Decimal("0"),
+                    quarantined_quantity=Decimal("0"),
+                    in_transit_quantity=Decimal("5"),
+                    safety_stock=Decimal("10"),
+                    reorder_point=Decimal("20"),
+                    maximum_stock=Decimal("100"),
+                )
+                inventory_target_adapter.apply_target(
                     session,
-                    WarehouseInventory,
-                    tenant_id=tenant_id,
-                    lookup={
-                        "warehouse_id": warehouse.id,
-                        "spare_part_id": spare.id,
+                    actor,
+                    warehouse_id=warehouse.id,
+                    spare_part_id=spare.id,
+                    quantities=quantities,
+                    notes=None,
+                    idempotency_key=(
+                        f"seed:inventory:{tenant_id}:"
+                        f"{warehouse.id}:{spare.id}"
+                    ),
+                    source_payload={
+                        "warehouse_code": warehouse.code,
+                        "spare_part_code": spare.code,
+                        **quantities.model_dump(),
                     },
-                    defaults={
-                        "on_hand_quantity": Decimal(str(50 + spare.id)),
-                        "reserved_quantity": Decimal("2"),
-                        "damaged_quantity": Decimal("0"),
-                        "quarantined_quantity": Decimal("0"),
-                        "in_transit_quantity": Decimal("5"),
-                        "safety_stock": Decimal("10"),
-                        "reorder_point": Decimal("20"),
-                        "maximum_stock": Decimal("100"),
-                    },
+                    reason="Seed master data inventory target",
                 )
 
         for index, spare in enumerate(spares[:12], start=1):
@@ -342,7 +367,10 @@ def seed(*, tenant_id: str) -> dict[str, int]:
             SparePart,
             ReliabilityProfile,
             Warehouse,
-            WarehouseInventory,
+            InventoryPolicy,
+            InventoryBalance,
+            InventoryTransaction,
+            InventoryLedgerEntry,
             Supplier,
             SupplierOffer,
         ]

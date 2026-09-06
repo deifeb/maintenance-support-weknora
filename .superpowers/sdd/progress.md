@@ -369,3 +369,46 @@ Next implementation boundary:
 - Generate a Complete Demand List Draft;
 - add authoritative draft-generation preconditions and immutable source snapshots;
 - do not begin lifecycle transitions, publication, derivation, API routes, or frontend work in Task 2.
+
+## Plan 05-4A Inventory Ledger Foundation (2026-08-03)
+
+- Status: **COMPLETE — TASK 7 FINAL GATE AND INDEPENDENT CLOSURE REVIEW PASSED**
+- Branch: `codex/maintenance-plan05-4`
+- Plan: `docs/superpowers/plans/2026-08-03-maintenance-plan05-04a-inventory-ledger-foundation.md`
+- Implementation base: `228d96dc74609b692efa1c3ff122f78ad5256a68`
+- Committed Task 1–6 head: `d53fe56dc6ba6e33527d3903c06beedf91aac810`
+- Task 1: complete — inventory models and reversible ledger migration.
+- Task 2: complete — tenant-scoped repository and aggregate query contract.
+- Task 3: complete — OPENING/ADJUST transaction core, idempotency, fixed-order locking, and append-only ledger.
+- Task 4: complete — ledger-backed compatibility API and canonical DEFAULT identity.
+- Task 5: complete — dashboard, demand, AI, deletion guards, and legacy relationship cleanup.
+- Task 6: complete — ledger-backed import, export, seed compatibility, target receipts, bounded exact exports, and durable execution-principal recovery.
+- Task 7: complete — authoritative-fact integration contract, corrected 05-4A Gate, independent closure review, and test Settings-cache isolation.
+- Task 7 integration: **3 passed**, 1 warning in 23.82s.
+- Complete Plan 05-4A focused Gate: **143 passed**, 1 warning in 190.11s.
+- Migration lineage Gate: **26 passed**, 1 warning in 159.25s.
+- Full backend: **878 passed, 8 deselected**, 2 warnings in 406.07s.
+- Ruff: PASS.
+- Alembic: single head `20260803_10`.
+- `git diff --check`: PASS.
+- Runtime legacy reference scan for `WarehouseInventory|warehouse_inventories`: no matches.
+- Independent closure review: **APPROVED** with no remaining Critical, Important, or Minor blocking findings.
+- Closure review: `docs/superpowers/reviews/2026-08-03-maintenance-plan05-04a-closure-review.md`.
+- Live PostgreSQL migration execution, unique-conflict timing, and `SELECT ... FOR UPDATE` scheduling were not executed; `psql` was unavailable and only the Docker CLI was detected.
+- Plan 05-4A is complete. Plan 05-4B is not started or authorized.
+- Before Plan 05-4B begins, migration allocations must be corrected to `20260803_11`, `20260803_12`, and `20260803_13` for 05-4B/05-4C/05-4D respectively.
+- Proposed Task 7 commit: `test(maintenance): close plan05-4a inventory ledger`.
+
+## Plan 05 C2D-A Source Model (2026-09-04)
+
+- Status: **IMPLEMENTATION COMPLETE — AWAITING USER INTEGRATION DECISION**
+- Branch: `codex/maintenance-plan05-5-c2d-a`
+- Base: `83f3248b181a083d34962846fffc05a801548970`
+- Design: `docs/superpowers/specs/2026-09-04-maintenance-plan05-c2d-a-source-model-design.md`
+- Plan: `docs/superpowers/plans/2026-09-04-maintenance-plan05-c2d-a-source-model.md`
+- Task 1: complete — commits `415d4cce3..b87c2d723`; specification and task-quality review approved. Final whole-branch review must retain the non-escalated note that the migration test does not independently assert both secondary indexes.
+- Task 2: complete — commit `aeb396f24`; specification and task-quality review approved.
+- Task 3: complete — commit `6f8864ff4`; specification and task-quality review approved.
+- Final hardening: commits `7235ea51a` and `b74e0e60e`; final whole-branch review approved with no Critical or Important findings.
+- Migration-chain compatibility: commit `95b3c9270`; focused independent review approved.
+- Fresh verification: report source/service/migration regressions 48 passed; report API 18 passed; regenerate API 5 passed; exports 4 passed; lifecycle API 11 passed; complete migration directory 54 passed; `ruff check app tests` passed; Alembic head is `20260904_17`; `git diff --check` passed.

@@ -14,9 +14,12 @@ from app.models import (
     DemandScenarioTemplate,
     DemandScenarioVersion,
     EquipmentModel,
+    InventoryBalance,
+    InventoryLot,
+    InventoryPolicy,
     SparePart,
     Warehouse,
-    WarehouseInventory,
+    WarehouseLocation,
 )
 from app.models.enums import (
     AIBlockingLevel,
@@ -163,18 +166,41 @@ def seed_tenant_dashboard(
     session.add_all((equipment, spare, warehouse))
     session.flush()
 
-    session.add(
-        WarehouseInventory(
-            tenant_id=tenant_id,
-            warehouse_id=warehouse.id,
-            spare_part_id=spare.id,
-            on_hand_quantity=Decimal("3"),
-            reserved_quantity=Decimal("0"),
-            damaged_quantity=Decimal("0"),
-            quarantined_quantity=Decimal("0"),
-            in_transit_quantity=Decimal("0"),
-            safety_stock=Decimal("2"),
-            reorder_point=Decimal("5"),
+    location = WarehouseLocation(
+        tenant_id=tenant_id,
+        warehouse_id=warehouse.id,
+        code=f"SHELF-{suffix}",
+        name=f"Shelf {suffix}",
+        location_type="SHELF",
+    )
+    lot = InventoryLot(
+        tenant_id=tenant_id,
+        spare_part_id=spare.id,
+        lot_code=f"LOT-{suffix}",
+    )
+    session.add_all((location, lot))
+    session.flush()
+    session.add_all(
+        (
+            InventoryPolicy(
+                tenant_id=tenant_id,
+                warehouse_id=warehouse.id,
+                spare_part_id=spare.id,
+                safety_stock=Decimal("2"),
+                reorder_point=Decimal("5"),
+            ),
+            InventoryBalance(
+                tenant_id=tenant_id,
+                warehouse_id=warehouse.id,
+                location_id=location.id,
+                spare_part_id=spare.id,
+                lot_id=lot.id,
+                on_hand_quantity=Decimal("3"),
+                reserved_quantity=Decimal("0"),
+                damaged_quantity=Decimal("0"),
+                quarantined_quantity=Decimal("0"),
+                in_transit_quantity=Decimal("0"),
+            ),
         )
     )
 

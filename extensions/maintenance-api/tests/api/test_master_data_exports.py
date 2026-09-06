@@ -355,9 +355,11 @@ def test_export_route_filters_inventories_by_spare_part_and_warehouse(
     session,
     internal_auth_headers,
 ):
-    from app.models.inventory import (
+    from app.models import (
+        InventoryBalance,
+        InventoryPolicy,
         Warehouse,
-        WarehouseInventory,
+        WarehouseLocation,
     )
 
     target_part = SparePart(
@@ -391,17 +393,45 @@ def test_export_route_filters_inventories_by_spare_part_and_warehouse(
         ]
     )
     session.flush()
+    target_location = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=target_warehouse.id,
+        code="DEFAULT",
+        name="Default",
+        location_type="DEFAULT",
+    )
+    other_location = WarehouseLocation(
+        tenant_id="tenant-a",
+        warehouse_id=other_warehouse.id,
+        code="DEFAULT",
+        name="Default",
+        location_type="DEFAULT",
+    )
+    session.add_all([target_location, other_location])
+    session.flush()
     session.add_all(
         [
-            WarehouseInventory(
+            InventoryPolicy(
                 tenant_id="tenant-a",
                 warehouse_id=target_warehouse.id,
                 spare_part_id=target_part.id,
-                on_hand_quantity=1,
             ),
-            WarehouseInventory(
+            InventoryPolicy(
                 tenant_id="tenant-a",
                 warehouse_id=other_warehouse.id,
+                spare_part_id=other_part.id,
+            ),
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=target_warehouse.id,
+                location_id=target_location.id,
+                spare_part_id=target_part.id,
+                on_hand_quantity=1,
+            ),
+            InventoryBalance(
+                tenant_id="tenant-a",
+                warehouse_id=other_warehouse.id,
+                location_id=other_location.id,
                 spare_part_id=other_part.id,
                 on_hand_quantity=2,
             ),

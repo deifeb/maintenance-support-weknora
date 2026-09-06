@@ -33,6 +33,9 @@ from app.services.ai_session_service import (
 from app.services.ai_tool_registry import (
     permissions_for_actor,
 )
+from app.services.business_card_service import (
+    business_card_service,
+)
 
 router = APIRouter()
 
@@ -200,6 +203,42 @@ async def post_message(
                 payload.model_override
             ),
         )
+    )
+    return success_response(
+        result.model_dump(mode="json"),
+        actor=actor,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/messages/"
+    "{trigger_message_id}/business-cards"
+)
+def get_message_business_cards(
+    session_id: int,
+    trigger_message_id: int,
+    actor: Annotated[
+        ActorContext,
+        Depends(require_viewer),
+    ],
+    session: Session = Depends(get_db_session),
+):
+    ai_session_service.get(
+        session,
+        actor,
+        session_id,
+    )
+    trigger_message = ai_session_service.get_message(
+        session,
+        actor,
+        session_id,
+        trigger_message_id,
+    )
+    result = business_card_service.build_message_projection(
+        session,
+        actor,
+        session_id,
+        trigger_message,
     )
     return success_response(
         result.model_dump(mode="json"),
