@@ -19,7 +19,7 @@ import { getReportActions, type ReportRole } from './report-actions'
 import type { ReportAction, ReportListItem } from './report-types'
 
 const props = withDefaults(defineProps<{ reports: ReportListItem[]; role?: ReportRole }>(), { role: 'VIEWER' })
-const emit = defineEmits<{ (event: 'open' | Exclude<ReportAction, 'view' | 'versions' | 'create'>, reportId: number): void }>()
+const emit = defineEmits<{ (event: 'open' | ReportAction, reportId: number): void }>()
 const { t, locale } = useI18n()
 
 function reportActions(report: ReportListItem): ReportAction[] {
