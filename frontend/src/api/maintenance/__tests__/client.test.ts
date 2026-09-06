@@ -311,6 +311,74 @@ test('default adapter mapping keeps the shared download response intact', async 
   assert.strictEqual(await adapter.download?.('/api/maintenance/v1/reports/1/exports/json'), response)
 })
 
+test('shared download interceptor keeps JSON blob errors for metadata normalization', async () => {
+  const previousLocalStorage = globalThis.localStorage
+  const previousWindow = globalThis.window
+  const previousDocument = globalThis.document
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      __RUNTIME_CONFIG__: {},
+      location: { href: 'http://localhost/', pathname: '/' },
+    },
+  })
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: { getItem: () => null, removeItem: () => undefined },
+  })
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      addEventListener: () => undefined,
+      body: {},
+      createElement: () => ({ style: {} }),
+      documentElement: { style: {} },
+    },
+  })
+  const { getDownloadResponse } = await import('../../../utils/request.ts')
+  const jsonError = new Blob([JSON.stringify({
+    error: { code: 'REPORT_SOURCE_CONFLICT', message: 'Source conflict' },
+    meta: { request_id: 'request-42' },
+  })], { type: 'application/json' })
+  try {
+    await assert.rejects(
+      () => getDownloadResponse('/api/maintenance/v1/reports/1/exports/json', {
+        adapter: async (config: unknown) => Promise.reject({
+          config,
+          response: {
+            status: 422,
+            data: jsonError,
+            headers: { 'x-request-id': 'request-42' },
+          },
+        }),
+      }),
+      (error: unknown) => {
+        assert.equal((error as { status: number }).status, 422)
+        assert.strictEqual((error as { data: Blob }).data, jsonError)
+        assert.equal(
+          (error as { headers: { get(name: string): string | undefined } }).headers
+            .get('x-request-id'),
+          'request-42',
+        )
+        return true
+      },
+    )
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: previousLocalStorage,
+    })
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    })
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: previousDocument,
+    })
+  }
+})
+
 test('maintenance client normalizes download failures', async () => {
   const adapter: MaintenanceRequestAdapter = {
     get: async <T>(): Promise<T> => {

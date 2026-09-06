@@ -15,15 +15,48 @@ export interface PublicSourceVersion {
   type: string
   id: number
   version: string
-  lineage_id?: string | null
-  digest?: string | null
+  lineage_id: string | null
+  digest: string
 }
 
-export interface PublicSourceProvenance {
-  capture_mode: string | null
-  provenance_completeness?: string | null
+export interface AuthoritativeSourceProvenance {
+  kind: 'authoritative'
+  capture_mode: 'AUTHORITATIVE_CREATE'
+  provenance_completeness: 'AUTHORITATIVE'
   sources: PublicSourceVersion[]
 }
+
+export type LegacySourceName =
+  | 'session'
+  | 'scenario_version'
+  | 'calculation_run'
+  | 'review_run'
+  | 'inventory'
+
+export type PublicScalar = string | number | boolean | null
+export type LegacySourceValues = Partial<Record<
+  'id' | 'version' | 'session_code' | 'version_code' | 'formula_version'
+  | 'input_schema_version' | 'calculation_id' | 'attempt_number' | 'run_mode'
+  | 'engine_version' | 'input_snapshot_hash' | 'inventory_snapshot_at'
+  | 'rule_set_version' | 'scenario_version_id' | 'calculation_run_id' | 'snapshot_at',
+  PublicScalar
+>>
+
+export interface LegacySourceProvenance {
+  kind: 'legacy'
+  capture_mode: PublicScalar
+  provenance_completeness?: PublicScalar
+  sources: Partial<Record<LegacySourceName, LegacySourceValues | null>>
+}
+
+export interface UnavailableSourceProvenance {
+  kind: 'unavailable'
+}
+
+export type PublicSourceProvenance =
+  | AuthoritativeSourceProvenance
+  | LegacySourceProvenance
+  | UnavailableSourceProvenance
 
 export interface ReportListQuery {
   page: number
@@ -117,7 +150,7 @@ export interface ReportDetail {
   input_digest: string | null
   generation_mode: string | null
   generated_at: string | null
-  source_versions: PublicSourceProvenance | null
+  source_versions: unknown
   sections: ReportSection[]
   citations: ReportCitation[]
   findings?: ReportValidationFinding[]
@@ -152,43 +185,83 @@ export type ReportAction =
   | 'finalize'
   | 'regenerate'
 
+const LEGACY_SOURCE_FIELDS: Record<LegacySourceName, readonly (keyof LegacySourceValues)[]> = {
+  session: ['id', 'version', 'session_code'],
+  scenario_version: ['id', 'version', 'version_code', 'formula_version', 'input_schema_version'],
+  calculation_run: ['id', 'calculation_id', 'attempt_number', 'run_mode', 'engine_version', 'formula_version', 'input_snapshot_hash', 'inventory_snapshot_at'],
+  review_run: ['id', 'version', 'rule_set_version', 'scenario_version_id', 'calculation_run_id'],
+  inventory: ['snapshot_at'],
+}
+
+function isPublicScalar(value: unknown): value is PublicScalar {
+  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+}
+
 function isPublicSource(value: unknown): value is PublicSourceVersion {
   if (typeof value !== 'object' || value === null) return false
   const source = value as Record<string, unknown>
   return typeof source.type === 'string'
     && typeof source.id === 'number'
     && typeof source.version === 'string'
+    && (typeof source.lineage_id === 'string' || source.lineage_id === null)
+    && typeof source.digest === 'string'
 }
 
 export function toPublicSourceProvenance(
   value: unknown,
-): PublicSourceProvenance | null {
-  if (typeof value !== 'object' || value === null) return null
+): PublicSourceProvenance {
+  if (typeof value !== 'object' || value === null) return { kind: 'unavailable' }
   const provenance = value as Record<string, unknown>
-  if (!Array.isArray(provenance.sources) || !provenance.sources.every(isPublicSource)) {
-    return null
+  if (Object.keys(provenance).length === 0) return { kind: 'unavailable' }
+  if (
+    provenance.capture_mode === 'AUTHORITATIVE_CREATE'
+    && provenance.provenance_completeness === 'AUTHORITATIVE'
+    && Array.isArray(provenance.sources)
+    && provenance.sources.every(isPublicSource)
+  ) {
+    return {
+      kind: 'authoritative',
+      capture_mode: 'AUTHORITATIVE_CREATE',
+      provenance_completeness: 'AUTHORITATIVE',
+      sources: provenance.sources.map((source) => ({
+        type: source.type,
+        id: source.id,
+        version: source.version,
+        lineage_id: source.lineage_id,
+        digest: source.digest,
+      })),
+    }
   }
-  const captureMode = provenance.capture_mode
+  if (!isPublicScalar(provenance.capture_mode) || typeof provenance.sources !== 'object' || provenance.sources === null || Array.isArray(provenance.sources)) {
+    return { kind: 'unavailable' }
+  }
+  const sourceRecord = provenance.sources as Record<string, unknown>
+  const sources: LegacySourceProvenance['sources'] = {}
+  for (const [name, fields] of Object.entries(LEGACY_SOURCE_FIELDS) as Array<[LegacySourceName, readonly (keyof LegacySourceValues)[]]>) {
+    if (!(name in sourceRecord)) continue
+    const source = sourceRecord[name]
+    if (source === null) {
+      sources[name] = null
+      continue
+    }
+    if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+      return { kind: 'unavailable' }
+    }
+    const selected: LegacySourceValues = {}
+    for (const field of fields) {
+      const fieldValue = (source as Record<string, unknown>)[field]
+      if (fieldValue !== undefined && isPublicScalar(fieldValue)) selected[field] = fieldValue
+    }
+    sources[name] = selected
+  }
   const completeness = provenance.provenance_completeness
-  if (captureMode !== null && typeof captureMode !== 'string') return null
-  if (completeness !== undefined && completeness !== null && typeof completeness !== 'string') {
-    return null
-  }
+  if (completeness !== undefined && !isPublicScalar(completeness)) return { kind: 'unavailable' }
   return {
-    capture_mode: typeof captureMode === 'string' ? captureMode : null,
+    kind: 'legacy',
+    capture_mode: provenance.capture_mode,
     ...(completeness === undefined
       ? {}
-      : { provenance_completeness: completeness as string | null }),
-    sources: provenance.sources.map((source) => ({
-      type: source.type,
-      id: source.id,
-      version: source.version,
-      ...(typeof source.lineage_id === 'string' || source.lineage_id === null
-        ? { lineage_id: source.lineage_id }
-        : {}),
-      ...(typeof source.digest === 'string' || source.digest === null
-        ? { digest: source.digest }
-        : {}),
-    })),
+      : { provenance_completeness: completeness }),
+    sources,
   }
 }

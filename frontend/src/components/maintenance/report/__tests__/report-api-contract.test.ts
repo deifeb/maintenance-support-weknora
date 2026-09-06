@@ -122,6 +122,7 @@ test('public provenance selector preserves only C2D display fields', () => {
       }],
     }),
     {
+      kind: 'authoritative',
       capture_mode: 'AUTHORITATIVE_CREATE',
       provenance_completeness: 'AUTHORITATIVE',
       sources: [{
@@ -133,6 +134,29 @@ test('public provenance selector preserves only C2D display fields', () => {
       }],
     },
   )
+})
+
+test('public provenance selector supports C2D legacy and unavailable payloads', () => {
+  assert.deepEqual(
+    toPublicSourceProvenance({
+      capture_mode: 'LEGACY_RECONSTRUCTED',
+      provenance_completeness: 'PERSISTED_LINKS_ONLY',
+      sources: {
+        session: { id: 7, version: 'v2', session_code: 'S-7', tenant_id: 'private' },
+        inventory: { snapshot_at: '2026-09-06', source_snapshot_json: { secret: true } },
+      },
+    }),
+    {
+      kind: 'legacy',
+      capture_mode: 'LEGACY_RECONSTRUCTED',
+      provenance_completeness: 'PERSISTED_LINKS_ONLY',
+      sources: {
+        session: { id: 7, version: 'v2', session_code: 'S-7' },
+        inventory: { snapshot_at: '2026-09-06' },
+      },
+    },
+  )
+  assert.deepEqual(toPublicSourceProvenance({}), { kind: 'unavailable' })
 })
 
 test('attachment filename parsing rejects unsafe or non-attachment names', () => {
