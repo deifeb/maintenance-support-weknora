@@ -13,12 +13,14 @@ import type {
   ReportJobStatusRead,
   ReportListItem,
   ReportListQuery,
+  PublicSourceProvenance,
   ReportVersionSummary,
 } from '../../components/maintenance/report/report-types'
 
 export type {
   CreateReportJobInput,
   PublicSourceVersion,
+  PublicSourceProvenance,
   ReportAction,
   ReportDetail,
   ReportExportFormat,
@@ -28,6 +30,8 @@ export type {
   ReportVersionStatus,
   ReportVersionSummary,
 } from '../../components/maintenance/report/report-types'
+
+export { toPublicSourceProvenance } from '../../components/maintenance/report/report-types'
 
 export type ReportApiClient = Pick<
   MaintenanceClient,

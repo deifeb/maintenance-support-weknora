@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   createMaintenanceClient,
+  createMaintenanceRequestAdapter,
   normalizeMaintenanceError,
   unwrapMaintenanceResponse,
   type MaintenanceRequestAdapter,
@@ -264,6 +265,50 @@ test('maintenance client downloads blobs through the maintenance prefix', async 
     url: '/api/maintenance/v1/master-data/import/template',
     config: { responseType: 'blob' },
   }])
+})
+
+test('maintenance client preserves download response headers for metadata callers', async () => {
+  const download = new Blob(['report'])
+  const adapter: MaintenanceRequestAdapter = {
+    get: async <T>(): Promise<T> => undefined as T,
+    download: async <T>(): Promise<T> => ({
+      data: download,
+      headers: {
+        'content-disposition': 'attachment; filename="RPT-1-v2.docx"',
+        'content-type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      },
+    } as T),
+    post: async <T>(): Promise<T> => undefined as T,
+    put: async <T>(): Promise<T> => undefined as T,
+    patch: async <T>(): Promise<T> => undefined as T,
+    del: async <T>(): Promise<T> => undefined as T,
+  }
+
+  assert.deepEqual(
+    await createMaintenanceClient(async () => adapter).downloadWithMetadata('/v1/reports/1/exports/docx'),
+    {
+      blob: download,
+      filename: 'RPT-1-v2.docx',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    },
+  )
+})
+
+test('default adapter mapping keeps the shared download response intact', async () => {
+  const response = {
+    data: new Blob(['export']),
+    headers: { 'content-disposition': 'attachment; filename="report.json"' },
+  }
+  const adapter = createMaintenanceRequestAdapter({
+    get: async <T>(): Promise<T> => undefined as T,
+    getDownloadResponse: async () => response,
+    post: async <T>(): Promise<T> => undefined as T,
+    put: async <T>(): Promise<T> => undefined as T,
+    patch: async <T>(): Promise<T> => undefined as T,
+    del: async <T>(): Promise<T> => undefined as T,
+  })
+
+  assert.strictEqual(await adapter.download?.('/api/maintenance/v1/reports/1/exports/json'), response)
 })
 
 test('maintenance client normalizes download failures', async () => {

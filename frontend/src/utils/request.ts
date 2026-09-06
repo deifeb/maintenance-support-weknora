@@ -1,10 +1,14 @@
 // src/utils/request.js
-import axios from "axios";
+import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 import { generateRandomString, MAX_FILE_SIZE_MB } from "./index";
 import i18n from '@/i18n'
 import { getApiBaseUrl } from './api-base';
 
 const t = (key: string) => i18n.global.t(key)
+const MAINTENANCE_DOWNLOAD_RESPONSE = '__maintenanceDownloadResponse'
+type MaintenanceDownloadResponseConfig = {
+  [MAINTENANCE_DOWNLOAD_RESPONSE]: true
+}
 
 // API基础URL
 const BASE_URL = getApiBaseUrl();
@@ -111,6 +115,9 @@ function redirectToLogin() {
 
 instance.interceptors.response.use(
   (response) => {
+    if ((response.config as unknown as Partial<MaintenanceDownloadResponseConfig>)[MAINTENANCE_DOWNLOAD_RESPONSE]) {
+      return response;
+    }
     // 根据业务状态码处理逻辑
     const { status, data } = response;
     if (status >= 200 && status < 300) {
@@ -248,6 +255,15 @@ instance.interceptors.response.use(
 
 export function get<T = any>(url: string, config?: any): Promise<T> {
   return instance.get<T>(url, config) as unknown as Promise<T>;
+}
+
+// Keeps the shared axios authentication and error interceptors while allowing
+// the maintenance client to read export response headers.
+export function getDownloadResponse(url: string): Promise<AxiosResponse<Blob>> {
+  return instance.get<Blob>(url, {
+    responseType: 'blob',
+    [MAINTENANCE_DOWNLOAD_RESPONSE]: true,
+  } as AxiosRequestConfig & MaintenanceDownloadResponseConfig) as unknown as Promise<AxiosResponse<Blob>>
 }
 
 export async function getDown(url: string): Promise<Blob> {

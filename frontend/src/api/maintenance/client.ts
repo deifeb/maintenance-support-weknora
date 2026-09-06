@@ -13,6 +13,7 @@ type UnknownRecord = Record<string, unknown>
 
 export interface MaintenanceRequestAdapter {
   get<T>(url: string, config?: unknown): Promise<T>
+  download?<T>(url: string): Promise<T>
   post<T>(url: string, body?: unknown, config?: unknown): Promise<T>
   put<T>(url: string, body?: unknown, config?: unknown): Promise<T>
   patch<T>(url: string, body?: unknown, config?: unknown): Promise<T>
@@ -21,6 +22,15 @@ export interface MaintenanceRequestAdapter {
 
 export type MaintenanceRequestLoader =
   () => Promise<MaintenanceRequestAdapter>
+
+export interface MaintenanceRequestFunctions {
+  get<T>(url: string, config?: unknown): Promise<T>
+  getDownloadResponse(url: string): Promise<unknown>
+  post<T>(url: string, body?: unknown, config?: unknown): Promise<T>
+  put<T>(url: string, body?: unknown, config?: unknown): Promise<T>
+  patch<T>(url: string, body?: unknown, config?: unknown): Promise<T>
+  del<T>(url: string, body?: unknown): Promise<T>
+}
 
 export interface MaintenanceClient {
   get<T>(path: string): Promise<MaintenanceResult<T>>
@@ -206,28 +216,36 @@ export function normalizeMaintenanceError(
   return result
 }
 
-async function loadDefaultRequestAdapter(
-): Promise<MaintenanceRequestAdapter> {
-  const { del, get, patch, post, put } =
-    await import('@/utils/request')
-
+export function createMaintenanceRequestAdapter(
+  request: MaintenanceRequestFunctions,
+): MaintenanceRequestAdapter {
   return {
     get<T>(url: string, config?: unknown): Promise<T> {
-      return get<T>(url, config)
+      return request.get<T>(url, config)
+    },
+    download<T>(url: string): Promise<T> {
+      return request.getDownloadResponse(url) as Promise<T>
     },
     post<T>(url: string, body?: unknown, config?: unknown): Promise<T> {
-      return post<T>(url, body as object, config)
+      return request.post<T>(url, body as object, config)
     },
     put<T>(url: string, body?: unknown, config?: unknown): Promise<T> {
-      return put<T>(url, body as object, config)
+      return request.put<T>(url, body as object, config)
     },
     patch<T>(url: string, body?: unknown, config?: unknown): Promise<T> {
-      return patch<T>(url, body as object, config)
+      return request.patch<T>(url, body as object, config)
     },
     del<T>(url: string, body?: unknown): Promise<T> {
-      return del<T>(url, body)
+      return request.del<T>(url, body)
     },
   }
+}
+
+async function loadDefaultRequestAdapter(
+): Promise<MaintenanceRequestAdapter> {
+  return createMaintenanceRequestAdapter(
+    await import('@/utils/request') as unknown as MaintenanceRequestFunctions,
+  )
 }
 
 export function createMaintenanceClient(
@@ -263,10 +281,9 @@ export function createMaintenanceClient(
     async downloadWithMetadata(path: string): Promise<MaintenanceDownload> {
       try {
         const adapter = await loadRequestAdapter()
-        const response = await adapter.get<unknown>(`${PREFIX}${path}`, {
-          responseType: 'blob',
-          returnResponse: true,
-        })
+        const response = adapter.download
+          ? await adapter.download<unknown>(`${PREFIX}${path}`)
+          : await adapter.get<unknown>(`${PREFIX}${path}`, { responseType: 'blob' })
         const download = readDownload(response)
         if (!download) throw new Error('Invalid maintenance download response')
         const contentType = readHeader(download.headers, 'content-type')

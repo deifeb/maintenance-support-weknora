@@ -12,10 +12,17 @@ export type ReportVersionStatus = 'DRAFT' | 'REVIEWED' | 'FINAL' | 'SUPERSEDED'
 export type ReportExportFormat = 'MARKDOWN' | 'JSON' | 'DOCX'
 
 export interface PublicSourceVersion {
-  source_type: string
-  source_id: number | null
-  source_version: string | null
-  display_name?: string | null
+  type: string
+  id: number
+  version: string
+  lineage_id?: string | null
+  digest?: string | null
+}
+
+export interface PublicSourceProvenance {
+  capture_mode: string | null
+  provenance_completeness?: string | null
+  sources: PublicSourceVersion[]
 }
 
 export interface ReportListQuery {
@@ -101,8 +108,8 @@ export interface ReportDetail {
   report_type: string
   title: string
   status: ReportVersionStatus
-  job_status: ReportJobStatus
-  progress_percent: number
+  job_status?: ReportJobStatus
+  progress_percent?: number
   version_id: number
   version_number: number
   parent_version_id: number | null
@@ -110,16 +117,16 @@ export interface ReportDetail {
   input_digest: string | null
   generation_mode: string | null
   generated_at: string | null
-  source_versions: PublicSourceVersion[]
+  source_versions: PublicSourceProvenance | null
   sections: ReportSection[]
   citations: ReportCitation[]
-  findings: ReportValidationFinding[]
+  findings?: ReportValidationFinding[]
 }
 
 export interface ReportSourceReference {
-  source_type: string
-  source_id: number
-  source_version?: string | null
+  type: string
+  id: number
+  version?: string | null
 }
 
 export interface CreateReportJobInput {
@@ -144,3 +151,44 @@ export type ReportAction =
   | 'validate'
   | 'finalize'
   | 'regenerate'
+
+function isPublicSource(value: unknown): value is PublicSourceVersion {
+  if (typeof value !== 'object' || value === null) return false
+  const source = value as Record<string, unknown>
+  return typeof source.type === 'string'
+    && typeof source.id === 'number'
+    && typeof source.version === 'string'
+}
+
+export function toPublicSourceProvenance(
+  value: unknown,
+): PublicSourceProvenance | null {
+  if (typeof value !== 'object' || value === null) return null
+  const provenance = value as Record<string, unknown>
+  if (!Array.isArray(provenance.sources) || !provenance.sources.every(isPublicSource)) {
+    return null
+  }
+  const captureMode = provenance.capture_mode
+  const completeness = provenance.provenance_completeness
+  if (captureMode !== null && typeof captureMode !== 'string') return null
+  if (completeness !== undefined && completeness !== null && typeof completeness !== 'string') {
+    return null
+  }
+  return {
+    capture_mode: typeof captureMode === 'string' ? captureMode : null,
+    ...(completeness === undefined
+      ? {}
+      : { provenance_completeness: completeness as string | null }),
+    sources: provenance.sources.map((source) => ({
+      type: source.type,
+      id: source.id,
+      version: source.version,
+      ...(typeof source.lineage_id === 'string' || source.lineage_id === null
+        ? { lineage_id: source.lineage_id }
+        : {}),
+      ...(typeof source.digest === 'string' || source.digest === null
+        ? { digest: source.digest }
+        : {}),
+    })),
+  }
+}

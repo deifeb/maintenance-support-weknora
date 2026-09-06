@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createReportApi, type ReportApiClient } from '../../../../api/maintenance/reports.ts'
+import {
+  createReportApi,
+  toPublicSourceProvenance,
+  type ReportApiClient,
+} from '../../../../api/maintenance/reports.ts'
 import { parseAttachmentFilename } from '../../../../api/maintenance/client.ts'
 import type { MaintenanceResult } from '../../../../api/maintenance/types.ts'
 
@@ -51,6 +55,11 @@ test('report API uses the C2D report endpoints and encoded query values', async 
     report_type: 'MANAGEMENT_DECISION',
     source_refs: [],
   })
+  await api.createReportJob({
+    title: 'Source report',
+    report_type: 'MANAGEMENT_DECISION',
+    source_refs: [{ type: 'SESSION', id: 7, version: 'v2' }],
+  })
   await api.getReportJob(42)
   await api.getReport(42)
   await api.listReportVersions(42)
@@ -73,7 +82,16 @@ test('report API uses the C2D report endpoints and encoded query values', async 
       source_refs: [],
     },
   })
-  assert.deepEqual(calls.slice(2), [
+  assert.deepEqual(calls[2], {
+    method: 'post',
+    path: '/v1/reports/jobs',
+    body: {
+      title: 'Source report',
+      report_type: 'MANAGEMENT_DECISION',
+      source_refs: [{ type: 'SESSION', id: 7, version: 'v2' }],
+    },
+  })
+  assert.deepEqual(calls.slice(3), [
     { method: 'get', path: '/v1/reports/jobs/42' },
     { method: 'get', path: '/v1/reports/42' },
     { method: 'get', path: '/v1/reports/42/versions' },
@@ -85,6 +103,36 @@ test('report API uses the C2D report endpoints and encoded query values', async 
   ])
   assert.equal(exported.filename, 'report.json')
   assert.equal(exported.contentType, 'application/json')
+})
+
+test('public provenance selector preserves only C2D display fields', () => {
+  assert.deepEqual(
+    toPublicSourceProvenance({
+      capture_mode: 'AUTHORITATIVE_CREATE',
+      provenance_completeness: 'AUTHORITATIVE',
+      source_snapshot_json: { private: true },
+      sources: [{
+        type: 'SESSION',
+        id: 7,
+        version: 'v2',
+        lineage_id: 'lineage-1',
+        digest: 'a'.repeat(64),
+        tenant_id: 'private',
+        database_record_json: { secret: true },
+      }],
+    }),
+    {
+      capture_mode: 'AUTHORITATIVE_CREATE',
+      provenance_completeness: 'AUTHORITATIVE',
+      sources: [{
+        type: 'SESSION',
+        id: 7,
+        version: 'v2',
+        lineage_id: 'lineage-1',
+        digest: 'a'.repeat(64),
+      }],
+    },
+  )
 })
 
 test('attachment filename parsing rejects unsafe or non-attachment names', () => {
