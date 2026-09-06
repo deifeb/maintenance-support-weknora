@@ -6,15 +6,15 @@
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.reportType') }}</span>
-      <input v-model="reportType" :placeholder="t('maintenance.reports.filters.all')">
+      <select v-model="reportType"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_TYPES" :key="value" :value="value">{{ value }}</option></select>
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.jobStatus') }}</span>
-      <input v-model="jobStatus" :placeholder="t('maintenance.reports.filters.all')">
+      <select v-model="jobStatus"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_JOB_STATUSES" :key="value" :value="value">{{ value }}</option></select>
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.versionStatus') }}</span>
-      <input v-model="versionStatus" :placeholder="t('maintenance.reports.filters.all')">
+      <select v-model="versionStatus"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_VERSION_STATUSES" :key="value" :value="value">{{ value }}</option></select>
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.sourceType') }}</span>
@@ -30,7 +30,12 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { ReportListQuery } from './report-types'
+import {
+  REPORT_JOB_STATUSES,
+  REPORT_TYPES,
+  REPORT_VERSION_STATUSES,
+  type ReportListQuery,
+} from './report-types'
 
 const DEFAULT_QUERY: ReportListQuery = {
   page: 1,
@@ -66,9 +71,9 @@ function apply(): void {
   emit('apply', {
     ...DEFAULT_QUERY,
     ...(text(keyword.value) ? { keyword: text(keyword.value) } : {}),
-    ...(text(reportType.value) ? { report_type: text(reportType.value) } : {}),
-    ...(text(jobStatus.value) ? { job_status: text(jobStatus.value) as ReportListQuery['job_status'] } : {}),
-    ...(text(versionStatus.value) ? { version_status: text(versionStatus.value) as ReportListQuery['version_status'] } : {}),
+    ...(REPORT_TYPES.includes(reportType.value as typeof REPORT_TYPES[number]) ? { report_type: reportType.value as ReportListQuery['report_type'] } : {}),
+    ...(REPORT_JOB_STATUSES.includes(jobStatus.value as typeof REPORT_JOB_STATUSES[number]) ? { job_status: jobStatus.value as ReportListQuery['job_status'] } : {}),
+    ...(REPORT_VERSION_STATUSES.includes(versionStatus.value as typeof REPORT_VERSION_STATUSES[number]) ? { version_status: versionStatus.value as ReportListQuery['version_status'] } : {}),
     ...(text(sourceType.value) ? { source_type: text(sourceType.value) } : {}),
   })
 }
@@ -84,7 +89,7 @@ watch(() => props.query, sync, { immediate: true, deep: true })
 <style scoped>
 .report-filter-bar { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; border: 1px solid var(--td-component-stroke); border-radius: 8px; background: var(--td-bg-color-container); }
 .report-filter-bar label { display: grid; gap: 5px; min-width: 150px; color: var(--td-text-color-secondary); font-size: 11px; }
-.report-filter-bar input, .report-filter-bar button { min-height: 34px; padding: 0 10px; border: 1px solid var(--td-component-stroke); border-radius: 5px; background: var(--td-bg-color-container); color: var(--td-text-color-primary); font: inherit; }
+.report-filter-bar input, .report-filter-bar select, .report-filter-bar button { min-height: 34px; padding: 0 10px; border: 1px solid var(--td-component-stroke); border-radius: 5px; background: var(--td-bg-color-container); color: var(--td-text-color-primary); font: inherit; }
 .report-filter-bar button { cursor: pointer; }
 .report-filter-bar__actions { display: flex; align-items: end; gap: 8px; }
 </style>

@@ -14,23 +14,13 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { reportApi, type ReportListItem, type ReportListQuery } from '@/api/maintenance/reports'
+import { reportApi, type ReportListItem } from '@/api/maintenance/reports'
 import { normalizeMaintenanceError } from '@/api/maintenance/client'
 import ReportFilterBar from '@/components/maintenance/report/ReportFilterBar.vue'
 import ReportListTable from '@/components/maintenance/report/ReportListTable.vue'
 import type { ReportRole } from '@/components/maintenance/report/report-actions'
 import { useAuthStore } from '@/stores/auth'
-
-export function normalizeReportListQuery(input: Record<string, unknown> = {}) {
-  const positive: (value: unknown, fallback: number) => number = (value, fallback) => { const parsed = typeof value === 'number' ? value : Number(value); return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback }
-  const text: (value: unknown) => string | undefined = (value) => typeof value === 'string' && value.trim() ? value.trim() : undefined
-  const one: (value: unknown) => unknown = (value) => Array.isArray(value) ? value[0] : value
-  const sortBy = one(input.sort_by); const sortOrder = one(input.sort_order)
-  const query = { page: positive(one(input.page), 1), page_size: positive(one(input.page_size), 20), sort_by: ['created_at', 'report_code', 'title', 'report_type', 'job_status'].includes(String(sortBy)) ? sortBy : 'created_at', sort_order: ['asc', 'desc'].includes(String(sortOrder)) ? sortOrder : 'desc' }
-  for (const key of ['keyword', 'report_type', 'job_status', 'version_status', 'source_type', 'source_version']) { const value = text(one(input[key])); if (value) Object.assign(query, { [key]: value }) }
-  for (const key of ['session_id', 'scenario_version_id', 'calculation_run_id', 'review_run_id', 'source_id']) { const value = positive(one(input[key]), 0); if (value) Object.assign(query, { [key]: value }) }
-  return query
-}
+import { normalizeReportListQuery, type ReportListQuery } from '@/components/maintenance/report/report-types'
 
 const { t } = useI18n(); const route = useRoute(); const router = useRouter(); const authStore = useAuthStore()
 const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const error = ref('')
@@ -38,7 +28,7 @@ const query = computed(() => normalizeReportListQuery(route.query) as ReportList
 const reportRole = computed<ReportRole>(() => authStore.hasRole('admin') ? 'ADMIN' : authStore.hasRole('contributor') ? 'CONTRIBUTOR' : 'VIEWER')
 let request = 0
 function routeQuery(value: ReportListQuery): Record<string, string> { return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item)])) }
-async function load(): Promise<void> { const current = ++request; loading.value = true; error.value = ''; try { const result = await reportApi.listReports(query.value); if (current !== request) return; reports.value = result.data.items; pages.value = result.data.pages } catch (value) { if (current === request) error.value = normalizeMaintenanceError(value).message } finally { if (current === request) loading.value = false } }
+async function load(): Promise<void> { const current = ++request; loading.value = true; error.value = ''; reports.value = []; pages.value = 0; try { const result = await reportApi.listReports(query.value); if (current !== request) return; reports.value = result.data.items; pages.value = result.data.pages } catch (value) { if (current === request) error.value = normalizeMaintenanceError(value).message } finally { if (current === request) loading.value = false } }
 function applyFilters(value: ReportListQuery): void { void router.push({ path: '/platform/maintenance/reports', query: routeQuery(value) }) }
 function setPage(page: number): void { applyFilters({ ...query.value, page }) }
 function openReport(reportId: number): void { void router.push({ name: 'maintenanceReportDetail', params: { reportId } }) }

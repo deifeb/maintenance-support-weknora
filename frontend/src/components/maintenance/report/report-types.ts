@@ -1,13 +1,41 @@
 export type ReportJobStatus =
   | 'CREATED'
+  | 'BUILDING_SKELETON'
   | 'GENERATING_SECTIONS'
   | 'VALIDATING_NUMBERS'
+  | 'VALIDATING_CITATIONS'
   | 'READY_FOR_REVIEW'
   | 'PARTIALLY_COMPLETED'
   | 'FAILED'
   | 'FINALIZED'
 
 export type ReportVersionStatus = 'DRAFT' | 'REVIEWED' | 'FINAL' | 'SUPERSEDED'
+
+export type ReportType =
+  | 'DEMAND_CALCULATION'
+  | 'MODEL_COMPARISON'
+  | 'DEMAND_REVIEW'
+  | 'INVENTORY_GAP'
+  | 'ALLOCATION_PLAN'
+  | 'STOCKTAKE'
+  | 'SPARE_PART_RISK'
+  | 'MANAGEMENT_DECISION'
+
+export const REPORT_TYPES: readonly ReportType[] = [
+  'DEMAND_CALCULATION', 'MODEL_COMPARISON', 'DEMAND_REVIEW',
+  'INVENTORY_GAP', 'ALLOCATION_PLAN', 'STOCKTAKE', 'SPARE_PART_RISK',
+  'MANAGEMENT_DECISION',
+]
+
+export const REPORT_JOB_STATUSES: readonly ReportJobStatus[] = [
+  'CREATED', 'BUILDING_SKELETON', 'GENERATING_SECTIONS',
+  'VALIDATING_NUMBERS', 'VALIDATING_CITATIONS', 'READY_FOR_REVIEW',
+  'PARTIALLY_COMPLETED', 'FAILED', 'FINALIZED',
+]
+
+export const REPORT_VERSION_STATUSES: readonly ReportVersionStatus[] = [
+  'DRAFT', 'REVIEWED', 'FINAL', 'SUPERSEDED',
+]
 
 export type ReportExportFormat = 'MARKDOWN' | 'JSON' | 'DOCX'
 
@@ -74,7 +102,7 @@ export interface ReportListQuery {
   page: number
   page_size: number
   keyword?: string
-  report_type?: string
+  report_type?: ReportType
   job_status?: ReportJobStatus
   version_status?: ReportVersionStatus
   session_id?: number
@@ -86,6 +114,19 @@ export interface ReportListQuery {
   source_version?: string
   sort_by?: 'created_at' | 'report_code' | 'title' | 'report_type' | 'job_status'
   sort_order?: 'asc' | 'desc'
+}
+
+export function normalizeReportListQuery(input: Record<string, unknown> = {}): ReportListQuery {
+  const value = (key: string) => Array.isArray(input[key]) ? input[key][0] : input[key]
+  const text = (key: string, limit?: number) => typeof value(key) === 'string' && value(key).trim() && (!limit || value(key).trim().length <= limit) ? value(key).trim() : undefined
+  const positive = (key: string, fallback: number, maximum?: number) => { const parsed = Number(value(key)); return Number.isInteger(parsed) && parsed > 0 && (!maximum || parsed <= maximum) ? parsed : fallback }
+  const reportType = text('report_type'); const jobStatus = text('job_status'); const versionStatus = text('version_status')
+  const sortBy = text('sort_by'); const sortOrder = text('sort_order')
+  return {
+    page: positive('page', 1), page_size: positive('page_size', 20, 200), sort_by: ['created_at', 'report_code', 'title', 'report_type', 'job_status'].includes(sortBy ?? '') ? sortBy as ReportListQuery['sort_by'] : 'created_at', sort_order: ['asc', 'desc'].includes(sortOrder ?? '') ? sortOrder as ReportListQuery['sort_order'] : 'desc',
+    ...(text('keyword', 255) ? { keyword: text('keyword', 255) } : {}), ...(reportType && REPORT_TYPES.includes(reportType as ReportType) ? { report_type: reportType as ReportType } : {}), ...(jobStatus && REPORT_JOB_STATUSES.includes(jobStatus as ReportJobStatus) ? { job_status: jobStatus as ReportJobStatus } : {}), ...(versionStatus && REPORT_VERSION_STATUSES.includes(versionStatus as ReportVersionStatus) ? { version_status: versionStatus as ReportVersionStatus } : {}),
+    ...(positive('session_id', 0) ? { session_id: positive('session_id', 0) } : {}), ...(positive('scenario_version_id', 0) ? { scenario_version_id: positive('scenario_version_id', 0) } : {}), ...(positive('calculation_run_id', 0) ? { calculation_run_id: positive('calculation_run_id', 0) } : {}), ...(positive('review_run_id', 0) ? { review_run_id: positive('review_run_id', 0) } : {}), ...(text('source_type') ? { source_type: text('source_type') } : {}), ...(positive('source_id', 0) ? { source_id: positive('source_id', 0) } : {}), ...(text('source_version', 128) ? { source_version: text('source_version', 128) } : {}),
+  }
 }
 
 export interface ReportVersionSummary {

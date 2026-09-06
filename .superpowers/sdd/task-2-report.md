@@ -48,3 +48,10 @@ Result: PASS (no whitespace errors).
 ## Scope note
 
 An existing unrelated modification to `.superpowers/sdd/progress.md` was preserved and not staged.
+
+## Review repair
+
+- Added the two missing backend job statuses and typed report-type/status allowlists.
+- Query normalization now enforces backend page, page-size, string-length, enum, and sort constraints while preserving arbitrary nonblank `source_type` values.
+- Replaced source-text evaluation with a direct pure-module test and SSR-rendered `ReportListTable` action test.
+- Current requests clear old rows and pagination before loading, so stale data cannot remain visible during a query transition or error.
