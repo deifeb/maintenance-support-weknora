@@ -112,7 +112,7 @@ test('public provenance selector preserves only C2D display fields', () => {
       provenance_completeness: 'AUTHORITATIVE',
       source_snapshot_json: { private: true },
       sources: [{
-        type: 'SESSION',
+        type: 'AI_SESSION',
         id: 7,
         version: 'v2',
         lineage_id: 'lineage-1',
@@ -126,7 +126,7 @@ test('public provenance selector preserves only C2D display fields', () => {
       capture_mode: 'AUTHORITATIVE_CREATE',
       provenance_completeness: 'AUTHORITATIVE',
       sources: [{
-        type: 'SESSION',
+        type: 'AI_SESSION',
         id: 7,
         version: 'v2',
         lineage_id: 'lineage-1',
@@ -157,6 +157,45 @@ test('public provenance selector supports C2D legacy and unavailable payloads', 
     },
   )
   assert.deepEqual(toPublicSourceProvenance({}), { kind: 'unavailable' })
+})
+
+test('authoritative provenance preserves nullable digest and scalar lineage only', () => {
+  assert.deepEqual(
+    toPublicSourceProvenance({
+      capture_mode: 'AUTHORITATIVE_CREATE',
+      provenance_completeness: 'AUTHORITATIVE',
+      sources: [{
+        type: 'AI_SESSION',
+        id: 7,
+        version: 'v2',
+        lineage_id: 12,
+        digest: null,
+        source_snapshot_json: { private: true },
+      }],
+    }),
+    {
+      kind: 'authoritative',
+      capture_mode: 'AUTHORITATIVE_CREATE',
+      provenance_completeness: 'AUTHORITATIVE',
+      sources: [{
+        type: 'AI_SESSION',
+        id: 7,
+        version: 'v2',
+        lineage_id: 12,
+        digest: null,
+      }],
+    },
+  )
+  assert.deepEqual(
+    toPublicSourceProvenance({
+      capture_mode: 'AUTHORITATIVE_CREATE',
+      provenance_completeness: 'AUTHORITATIVE',
+      sources: [{
+        type: 'AI_SESSION', id: 7, version: 'v2', lineage_id: {}, digest: null,
+      }],
+    }),
+    { kind: 'unavailable' },
+  )
 })
 
 test('attachment filename parsing rejects unsafe or non-attachment names', () => {

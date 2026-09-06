@@ -11,12 +11,24 @@ export type ReportVersionStatus = 'DRAFT' | 'REVIEWED' | 'FINAL' | 'SUPERSEDED'
 
 export type ReportExportFormat = 'MARKDOWN' | 'JSON' | 'DOCX'
 
+export type PublicReportSourceType =
+  | 'AI_SESSION'
+  | 'SCENARIO_VERSION'
+  | 'CALCULATION_RUN'
+  | 'CALCULATION_GROUP'
+  | 'DEMAND_LIST'
+  | 'DEMAND_REVIEW'
+  | 'ALLOCATION_PLAN'
+  | 'INVENTORY_STOCKTAKE'
+
+export type RequiredPublicScalar = string | number | boolean
+
 export interface PublicSourceVersion {
-  type: string
-  id: number
-  version: string
-  lineage_id: string | null
-  digest: string
+  type: PublicReportSourceType
+  id: RequiredPublicScalar
+  version: RequiredPublicScalar
+  lineage_id: PublicScalar
+  digest: string | null
 }
 
 export interface AuthoritativeSourceProvenance {
@@ -197,14 +209,31 @@ function isPublicScalar(value: unknown): value is PublicScalar {
   return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
 }
 
+function isRequiredPublicScalar(value: unknown): value is RequiredPublicScalar {
+  return value !== null && isPublicScalar(value)
+}
+
+function isPublicReportSourceType(value: unknown): value is PublicReportSourceType {
+  return typeof value === 'string' && [
+    'AI_SESSION',
+    'SCENARIO_VERSION',
+    'CALCULATION_RUN',
+    'CALCULATION_GROUP',
+    'DEMAND_LIST',
+    'DEMAND_REVIEW',
+    'ALLOCATION_PLAN',
+    'INVENTORY_STOCKTAKE',
+  ].includes(value)
+}
+
 function isPublicSource(value: unknown): value is PublicSourceVersion {
   if (typeof value !== 'object' || value === null) return false
   const source = value as Record<string, unknown>
-  return typeof source.type === 'string'
-    && typeof source.id === 'number'
-    && typeof source.version === 'string'
-    && (typeof source.lineage_id === 'string' || source.lineage_id === null)
-    && typeof source.digest === 'string'
+  return isPublicReportSourceType(source.type)
+    && isRequiredPublicScalar(source.id)
+    && isRequiredPublicScalar(source.version)
+    && isPublicScalar(source.lineage_id)
+    && (typeof source.digest === 'string' || source.digest === null)
 }
 
 export function toPublicSourceProvenance(
