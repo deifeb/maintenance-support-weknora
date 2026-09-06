@@ -54,6 +54,15 @@ export default {
     calculation: maintenanceCalculationLocales['zh-CN'],
     inventory: maintenanceInventoryLocales['zh-CN'],
     placeholder: "该功能将在对应实施阶段启用",
+    reports: {
+      description: "浏览报表任务、最新版本、生成进度与可执行操作。",
+      createComingSoon: "报表创建入口将在报表工作流中提供。",
+      loading: "正在加载报表…",
+      empty: "当前筛选条件下没有报表。",
+      filters: { keyword: "关键词", keywordPlaceholder: "编码或标题", reportType: "报表类型", jobStatus: "任务状态", versionStatus: "版本状态", sourceType: "来源类型", all: "全部" },
+      columns: { code: "报表编码", title: "标题", type: "类型", jobStatus: "任务状态", version: "最新版本", progress: "进度", created: "创建时间", updated: "更新时间", actions: "操作" },
+      actions: { apply: "查询", clear: "清除", retry: "重试", previous: "上一页", next: "下一页", create: "创建报表", view: "打开", generate: "生成", validate: "校验", finalize: "定稿", regenerate: "重新生成", export: "导出" },
+    },
     pages: {
       dashboard: "概览",
       masterData: "主数据",

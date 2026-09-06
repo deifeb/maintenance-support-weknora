@@ -54,6 +54,15 @@ export default {
     calculation: maintenanceCalculationLocales['en-US'],
     inventory: maintenanceInventoryLocales['en-US'],
     placeholder: 'This feature will be enabled in its implementation phase',
+    reports: {
+      description: 'Browse report jobs, their latest versions, progress, and available next actions.',
+      createComingSoon: 'Report creation is available from the report workflow.',
+      loading: 'Loading reports…',
+      empty: 'No reports match the current filters.',
+      filters: { keyword: 'Keyword', keywordPlaceholder: 'Code or title', reportType: 'Report type', jobStatus: 'Job status', versionStatus: 'Version status', sourceType: 'Source type', all: 'All' },
+      columns: { code: 'Report code', title: 'Title', type: 'Type', jobStatus: 'Job status', version: 'Latest version', progress: 'Progress', created: 'Created', updated: 'Updated', actions: 'Actions' },
+      actions: { apply: 'Apply', clear: 'Clear', retry: 'Retry', previous: 'Previous', next: 'Next', create: 'Create report', view: 'Open', generate: 'Generate', validate: 'Validate', finalize: 'Finalize', regenerate: 'Regenerate', export: 'Export' },
+    },
     pages: {
       dashboard: 'Dashboard',
       masterData: 'Master Data',
