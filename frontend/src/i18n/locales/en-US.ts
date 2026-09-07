@@ -55,6 +55,12 @@ export default {
     inventory: maintenanceInventoryLocales['en-US'],
     placeholder: 'This feature will be enabled in its implementation phase',
     reports: {
+      detail: { back: 'Back to reports', title: 'Report detail', refresh: 'Refresh', invalidId: 'The report identifier is invalid.', notFound: 'This report was not found.', loading: 'Loading report…', regenerate: 'Regenerate as new version' },
+      presentation: { unavailable: 'Unavailable', none: 'None', version: 'Version', sections: 'Report sections', noSections: 'No report sections are available.', citations: 'Citations', documentVersion: 'Document version', page: 'Page', chunk: 'Chunk reference', knowledgeNode: 'Knowledge node', findings: 'Validation findings', noFindings: 'No validation findings.', timeline: 'Version timeline', noVersions: 'No versions are available.', parentVersion: 'Parent version', template: 'Template', generationMode: 'Generation mode', generated: 'Generated', contentDigest: 'Content digest', provenance: 'Source provenance', noProvenance: 'Source provenance is unavailable.', source: 'Source', id: 'ID', sessionId: 'Session ID', scenarioVersionId: 'Scenario version ID', calculationRunId: 'Calculation run ID', reviewRunId: 'Review run ID', removeSource: 'Remove source reference' },
+      types: { DEMAND_CALCULATION: 'Demand calculation', MODEL_COMPARISON: 'Model comparison', DEMAND_REVIEW: 'Demand review', INVENTORY_GAP: 'Inventory gap', ALLOCATION_PLAN: 'Allocation plan', STOCKTAKE: 'Stocktake', SPARE_PART_RISK: 'Spare part risk', MANAGEMENT_DECISION: 'Management decision' },
+      sourceTypes: { AI_SESSION: 'Scenario input', SCENARIO_VERSION: 'Scenario version', CALCULATION_RUN: 'Calculation run', CALCULATION_GROUP: 'Calculation group', DEMAND_LIST: 'Demand list', DEMAND_REVIEW: 'Demand review', ALLOCATION_PLAN: 'Allocation plan', INVENTORY_STOCKTAKE: 'Inventory stocktake' },
+      jobStatuses: { CREATED: 'Created', GENERATING_SECTIONS: 'Generating sections', VALIDATING_NUMBERS: 'Validating numbers', READY_FOR_REVIEW: 'Ready for review', PARTIALLY_COMPLETED: 'Partially completed', FAILED: 'Failed', FINALIZED: 'Finalized' },
+      versionStatuses: { DRAFT: 'Draft', REVIEWED: 'Reviewed', FINAL: 'Final', SUPERSEDED: 'Superseded' },
       description: 'Browse report jobs, their latest versions, progress, and available next actions.',
       createComingSoon: 'Report creation is available from the report workflow.',
       loading: 'Loading reports…',

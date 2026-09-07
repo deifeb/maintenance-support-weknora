@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import ReportGenerationDialog from '../ReportGenerationDialog.vue'
 import ReportLifecycleActions from '../ReportLifecycleActions.vue'
 import ReportRegenerateDialog from '../ReportRegenerateDialog.vue'
+import { registerReportReader } from '../report-mutation-state'
 
 const mocks = vi.hoisted(() => ({
   create: vi.fn(), generate: vi.fn(), validate: vi.fn(), finalize: vi.fn(), regenerate: vi.fn(),
@@ -27,6 +28,19 @@ async function fillDemandCalculation(wrapper: ReturnType<typeof mount>, sourceTy
 }
 
 describe('report lifecycle production components', () => {
+  it('keeps refresh attached to the mutated report when the component receives a new report ID', async () => {
+    const mutation = deferred<unknown>(); mocks.validate.mockReturnValue(mutation.promise)
+    const read42 = vi.fn().mockResolvedValue(undefined), read43 = vi.fn().mockResolvedValue(undefined)
+    const remove42 = registerReportReader(42, read42), remove43 = registerReportReader(43, read43)
+    try {
+      const wrapper = mount(ReportLifecycleActions, { props: { reportId: 42, jobStatus: 'VALIDATING_NUMBERS', versionStatus: 'DRAFT', versionGenerated: true, actions: ['validate'], refresh: vi.fn() } })
+      await wrapper.get('button').trigger('click')
+      await wrapper.setProps({ reportId: 43 })
+      mutation.resolve({}); await flushPromises()
+      expect(read42).toHaveBeenCalledTimes(1)
+      expect(read43).not.toHaveBeenCalled()
+    } finally { remove42(); remove43() }
+  })
   it('rejects a policy-disallowed source combination before create and submits a valid combination', async () => {
     mocks.create.mockResolvedValue({})
     const wrapper = mount(ReportGenerationDialog, { props: { open: true, refresh: vi.fn() } })

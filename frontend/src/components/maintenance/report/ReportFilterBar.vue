@@ -6,19 +6,19 @@
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.reportType') }}</span>
-      <select v-model="reportType"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_TYPES" :key="value" :value="value">{{ value }}</option></select>
+      <select v-model="reportType"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_TYPES" :key="value" :value="value">{{ t(`maintenance.reports.types.${value}`) }}</option></select>
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.jobStatus') }}</span>
-      <select v-model="jobStatus"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_JOB_STATUSES" :key="value" :value="value">{{ value }}</option></select>
+      <select v-model="jobStatus"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_JOB_STATUSES" :key="value" :value="value">{{ t(`maintenance.reports.jobStatuses.${value}`) }}</option></select>
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.versionStatus') }}</span>
-      <select v-model="versionStatus"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_VERSION_STATUSES" :key="value" :value="value">{{ value }}</option></select>
+      <select v-model="versionStatus"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_VERSION_STATUSES" :key="value" :value="value">{{ t(`maintenance.reports.versionStatuses.${value}`) }}</option></select>
     </label>
     <label>
       <span>{{ t('maintenance.reports.filters.sourceType') }}</span>
-      <input v-model="sourceType" :placeholder="t('maintenance.reports.filters.all')">
+      <select v-model="sourceType"><option value="">{{ t('maintenance.reports.filters.all') }}</option><option v-for="value in REPORT_SOURCE_TYPES" :key="value" :value="value">{{ t(`maintenance.reports.sourceTypes.${value}`) }}</option></select>
     </label>
     <div class="report-filter-bar__actions">
       <button type="submit">{{ t('maintenance.reports.actions.apply') }}</button>
@@ -31,6 +31,8 @@
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
+  REPORT_SOURCE_TYPES,
+  normalizeReportListQuery,
   REPORT_JOB_STATUSES,
   REPORT_TYPES,
   REPORT_VERSION_STATUSES,
@@ -62,20 +64,18 @@ function sync(query: ReportListQuery): void {
   sourceType.value = query.source_type ?? ''
 }
 
-function text(value: string): string | undefined {
-  const trimmed = value.trim()
-  return trimmed || undefined
-}
-
 function apply(): void {
-  emit('apply', {
-    ...DEFAULT_QUERY,
-    ...(text(keyword.value) ? { keyword: text(keyword.value) } : {}),
-    ...(REPORT_TYPES.includes(reportType.value as typeof REPORT_TYPES[number]) ? { report_type: reportType.value as ReportListQuery['report_type'] } : {}),
-    ...(REPORT_JOB_STATUSES.includes(jobStatus.value as typeof REPORT_JOB_STATUSES[number]) ? { job_status: jobStatus.value as ReportListQuery['job_status'] } : {}),
-    ...(REPORT_VERSION_STATUSES.includes(versionStatus.value as typeof REPORT_VERSION_STATUSES[number]) ? { version_status: versionStatus.value as ReportListQuery['version_status'] } : {}),
-    ...(text(sourceType.value) ? { source_type: text(sourceType.value) } : {}),
+  const next = normalizeReportListQuery({
+    ...props.query,
+    keyword: keyword.value,
+    report_type: reportType.value,
+    job_status: jobStatus.value,
+    version_status: versionStatus.value,
+    source_type: sourceType.value,
   })
+  const current = normalizeReportListQuery({ ...props.query })
+  if (JSON.stringify(next) !== JSON.stringify(current)) next.page = 1
+  emit('apply', next)
 }
 
 function clear(): void {

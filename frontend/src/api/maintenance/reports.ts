@@ -27,6 +27,7 @@ export type {
   ReportJobStatus,
   ReportListItem,
   ReportListQuery,
+  ReportJobStatusRead,
   ReportVersionStatus,
   ReportVersionSummary,
 } from '../../components/maintenance/report/report-types'
@@ -76,17 +77,17 @@ export function createReportApi(
     ): Promise<MaintenanceResult<ReportVersionSummary[]>> {
       return client.get<ReportVersionSummary[]>(`${reportPath(reportId)}/versions`)
     },
-    generateReport(reportId: number): Promise<MaintenanceResult<ReportDetail>> {
-      return client.post<ReportDetail>(`${reportPath(reportId)}/generate`, {})
+    generateReport(reportId: number): Promise<MaintenanceResult<ReportJobStatusRead>> {
+      return client.post<ReportJobStatusRead>(`${reportPath(reportId)}/generate`, {})
     },
-    validateReport(reportId: number): Promise<MaintenanceResult<ReportDetail>> {
-      return client.post<ReportDetail>(`${reportPath(reportId)}/validate`, {})
+    validateReport(reportId: number): Promise<MaintenanceResult<ReportJobStatusRead>> {
+      return client.post<ReportJobStatusRead>(`${reportPath(reportId)}/validate`, {})
     },
-    finalizeReport(reportId: number): Promise<MaintenanceResult<ReportVersionSummary>> {
-      return client.post<ReportVersionSummary>(`${reportPath(reportId)}/finalize`, {})
+    finalizeReport(reportId: number): Promise<MaintenanceResult<ReportJobStatusRead>> {
+      return client.post<ReportJobStatusRead>(`${reportPath(reportId)}/finalize`, {})
     },
-    regenerateReport(reportId: number): Promise<MaintenanceResult<ReportDetail>> {
-      return client.post<ReportDetail>(`${reportPath(reportId)}/regenerate`, {})
+    regenerateReport(reportId: number): Promise<MaintenanceResult<ReportJobStatusRead>> {
+      return client.post<ReportJobStatusRead>(`${reportPath(reportId)}/regenerate`, {})
     },
     exportReport(
       reportId: number,

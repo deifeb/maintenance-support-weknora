@@ -1,38 +1,36 @@
 <template>
   <section class="report-provenance-panel" aria-labelledby="report-provenance-title">
-    <h2 id="report-provenance-title">Source provenance</h2>
-    <p v-if="rows.length === 0" class="report-provenance-panel__unavailable">Source provenance is unavailable.</p>
+    <h2 id="report-provenance-title">{{ t('maintenance.reports.presentation.provenance') }}</h2>
+    <p v-if="rows.length === 0" class="report-provenance-panel__unavailable">{{ t('maintenance.reports.presentation.noProvenance') }}</p>
     <table v-else>
-      <thead><tr><th>Source</th><th>ID</th><th>Version</th></tr></thead>
-      <tbody><tr v-for="row in rows" :key="`${row.type}-${row.id}-${row.version}`"><td>{{ row.name }}</td><td>{{ row.id }}</td><td>{{ row.version }}</td></tr></tbody>
+      <thead><tr><th>{{ t('maintenance.reports.presentation.source') }}</th><th>{{ t('maintenance.reports.presentation.id') }}</th><th>{{ t('maintenance.reports.presentation.version') }}</th></tr></thead>
+      <tbody><tr v-for="row in rows" :key="`${row.type}-${row.id}-${row.version}`"><td>{{ t(`maintenance.reports.sourceTypes.${row.type}`) }}</td><td>{{ row.id }}</td><td>{{ row.version }}</td></tr></tbody>
     </table>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import { computed } from 'vue'
+import { REPORT_SOURCE_TYPES } from './report-types'
 import type { PublicSourceVersion } from '@/api/maintenance/reports'
 
 const props = defineProps<{ sources: PublicSourceVersion[] | null }>()
 
-const sourceNames: Record<PublicSourceVersion['type'], string> = {
-  AI_SESSION: 'Scenario input', SCENARIO_VERSION: 'Scenario version', CALCULATION_RUN: 'Calculation run',
-  CALCULATION_GROUP: 'Calculation group', DEMAND_LIST: 'Demand list', DEMAND_REVIEW: 'Demand review',
-  ALLOCATION_PLAN: 'Allocation plan', INVENTORY_STOCKTAKE: 'Inventory stocktake',
-}
 
 function isPublicSource(source: unknown): source is PublicSourceVersion {
   if (typeof source !== 'object' || source === null) return false
   const value = source as Record<string, unknown>
   const allowedFields = ['type', 'id', 'version', 'lineage_id', 'digest']
   if (Object.keys(value).some((field) => !allowedFields.includes(field))) return false
-  return typeof value.type === 'string' && value.type in sourceNames
+  return typeof value.type === 'string' && REPORT_SOURCE_TYPES.includes(value.type as PublicSourceVersion['type'])
     && ['string', 'number', 'boolean'].includes(typeof value.id)
     && ['string', 'number', 'boolean'].includes(typeof value.version)
 }
 
 const rows = computed(() => (Array.isArray(props.sources) && props.sources.every(isPublicSource)
-  ? props.sources.map((source) => ({ type: source.type, id: source.id, version: source.version, name: sourceNames[source.type] }))
+  ? props.sources.map((source) => ({ type: source.type, id: source.id, version: source.version }))
   : []))
 </script>
 

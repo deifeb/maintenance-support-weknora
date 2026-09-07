@@ -4,8 +4,8 @@
       <thead><tr><th>{{ t('maintenance.reports.columns.code') }}</th><th>{{ t('maintenance.reports.columns.title') }}</th><th>{{ t('maintenance.reports.columns.type') }}</th><th>{{ t('maintenance.reports.columns.jobStatus') }}</th><th>{{ t('maintenance.reports.columns.version') }}</th><th>{{ t('maintenance.reports.columns.progress') }}</th><th>{{ t('maintenance.reports.columns.created') }}</th><th>{{ t('maintenance.reports.columns.updated') }}</th><th>{{ t('maintenance.reports.columns.actions') }}</th></tr></thead>
       <tbody>
         <tr v-for="report in reports" :key="report.report_id" tabindex="0" @click="emit('open', report.report_id)" @keydown.enter="emit('open', report.report_id)">
-          <td><code>{{ report.report_code }}</code></td><td>{{ report.title }}</td><td>{{ report.report_type }}</td><td>{{ report.job_status }}</td>
-          <td>{{ report.latest_version ? `v${report.latest_version.version_number} · ${report.latest_version.status}` : '—' }}</td><td>{{ report.progress_percent }}%</td><td>{{ formatDate(report.created_at) }}</td><td>{{ formatDate(report.updated_at) }}</td>
+          <td><code>{{ report.report_code }}</code></td><td>{{ report.title }}</td><td>{{ t(`maintenance.reports.types.${report.report_type}`) }}</td><td>{{ t(`maintenance.reports.jobStatuses.${report.job_status}`) }}</td>
+          <td>{{ report.latest_version ? `v${report.latest_version.version_number} · ${t(`maintenance.reports.versionStatuses.${report.latest_version.status}`)}` : '—' }}</td><td>{{ report.progress_percent }}%</td><td>{{ formatDate(report.created_at) }}</td><td>{{ formatDate(report.updated_at) }}</td>
           <td class="report-list-table__actions" @click.stop @keydown.enter.stop @keydown.space.stop><button v-for="action in reportActions(report)" :key="action" type="button" @click="emit(action === 'view' ? 'open' : action, report.report_id)">{{ t(`maintenance.reports.actions.${action}`) }}</button></td>
         </tr>
       </tbody>

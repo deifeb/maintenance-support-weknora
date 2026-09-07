@@ -55,6 +55,12 @@ export default {
     inventory: maintenanceInventoryLocales['zh-CN'],
     placeholder: "该功能将在对应实施阶段启用",
     reports: {
+      detail: { back: '返回报表中心', title: '报表详情', refresh: '刷新', invalidId: '报表标识无效。', notFound: '未找到此报表。', loading: '正在加载报表…', regenerate: '重新生成新版本' },
+      presentation: { unavailable: '不可用', none: '无', version: '版本', sections: '报表章节', noSections: '暂无报表章节。', citations: '引用资料', documentVersion: '文档版本', page: '页码', chunk: '片段引用', knowledgeNode: '知识节点', findings: '校验结果', noFindings: '暂无校验结果。', timeline: '版本时间线', noVersions: '暂无版本。', parentVersion: '父版本', template: '模板', generationMode: '生成模式', generated: '生成时间', contentDigest: '内容摘要', provenance: '来源追溯', noProvenance: '来源追溯信息不可用。', source: '来源', id: '标识', sessionId: '会话标识', scenarioVersionId: '情景版本标识', calculationRunId: '计算运行标识', reviewRunId: '审核运行标识', removeSource: '移除来源引用' },
+      types: { DEMAND_CALCULATION: '需求计算', MODEL_COMPARISON: '模型比较', DEMAND_REVIEW: '需求审核', INVENTORY_GAP: '库存缺口', ALLOCATION_PLAN: '分配方案', STOCKTAKE: '库存盘点', SPARE_PART_RISK: '备件风险', MANAGEMENT_DECISION: '管理决策' },
+      sourceTypes: { AI_SESSION: '情景输入', SCENARIO_VERSION: '情景版本', CALCULATION_RUN: '计算运行', CALCULATION_GROUP: '计算组', DEMAND_LIST: '需求清单', DEMAND_REVIEW: '需求审核', ALLOCATION_PLAN: '分配方案', INVENTORY_STOCKTAKE: '库存盘点' },
+      jobStatuses: { CREATED: '已创建', GENERATING_SECTIONS: '正在生成章节', VALIDATING_NUMBERS: '正在校验数值', READY_FOR_REVIEW: '待审核', PARTIALLY_COMPLETED: '部分完成', FAILED: '失败', FINALIZED: '已定稿' },
+      versionStatuses: { DRAFT: '草稿', REVIEWED: '已审核', FINAL: '最终版本', SUPERSEDED: '已被替代' },
       description: "浏览报表任务、最新版本、生成进度与可执行操作。",
       createComingSoon: "报表创建入口将在报表工作流中提供。",
       loading: "正在加载报表…",

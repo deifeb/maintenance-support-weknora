@@ -47,6 +47,11 @@ export type PublicReportSourceType =
   | 'ALLOCATION_PLAN'
   | 'INVENTORY_STOCKTAKE'
 
+export const REPORT_SOURCE_TYPES: readonly PublicReportSourceType[] = [
+  'AI_SESSION', 'SCENARIO_VERSION', 'CALCULATION_RUN', 'CALCULATION_GROUP',
+  'DEMAND_LIST', 'DEMAND_REVIEW', 'ALLOCATION_PLAN', 'INVENTORY_STOCKTAKE',
+]
+
 export type RequiredPublicScalar = string | number | boolean
 
 export interface PublicSourceVersion {
@@ -107,7 +112,7 @@ export interface ReportListQuery {
   scenario_version_id?: number
   calculation_run_id?: number
   review_run_id?: number
-  source_type?: string
+  source_type?: PublicReportSourceType
   source_id?: number
   source_version?: string
   sort_by?: 'created_at' | 'report_code' | 'title' | 'report_type' | 'job_status'
@@ -123,7 +128,7 @@ export function normalizeReportListQuery(input: Record<string, unknown> = {}): R
   return {
     page: positive('page', 1), page_size: positive('page_size', 20, 200), sort_by: ['created_at', 'report_code', 'title', 'report_type', 'job_status'].includes(sortBy ?? '') ? sortBy as ReportListQuery['sort_by'] : 'created_at', sort_order: ['asc', 'desc'].includes(sortOrder ?? '') ? sortOrder as ReportListQuery['sort_order'] : 'desc',
     ...(text('keyword', 255) ? { keyword: text('keyword', 255) } : {}), ...(reportType && REPORT_TYPES.includes(reportType as ReportType) ? { report_type: reportType as ReportType } : {}), ...(jobStatus && REPORT_JOB_STATUSES.includes(jobStatus as ReportJobStatus) ? { job_status: jobStatus as ReportJobStatus } : {}), ...(versionStatus && REPORT_VERSION_STATUSES.includes(versionStatus as ReportVersionStatus) ? { version_status: versionStatus as ReportVersionStatus } : {}),
-    ...(positive('session_id', 0) ? { session_id: positive('session_id', 0) } : {}), ...(positive('scenario_version_id', 0) ? { scenario_version_id: positive('scenario_version_id', 0) } : {}), ...(positive('calculation_run_id', 0) ? { calculation_run_id: positive('calculation_run_id', 0) } : {}), ...(positive('review_run_id', 0) ? { review_run_id: positive('review_run_id', 0) } : {}), ...(text('source_type') ? { source_type: text('source_type') } : {}), ...(positive('source_id', 0) ? { source_id: positive('source_id', 0) } : {}), ...(text('source_version', 128) ? { source_version: text('source_version', 128) } : {}),
+    ...(positive('session_id', 0) ? { session_id: positive('session_id', 0) } : {}), ...(positive('scenario_version_id', 0) ? { scenario_version_id: positive('scenario_version_id', 0) } : {}), ...(positive('calculation_run_id', 0) ? { calculation_run_id: positive('calculation_run_id', 0) } : {}), ...(positive('review_run_id', 0) ? { review_run_id: positive('review_run_id', 0) } : {}), ...(isPublicReportSourceType(text('source_type')) ? { source_type: text('source_type') as PublicReportSourceType } : {}), ...(positive('source_id', 0) ? { source_id: positive('source_id', 0) } : {}), ...(text('source_version', 128) ? { source_version: text('source_version', 128) } : {}),
   }
 }
 
@@ -174,8 +179,11 @@ export interface ReportSection {
 export interface ReportCitation {
   citation_id: string
   source_type: string
-  source_id: string | number | null
-  label: string | null
+  source_name?: string | null
+  document_version?: string | null
+  page_number?: number | null
+  chunk_reference?: string | null
+  knowledge_node?: string | null
 }
 
 export interface ReportValidationFinding {

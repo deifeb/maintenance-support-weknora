@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 
 import {
   createReportApi,
@@ -14,6 +15,14 @@ type Call = {
   path: string
   body?: unknown
 }
+
+test('all lifecycle endpoint declarations expose the public ReportJobStatusRead envelope', () => {
+  const source = readFileSync('src/api/maintenance/reports.ts', 'utf8')
+  for (const name of ['generate', 'validate', 'finalize', 'regenerate']) {
+    assert.match(source, new RegExp(`${name}Report\\(reportId: number\\): Promise<MaintenanceResult<ReportJobStatusRead>>`))
+    assert.match(source, new RegExp('client.post<ReportJobStatusRead>\\(`\\$\\{reportPath\\(reportId\\)\\}/' + name))
+  }
+})
 
 function result<T>(data: T): MaintenanceResult<T> {
   return {
@@ -47,7 +56,7 @@ test('report API uses the C2D report endpoints and encoded query values', async 
   await api.listReports({
     page: 2,
     page_size: 20,
-    source_type: 'SESSION',
+    source_type: 'AI_SESSION',
     keyword: 'weekly report',
   })
   await api.createReportJob({
@@ -58,7 +67,7 @@ test('report API uses the C2D report endpoints and encoded query values', async 
   await api.createReportJob({
     title: 'Source report',
     report_type: 'MANAGEMENT_DECISION',
-    source_refs: [{ type: 'SESSION', id: 7, version: 'v2' }],
+    source_refs: [{ type: 'AI_SESSION', id: 7, version: 'v2' }],
   })
   await api.getReportJob(42)
   await api.getReport(42)
@@ -71,7 +80,7 @@ test('report API uses the C2D report endpoints and encoded query values', async 
 
   assert.equal(
     calls[0].path,
-    '/v1/reports?page=2&page_size=20&source_type=SESSION&keyword=weekly+report',
+    '/v1/reports?page=2&page_size=20&source_type=AI_SESSION&keyword=weekly+report',
   )
   assert.deepEqual(calls[1], {
     method: 'post',
@@ -88,7 +97,7 @@ test('report API uses the C2D report endpoints and encoded query values', async 
     body: {
       title: 'Source report',
       report_type: 'MANAGEMENT_DECISION',
-      source_refs: [{ type: 'SESSION', id: 7, version: 'v2' }],
+      source_refs: [{ type: 'AI_SESSION', id: 7, version: 'v2' }],
     },
   })
   assert.deepEqual(calls.slice(3), [

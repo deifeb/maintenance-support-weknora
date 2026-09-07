@@ -1,13 +1,15 @@
 <template>
   <section class="report-sections" aria-labelledby="report-sections-title">
-    <h2 id="report-sections-title">Report sections</h2>
-    <p v-if="sections.length === 0" class="report-sections__empty">No report sections are available.</p>
+    <h2 id="report-sections-title">{{ t('maintenance.reports.presentation.sections') }}</h2>
+    <p v-if="sections.length === 0" class="report-sections__empty">{{ t('maintenance.reports.presentation.noSections') }}</p>
     <article v-for="section in sections" :key="section.section_code"><h3>{{ section.title }}</h3><p v-if="section.content">{{ section.content }}</p><div v-for="(table, index) in publicTables(section.tables)" :key="index" class="report-sections__table"><table><thead><tr><th v-for="column in table.columns" :key="column">{{ column }}</th></tr></thead><tbody><tr v-for="(row, rowIndex) in table.rows" :key="rowIndex"><td v-for="(cell, cellIndex) in row" :key="cellIndex">{{ cell }}</td></tr></tbody></table></div></article>
-    <aside v-if="citations.length"><h3>Citations</h3><ul><li v-for="citation in citations" :key="citation.citation_id">{{ citation.label ?? citation.citation_id }} · {{ citation.source_type }}{{ citation.source_id === null ? '' : ` #${citation.source_id}` }}</li></ul></aside>
+    <aside v-if="citations.length"><h3>{{ t('maintenance.reports.presentation.citations') }}</h3><ul><li v-for="citation in citations" :key="citation.citation_id">{{ citation.source_name || citation.citation_id }} · {{ citation.source_type }}<span v-if="citation.document_version"> · {{ t('maintenance.reports.presentation.documentVersion') }}: {{ citation.document_version }}</span><span v-if="citation.page_number != null"> · {{ t('maintenance.reports.presentation.page') }}: {{ citation.page_number }}</span><span v-if="citation.chunk_reference"> · {{ t('maintenance.reports.presentation.chunk') }}: {{ citation.chunk_reference }}</span><span v-if="citation.knowledge_node"> · {{ t('maintenance.reports.presentation.knowledgeNode') }}: {{ citation.knowledge_node }}</span></li></ul></aside>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import type { ReportCitation, ReportSection } from './report-types'
 type PublicCell = string | number | boolean | null
 type PublicTable = { columns: string[]; rows: PublicCell[][] }

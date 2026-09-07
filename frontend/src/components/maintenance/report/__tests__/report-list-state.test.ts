@@ -4,6 +4,7 @@ import { defineComponent, h, ref } from 'vue'
 import { createMemoryHistory, createRouter, RouterView, type LocationQueryRaw } from 'vue-router'
 import ReportCenter from '@/views/maintenance/reports/ReportCenter.vue'
 import ReportListTable from '../ReportListTable.vue'
+import ReportFilterBar from '../ReportFilterBar.vue'
 import ReportExportActions from '../ReportExportActions.vue'
 import { getReportActions, type ReportRole } from '../report-actions'
 import { normalizeReportListQuery, REPORT_JOB_STATUSES, type ReportListItem, type ReportListQuery } from '../report-types'
@@ -81,7 +82,30 @@ describe('report center query and navigation', () => {
       page: 0, page_size: 201, keyword: ' ', report_type: 'fake', job_status: 'fake',
       version_status: 'fake', source_type: ' FUTURE ', source_version: 'x'.repeat(129),
       source_id: -1, session_id: 1.5, sort_by: 'updated_at', sort_order: 'invalid', generator: 'fake',
-    })).toEqual({ ...defaults, source_type: 'FUTURE' })
+    })).toEqual(defaults)
+  })
+
+  it('preserves supported hidden source, sort and page size constraints when applying controls', async () => {
+    const query: ReportListQuery = { ...defaults, page: 4, page_size: 50, source_type: 'AI_SESSION', source_id: 42, source_version: 'v2', session_id: 7, scenario_version_id: 8, calculation_run_id: 9, review_run_id: 10, sort_by: 'title', sort_order: 'asc' }
+    const wrapper = mount(ReportFilterBar, { props: { query } })
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('apply')?.[0]).toEqual([query])
+    await wrapper.get('input').setValue(' weekly ')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('apply')?.[1]).toEqual([{ ...query, keyword: 'weekly', page: 1 }])
+  })
+
+  it('allows exactly the backend source enum and rejects unsupported route and control values', async () => {
+    const values = ['AI_SESSION', 'SCENARIO_VERSION', 'CALCULATION_RUN', 'CALCULATION_GROUP', 'DEMAND_LIST', 'DEMAND_REVIEW', 'ALLOCATION_PLAN', 'INVENTORY_STOCKTAKE']
+    const wrapper = mount(ReportFilterBar, { props: { query: defaults } })
+    expect(wrapper.findAll('select').at(-1)!.findAll('option').map((option) => option.attributes('value'))).toEqual(['', ...values])
+    for (const value of values) expect(normalizeReportListQuery({ source_type: value }).source_type).toBe(value)
+    for (const value of ['SESSION', 'FUTURE', 'unsupported']) {
+      expect(normalizeReportListQuery({ source_type: value })).not.toHaveProperty('source_type')
+      await wrapper.setProps({ query: { ...defaults, source_type: value } as never })
+      await wrapper.get('form').trigger('submit')
+      expect(wrapper.emitted('apply')?.at(-1)?.[0]).not.toHaveProperty('source_type')
+    }
   })
 
   it('rejects report job statuses outside the C3 API allowlist', () => {
@@ -99,14 +123,14 @@ describe('report center query and navigation', () => {
     const { wrapper } = await mountCenter({
       page: '0', page_size: '201', keyword: '  quarterly report  ',
       report_type: 'MANAGEMENT_DECISION', job_status: 'PARTIALLY_COMPLETED', version_status: 'REVIEWED',
-      source_type: ' FUTURE ', source_id: '42', source_version: ' v2 ',
+      source_type: ' AI_SESSION ', source_id: '42', source_version: ' v2 ',
       session_id: '7', scenario_version_id: '8', calculation_run_id: '9', review_run_id: '10',
       sort_by: 'title', sort_order: 'asc', generator: 'fake', date_from: '2026-01-01',
     })
     expect(mocks.listReports).toHaveBeenCalledExactlyOnceWith({
       ...defaults, keyword: 'quarterly report', report_type: 'MANAGEMENT_DECISION',
       job_status: 'PARTIALLY_COMPLETED', version_status: 'REVIEWED',
-      source_type: 'FUTURE', source_id: 42, source_version: 'v2',
+      source_type: 'AI_SESSION', source_id: 42, source_version: 'v2',
       session_id: 7, scenario_version_id: 8, calculation_run_id: 9, review_run_id: 10,
       sort_by: 'title', sort_order: 'asc',
     })
@@ -141,14 +165,14 @@ describe('report center query and navigation', () => {
 
   it('dispatches next and previous page queries while preserving filters', async () => {
     const first = request(), second = request(), third = request()
-    const { wrapper, router } = await mountCenter({ source_type: 'SESSION', source_id: '7', keyword: 'weekly' })
+    const { wrapper, router } = await mountCenter({ source_type: 'AI_SESSION', source_id: '7', keyword: 'weekly' })
     first.resolve(response([item], 1, 2))
     await flushPromises()
     expect(wrapper.get('footer span').text()).toBe('1 / 2')
     expect(wrapper.findAll('footer button')[0].attributes('disabled')).toBeDefined()
     await wrapper.findAll('footer button')[1].trigger('click')
     await flushPromises()
-    const expected = { ...defaults, page: 2, source_type: 'SESSION', source_id: 7, keyword: 'weekly' }
+    const expected = { ...defaults, page: 2, source_type: 'AI_SESSION', source_id: 7, keyword: 'weekly' }
     expect(mocks.listReports).toHaveBeenNthCalledWith(2, expected)
     expect(router.currentRoute.value.query).toEqual(Object.fromEntries(Object.entries(expected).map(([key, value]) => [key, String(value)])))
     second.resolve(response([item], 2, 2))

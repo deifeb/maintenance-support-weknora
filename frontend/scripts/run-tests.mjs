@@ -6,7 +6,7 @@ const root = process.cwd()
 
 async function collectTestFiles(target) {
   const absolute = resolve(root, target)
-  if ((await stat(absolute)).isFile()) return absolute.endsWith('.test.ts') ? [absolute] : []
+  if ((await stat(absolute)).isFile()) return /\.test\.(?:ts|mjs)$/.test(absolute) ? [absolute] : []
 
   const entries = await readdir(absolute, { withFileTypes: true })
   const nested = await Promise.all(entries.map(async (entry) => collectTestFiles(
@@ -39,7 +39,7 @@ for (const file of files) {
 }
 
 if (files.length === 0) {
-  throw new Error(`No .test.ts files matched: ${targets.join(', ')}`)
+  throw new Error(`No .test.ts or .test.mjs files matched: ${targets.join(', ')}`)
 }
 
 const results = await Promise.all([

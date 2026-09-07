@@ -1,12 +1,14 @@
 <template>
   <section class="report-version-timeline" aria-labelledby="report-version-title">
-    <h2 id="report-version-title">Version timeline</h2>
-    <p v-if="versions.length === 0" class="report-version-timeline__empty">No versions are available.</p>
-    <ol v-else><li v-for="version in versions" :key="version.id"><strong>Version {{ version.version_number }} · {{ version.status }}</strong><dl><div><dt>Parent version</dt><dd>{{ version.parent_version_id ?? 'None' }}</dd></div><div><dt>Template</dt><dd>{{ version.template_version }}</dd></div><div><dt>Generation mode</dt><dd>{{ version.generation_mode ?? 'Unavailable' }}</dd></div><div><dt>Generated</dt><dd>{{ version.generated_at ?? 'Unavailable' }}</dd></div><div><dt>Content digest</dt><dd>{{ version.content_digest }}</dd></div></dl></li></ol>
+    <h2 id="report-version-title">{{ t('maintenance.reports.presentation.timeline') }}</h2>
+    <p v-if="versions.length === 0" class="report-version-timeline__empty">{{ t('maintenance.reports.presentation.noVersions') }}</p>
+    <ol v-else><li v-for="version in versions" :key="version.id"><strong>{{ t('maintenance.reports.presentation.version') }} {{ version.version_number }} · {{ t(`maintenance.reports.versionStatuses.${version.status}`) }}</strong><dl><div><dt>{{ t('maintenance.reports.presentation.parentVersion') }}</dt><dd>{{ version.parent_version_id ?? t('maintenance.reports.presentation.none') }}</dd></div><div><dt>{{ t('maintenance.reports.presentation.template') }}</dt><dd>{{ version.template_version }}</dd></div><div><dt>{{ t('maintenance.reports.presentation.generationMode') }}</dt><dd>{{ version.generation_mode ?? t('maintenance.reports.presentation.unavailable') }}</dd></div><div><dt>{{ t('maintenance.reports.presentation.generated') }}</dt><dd>{{ version.generated_at ?? t('maintenance.reports.presentation.unavailable') }}</dd></div><div><dt>{{ t('maintenance.reports.presentation.contentDigest') }}</dt><dd>{{ version.content_digest }}</dd></div></dl></li></ol>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import type { ReportVersionSummary } from '@/api/maintenance/reports'
 defineProps<{ versions: ReportVersionSummary[] }>()
 </script>

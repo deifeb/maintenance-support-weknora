@@ -1,6 +1,6 @@
 <template>
   <div class="report-lifecycle-actions">
-    <button v-for="action in lifecycleActions" :key="action" type="button" :disabled="submitting" @click="run(action)">{{ t(`maintenance.reports.actions.${action}`) }}</button>
+    <button v-for="action in lifecycleActions" :key="action" type="button" :disabled="submitting || busy || pendingReportMutations.has(reportId)" @click="run(action)">{{ t(`maintenance.reports.actions.${action}`) }}</button>
     <p v-if="errorKey" role="alert">{{ t(errorKey) }}<template v-if="requestId"> {{ t('maintenance.reports.errors.requestId', { requestId }) }}</template></p>
   </div>
 </template>
@@ -11,18 +11,23 @@ import { useI18n } from 'vue-i18n'
 import { normalizeMaintenanceError } from '@/api/maintenance/client'
 import { reportApi } from '@/api/maintenance/reports'
 import { createReportLifecycleController } from './report-actions'
+import { pendingReportMutations, refreshReportReaders, runReportMutation } from './report-mutation-state'
 import type { ReportAction, ReportJobStatus, ReportVersionStatus } from './report-types'
 
 type LifecycleAction = 'generate' | 'validate' | 'finalize' | 'regenerate'
-const props = defineProps<{ reportId: number; jobStatus: ReportJobStatus; versionStatus: ReportVersionStatus | null; versionGenerated: boolean; actions: ReportAction[]; refresh: () => Promise<void> }>()
+const props = defineProps<{ reportId: number; jobStatus: ReportJobStatus; versionStatus: ReportVersionStatus | null; versionGenerated: boolean; actions: ReportAction[]; refresh: () => Promise<void>; busy?: boolean }>()
 const { t } = useI18n(); const submitting = ref(false); const errorKey = ref(''); const requestId = ref('')
 const lifecycleActions = computed(() => props.actions.filter((action): action is LifecycleAction => ['generate', 'validate', 'finalize', 'regenerate'].includes(action)))
-const controller = computed(() => createReportLifecycleController({
-  reportId: props.reportId, actions: props.actions,
-  mutations: { generate: reportApi.generateReport, validate: reportApi.validateReport, finalize: reportApi.finalizeReport, regenerate: reportApi.regenerateReport },
-  refresh: props.refresh,
-}))
-async function run(action: LifecycleAction): Promise<void> { if (submitting.value) return; submitting.value = true; errorKey.value = ''; requestId.value = ''; try { await controller.value.run(action) } catch (reason) { const error = normalizeMaintenanceError(reason); errorKey.value = controller.value.messageFor(error); requestId.value = controller.value.requestIdFor(error) ?? '' } finally { submitting.value = false } }
+const controller = computed(() => {
+  const reportId = props.reportId
+  const refresh = props.refresh
+  return createReportLifecycleController({
+    reportId, actions: props.actions,
+    mutations: { generate: reportApi.generateReport, validate: reportApi.validateReport, finalize: reportApi.finalizeReport, regenerate: reportApi.regenerateReport },
+    refresh: () => refreshReportReaders(reportId, refresh),
+  })
+})
+async function run(action: LifecycleAction): Promise<void> { if (submitting.value || props.busy || pendingReportMutations.has(props.reportId)) return; submitting.value = true; errorKey.value = ''; requestId.value = ''; try { await runReportMutation(props.reportId, () => controller.value.run(action)) } catch (reason) { const error = normalizeMaintenanceError(reason); errorKey.value = controller.value.messageFor(error); requestId.value = controller.value.requestIdFor(error) ?? '' } finally { submitting.value = false } }
 </script>
 
 <style scoped>

@@ -1,12 +1,14 @@
 <template>
   <section class="report-validation-findings" aria-labelledby="report-findings-title">
-    <h2 id="report-findings-title">Validation findings</h2>
-    <p v-if="findings.length === 0" class="report-validation-findings__empty">No validation findings.</p>
+    <h2 id="report-findings-title">{{ t('maintenance.reports.presentation.findings') }}</h2>
+    <p v-if="findings.length === 0" class="report-validation-findings__empty">{{ t('maintenance.reports.presentation.noFindings') }}</p>
     <ul v-else><li v-for="finding in findings" :key="finding.id"><strong>{{ finding.severity }} · {{ finding.code }}</strong><p>{{ finding.message }}</p></li></ul>
   </section>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 import type { ReportValidationFinding } from './report-types'
 defineProps<{ findings: ReportValidationFinding[] }>()
 </script>
