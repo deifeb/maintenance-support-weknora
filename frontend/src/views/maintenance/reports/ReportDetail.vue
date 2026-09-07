@@ -5,7 +5,7 @@
     <p v-else-if="notFound" role="status">This report was not found.</p>
     <p v-else-if="error" role="alert">{{ error }}</p>
     <p v-else-if="loading && !detail" role="status">Loading report…</p>
-    <template v-else-if="detail"><section class="report-detail__summary"><p>{{ detail.report_code }} · {{ detail.report_type }}</p><p>Job status: {{ detail.job_status ?? 'Unavailable' }}</p><p>Version {{ detail.version_number }} · {{ detail.status }}</p></section><ReportProvenancePanel :sources="provenanceSources" /><ReportVersionTimeline :versions="versions" /><ReportValidationFindings :findings="detail.findings ?? []" /><ReportSections :sections="detail.sections" :citations="detail.citations" /></template>
+    <template v-else-if="detail"><section class="report-detail__summary"><p>{{ detail.report_code }} · {{ detail.report_type }}</p><p>Job status: {{ detail.job_status ?? 'Unavailable' }}</p><p>Version {{ detail.version_number }} · {{ detail.status }}</p></section><ReportLifecycleActions v-if="detail.job_status" :report-id="detail.report_id" :job-status="detail.job_status" :version-status="detail.status" :actions="lifecycleActions" @changed="load" /><ReportRegenerateDialog :open="regenerateOpen" :report-id="detail.report_id" @close="regenerateOpen = false" @changed="load" /><button v-if="actions.includes('regenerate')" type="button" @click="regenerateOpen = true">Regenerate as new version</button><ReportProvenancePanel :sources="provenanceSources" /><ReportVersionTimeline :versions="versions" /><ReportValidationFindings :findings="detail.findings ?? []" /><ReportSections :sections="detail.sections" :citations="detail.citations" /></template>
   </main>
 </template>
 
@@ -18,8 +18,16 @@ import ReportProvenancePanel from '@/components/maintenance/report/ReportProvena
 import ReportSections from '@/components/maintenance/report/ReportSections.vue'
 import ReportValidationFindings from '@/components/maintenance/report/ReportValidationFindings.vue'
 import ReportVersionTimeline from '@/components/maintenance/report/ReportVersionTimeline.vue'
+import ReportLifecycleActions from '@/components/maintenance/report/ReportLifecycleActions.vue'
+import ReportRegenerateDialog from '@/components/maintenance/report/ReportRegenerateDialog.vue'
+import { getReportActions, type ReportRole } from '@/components/maintenance/report/report-actions'
+import type { ReportAction } from '@/components/maintenance/report/report-types'
+import { useAuthStore } from '@/stores/auth'
 
-const route = useRoute(); const router = useRouter(); const detail = ref<ReportDetail | null>(null); const versions = ref<ReportVersionSummary[]>([]); const loading = ref(false); const error = ref(''); const notFound = ref(false); let request = 0
+const route = useRoute(); const router = useRouter(); const authStore = useAuthStore(); const detail = ref<ReportDetail | null>(null); const versions = ref<ReportVersionSummary[]>([]); const loading = ref(false); const error = ref(''); const notFound = ref(false); const regenerateOpen = ref(false); let request = 0
+const reportRole = computed<ReportRole>(() => authStore.hasRole('admin') ? 'ADMIN' : authStore.hasRole('contributor') ? 'CONTRIBUTOR' : 'VIEWER')
+const actions = computed<ReportAction[]>(() => detail.value && detail.value.job_status ? getReportActions({ role: reportRole.value, jobStatus: detail.value.job_status, versionStatus: detail.value.status, backendAllowsRegenerate: true }) : [])
+const lifecycleActions = computed<ReportAction[]>(() => actions.value.filter((action) => action !== 'regenerate'))
 function positiveReportRouteId(value: unknown): number | null { const raw = Array.isArray(value) ? value[0] : value; const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN; return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null }
 const routeId = computed(() => positiveReportRouteId(route.params.reportId)); const invalidRoute = computed(() => routeId.value === null)
 const provenanceSources = computed<PublicSourceVersion[] | null>(() => { const provenance = detail.value ? toPublicSourceProvenance(detail.value.source_versions) : { kind: 'unavailable' as const }; return provenance.kind === 'authoritative' ? provenance.sources : null })

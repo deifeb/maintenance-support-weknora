@@ -1,6 +1,7 @@
 <template>
   <main class="report-center">
-    <header class="report-center__header"><div><h1>{{ t('maintenance.pages.reports') }}</h1><p>{{ t('maintenance.reports.description') }}</p></div><button type="button" class="report-center__primary" disabled :title="t('maintenance.reports.createComingSoon')">{{ t('maintenance.reports.actions.create') }}</button></header>
+    <header class="report-center__header"><div><h1>{{ t('maintenance.pages.reports') }}</h1><p>{{ t('maintenance.reports.description') }}</p></div><button v-if="reportRole !== 'VIEWER'" type="button" class="report-center__primary" @click="createOpen = true">{{ t('maintenance.reports.actions.create') }}</button></header>
+    <ReportGenerationDialog :open="createOpen" @close="createOpen = false" @changed="load" />
     <ReportFilterBar :query="query" @apply="applyFilters" />
     <template v-if="loading && reports.length === 0">
       <div class="report-center__state">{{ t('maintenance.reports.loading') }}</div>
@@ -11,7 +12,7 @@
     <template v-else-if="reports.length === 0">
       <div class="report-center__state">{{ t('maintenance.reports.empty') }}</div>
     </template>
-    <ReportListTable v-else :reports="reports" :role="reportRole" @open="openReport" @generate="emitAction" @validate="emitAction" @finalize="emitAction" @regenerate="emitAction" @export="emitAction" />
+    <ReportListTable v-else :reports="reports" :role="reportRole" @open="openReport" @generate="openReport" @validate="openReport" @finalize="openReport" @regenerate="openReport" @export="emitAction" />
     <footer v-if="!loading && !error && pages > 1" class="report-center__pagination"><button type="button" :disabled="loading || query.page <= 1" @click="setPage(query.page - 1)">{{ t('maintenance.reports.actions.previous') }}</button><span>{{ query.page }} / {{ pages }}</span><button type="button" :disabled="loading || query.page >= pages" @click="setPage(query.page + 1)">{{ t('maintenance.reports.actions.next') }}</button></footer>
   </main>
 </template>
@@ -24,12 +25,13 @@ import { reportApi, type ReportListItem } from '@/api/maintenance/reports'
 import { normalizeMaintenanceError } from '@/api/maintenance/client'
 import ReportFilterBar from '@/components/maintenance/report/ReportFilterBar.vue'
 import ReportListTable from '@/components/maintenance/report/ReportListTable.vue'
+import ReportGenerationDialog from '@/components/maintenance/report/ReportGenerationDialog.vue'
 import type { ReportRole } from '@/components/maintenance/report/report-actions'
 import { useAuthStore } from '@/stores/auth'
 import { normalizeReportListQuery, type ReportListQuery } from '@/components/maintenance/report/report-types'
 
 const { t } = useI18n(); const route = useRoute(); const router = useRouter(); const authStore = useAuthStore()
-const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const error = ref('')
+const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const error = ref(''); const createOpen = ref(false)
 const query = computed(() => normalizeReportListQuery(route.query) as ReportListQuery)
 const reportRole = computed<ReportRole>(() => authStore.hasRole('admin') ? 'ADMIN' : authStore.hasRole('contributor') ? 'CONTRIBUTOR' : 'VIEWER')
 let request = 0

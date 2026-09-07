@@ -48,3 +48,51 @@ export function reportErrorMessageKey(code: unknown): string {
     ? (reportErrorKeys[code] ?? 'maintenance.reports.errors.generic')
     : 'maintenance.reports.errors.generic'
 }
+
+type ReportLifecycleMutation = 'generate' | 'validate' | 'finalize' | 'regenerate'
+type LifecycleMutations = Partial<Record<ReportLifecycleMutation, (reportId: number) => Promise<unknown>>>
+
+export interface ReportLifecycleController {
+  run(action: ReportLifecycleMutation): Promise<void>
+  messageFor(error: unknown): string
+  requestIdFor(error: unknown): string | undefined
+}
+
+function errorField(error: unknown, field: 'code' | 'request_id'): unknown {
+  if (typeof error !== 'object' || error === null) return undefined
+  const value = error as Record<string, unknown>
+  if (typeof value[field] === 'string') return value[field]
+  const nested = value.error
+  return typeof nested === 'object' && nested !== null && typeof (nested as Record<string, unknown>)[field] === 'string'
+    ? (nested as Record<string, unknown>)[field]
+    : undefined
+}
+
+function buildReportLifecycleController(input: {
+  reportId: number
+  actions: readonly ReportAction[]
+  mutations: LifecycleMutations
+  refresh: () => Promise<void>
+}): ReportLifecycleController {
+  return {
+    async run(action) {
+      if (!input.actions.includes(action)) throw new Error(`Report action ${action} is not allowed`)
+      const mutation = input.mutations[action]
+      if (!mutation) throw new Error(`Report mutation ${action} is unavailable`)
+      await mutation(input.reportId)
+      await input.refresh()
+    },
+    messageFor(error) { return reportErrorMessageKey(errorField(error, 'code')) },
+    requestIdFor(error) {
+      const requestId = errorField(error, 'request_id')
+      return typeof requestId === 'string' ? requestId : undefined
+    },
+  }
+}
+
+export const createReportLifecycleController = Object.assign(
+  buildReportLifecycleController,
+  {
+    regenerateExplanation: 'A new version is created, its source snapshot is copied from the current report version, and no business source data is recalculated.',
+  },
+)

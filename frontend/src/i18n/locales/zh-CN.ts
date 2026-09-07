@@ -61,7 +61,10 @@ export default {
       empty: "当前筛选条件下没有报表。",
       filters: { keyword: "关键词", keywordPlaceholder: "编码或标题", reportType: "报表类型", jobStatus: "任务状态", versionStatus: "版本状态", sourceType: "来源类型", all: "全部" },
       columns: { code: "报表编码", title: "标题", type: "类型", jobStatus: "任务状态", version: "最新版本", progress: "进度", created: "创建时间", updated: "更新时间", actions: "操作" },
-      actions: { apply: "查询", clear: "清除", retry: "重试", previous: "上一页", next: "下一页", create: "创建报表", view: "打开", generate: "生成", validate: "校验", finalize: "定稿", regenerate: "重新生成", export: "导出" },
+      actions: { apply: "查询", clear: "清除", retry: "重试", previous: "上一页", next: "下一页", cancel: "取消", create: "创建报表", view: "打开", generate: "生成", validate: "校验", finalize: "定稿", regenerate: "重新生成", export: "导出" },
+      createDialog: { title: "创建报表", titleLabel: "标题", typeLabel: "报表类型", selectType: "请选择报表类型", sources: "权威来源引用", selectSourceType: "请选择来源类型", sourceId: "来源 ID", sourceVersion: "来源版本", addSource: "添加来源引用", legacy: "旧兼容 ID（可选）", invalid: "请输入标题、报表类型及至少一个有效来源引用。" },
+      regenerate: { title: "重新生成报表", explanation: "将创建一个新版本；其来源快照从当前报表版本复制，不会重新计算任何业务来源数据。" },
+      errors: { versionAlreadyGenerated: "此报表版本已经生成。", generationRequired: "请先生成报表。", finalVersionImmutable: "最终报表版本不可修改。", regenerateSourceNotReady: "当前报表版本尚不能重新生成。", validationRequired: "继续前必须完成校验。", generationFailed: "报表生成失败。", sourceRequired: "至少需要一个有效来源引用。", sourceConflict: "报表来源与当前数据冲突。", sourceVersionConflict: "报表来源版本已不是当前版本。", insufficientRole: "当前角色无权执行此报表操作。", generic: "报表操作未能完成。", requestId: "请求 ID：{requestId}" },
     },
     pages: {
       dashboard: "概览",
