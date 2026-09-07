@@ -13,6 +13,7 @@ export default defineConfig({
     include: [
       'src/components/maintenance/report/__tests__/report-list-state.test.ts',
       'src/components/maintenance/report/__tests__/report-detail-state.test.ts',
+      'src/components/maintenance/report/__tests__/report-lifecycle-ui.test.ts',
     ],
   },
 })

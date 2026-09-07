@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({ listReports: vi.fn(), hasRole: vi.fn() }))
 vi.mock('@/api/maintenance/reports', () => ({ reportApi: { listReports: mocks.listReports } }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ hasRole: mocks.hasRole }) }))
 vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => key, locale: ref('en-US') }),
+  useI18n: () => ({ t: (key: string, values?: { requestId?: string }) => values?.requestId ? `${key}:${values.requestId}` : key, locale: ref('en-US') }),
 }))
 
 enableAutoUnmount(afterEach)
@@ -134,7 +134,7 @@ describe('report center query and navigation', () => {
     pending.resolve(response())
     await flushPromises()
     expect(wrapper.findComponent(ReportListTable).props('role')).toBe('ADMIN')
-    expect(wrapper.get('tbody').text()).toContain(actionKey('finalize'))
+    expect(wrapper.get('tbody').text()).not.toContain(actionKey('finalize'))
   })
 
   it('dispatches next and previous page queries while preserving filters', async () => {
@@ -226,9 +226,11 @@ describe('report center asynchronous DOM states', () => {
     expect(wrapper.get('.report-center__state').text()).toBe(stateKey('loading'))
     expect(wrapper.find('tbody tr').exists()).toBe(false)
     expect(wrapper.find('footer').exists()).toBe(false)
-    second.reject(new Error('Network unavailable'))
+    second.reject({ code: 'UNKNOWN', message: 'Network unavailable secret', request_id: 'r-private' })
     await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toContain('Network unavailable')
+    expect(wrapper.get('[role="alert"]').text()).toContain('maintenance.reports.errors.generic')
+    expect(wrapper.get('[role="alert"]').text()).toContain('r-private')
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('Network unavailable secret')
     expect(wrapper.findComponent(ReportListTable).exists()).toBe(false)
     expect(wrapper.find('table').exists()).toBe(false)
     expect(wrapper.find('tbody tr').exists()).toBe(false)

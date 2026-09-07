@@ -213,6 +213,32 @@ export interface ReportSourceReference {
   version?: string | null
 }
 
+export const REPORT_SOURCE_POLICIES: Readonly<Record<ReportType, {
+  required: readonly PublicReportSourceType[]
+  optional: readonly PublicReportSourceType[]
+}>> = {
+  DEMAND_CALCULATION: { required: ['CALCULATION_RUN'], optional: ['SCENARIO_VERSION'] },
+  MODEL_COMPARISON: { required: ['CALCULATION_GROUP'], optional: [] },
+  DEMAND_REVIEW: { required: ['DEMAND_REVIEW'], optional: ['DEMAND_LIST'] },
+  INVENTORY_GAP: { required: ['DEMAND_LIST'], optional: ['ALLOCATION_PLAN'] },
+  ALLOCATION_PLAN: { required: ['ALLOCATION_PLAN'], optional: [] },
+  STOCKTAKE: { required: ['INVENTORY_STOCKTAKE'], optional: [] },
+  SPARE_PART_RISK: { required: ['DEMAND_LIST'], optional: ['DEMAND_REVIEW'] },
+  MANAGEMENT_DECISION: { required: [], optional: ['AI_SESSION', 'SCENARIO_VERSION', 'CALCULATION_RUN', 'CALCULATION_GROUP', 'DEMAND_LIST', 'DEMAND_REVIEW', 'ALLOCATION_PLAN', 'INVENTORY_STOCKTAKE'] },
+}
+
+export function hasValidReportSourcePolicy(
+  reportType: ReportType,
+  sourceRefs: readonly ReportSourceReference[],
+): boolean {
+  const policy = REPORT_SOURCE_POLICIES[reportType]
+  const types = sourceRefs.map((source) => source.type as PublicReportSourceType)
+  const allowed = new Set([...policy.required, ...policy.optional])
+  return types.every((type) => allowed.has(type))
+    && policy.required.every((type) => types.includes(type))
+    && new Set(types).size === types.length
+}
+
 export interface CreateReportJobInput {
   title: string
   report_type: string

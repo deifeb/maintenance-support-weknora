@@ -10,6 +10,7 @@ import type { ReportDetail as ReportDetailData, ReportVersionSummary } from '@/a
 
 const mocks = vi.hoisted(() => ({ getReport: vi.fn(), listReportVersions: vi.fn() }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ hasRole: () => false }) }))
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('@/api/maintenance/reports', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/maintenance/reports')>()
   return { ...actual, reportApi: { getReport: mocks.getReport, listReportVersions: mocks.listReportVersions } }

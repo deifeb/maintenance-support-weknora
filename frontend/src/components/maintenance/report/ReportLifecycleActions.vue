@@ -14,14 +14,13 @@ import { createReportLifecycleController } from './report-actions'
 import type { ReportAction, ReportJobStatus, ReportVersionStatus } from './report-types'
 
 type LifecycleAction = 'generate' | 'validate' | 'finalize' | 'regenerate'
-const props = defineProps<{ reportId: number; jobStatus: ReportJobStatus; versionStatus: ReportVersionStatus | null; actions: ReportAction[] }>()
-const emit = defineEmits<{ (event: 'changed'): void }>()
+const props = defineProps<{ reportId: number; jobStatus: ReportJobStatus; versionStatus: ReportVersionStatus | null; versionGenerated: boolean; actions: ReportAction[]; refresh: () => Promise<void> }>()
 const { t } = useI18n(); const submitting = ref(false); const errorKey = ref(''); const requestId = ref('')
 const lifecycleActions = computed(() => props.actions.filter((action): action is LifecycleAction => ['generate', 'validate', 'finalize', 'regenerate'].includes(action)))
 const controller = computed(() => createReportLifecycleController({
   reportId: props.reportId, actions: props.actions,
   mutations: { generate: reportApi.generateReport, validate: reportApi.validateReport, finalize: reportApi.finalizeReport, regenerate: reportApi.regenerateReport },
-  refresh: async () => { emit('changed') },
+  refresh: props.refresh,
 }))
 async function run(action: LifecycleAction): Promise<void> { if (submitting.value) return; submitting.value = true; errorKey.value = ''; requestId.value = ''; try { await controller.value.run(action) } catch (reason) { const error = normalizeMaintenanceError(reason); errorKey.value = controller.value.messageFor(error); requestId.value = controller.value.requestIdFor(error) ?? '' } finally { submitting.value = false } }
 </script>

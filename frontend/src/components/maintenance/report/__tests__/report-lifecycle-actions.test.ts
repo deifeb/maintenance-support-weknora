@@ -40,7 +40,7 @@ test('lifecycle controller rejects an action not granted by the server state', a
 
 test('final version hides immutable lifecycle controls and regeneration explains copied sources', () => {
   const actions = getReportActions({
-    role: 'ADMIN', jobStatus: 'FINALIZED', versionStatus: 'FINAL', backendAllowsRegenerate: true,
+    role: 'ADMIN', jobStatus: 'FINALIZED', versionStatus: 'FINAL', versionGenerated: true,
   })
   assert.equal(actions.includes('generate'), false)
   assert.equal(actions.includes('validate'), false)

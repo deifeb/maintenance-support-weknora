@@ -10,23 +10,21 @@ export function getReportActions(input: {
   role: ReportRole
   jobStatus: ReportJobStatus
   versionStatus: ReportVersionStatus | null
-  backendAllowsRegenerate?: boolean
+  versionGenerated?: boolean
+  hasUnresolvedFindings?: boolean
 }): ReportAction[] {
   const actions: ReportAction[] = ['view', 'versions', 'export']
 
   if (input.role === 'VIEWER') return actions
 
   actions.push('create')
-  const immutable = input.jobStatus === 'FINALIZED' || input.versionStatus === 'FINAL'
-  if (!immutable) {
-    actions.push('generate', 'validate')
-  }
-  if (input.backendAllowsRegenerate) {
-    actions.push('regenerate')
-  }
-  if (input.role === 'ADMIN' && !immutable) {
-    actions.push('finalize')
-  }
+  // List responses omit generation evidence, so fail closed until a detail read supplies it.
+  if (typeof input.versionGenerated !== 'boolean') return actions
+  const immutable = input.versionStatus === 'FINAL'
+  if (!immutable && !input.versionGenerated) actions.push('generate')
+  if (!immutable && input.versionGenerated) actions.push('validate')
+  if (input.versionGenerated) actions.push('regenerate')
+  if (input.role === 'ADMIN' && input.jobStatus === 'READY_FOR_REVIEW' && input.versionStatus === 'REVIEWED' && !input.hasUnresolvedFindings) actions.push('finalize')
   return actions
 }
 

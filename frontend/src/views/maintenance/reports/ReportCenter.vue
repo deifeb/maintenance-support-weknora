@@ -1,19 +1,19 @@
 <template>
   <main class="report-center">
     <header class="report-center__header"><div><h1>{{ t('maintenance.pages.reports') }}</h1><p>{{ t('maintenance.reports.description') }}</p></div><button v-if="reportRole !== 'VIEWER'" type="button" class="report-center__primary" @click="createOpen = true">{{ t('maintenance.reports.actions.create') }}</button></header>
-    <ReportGenerationDialog :open="createOpen" @close="createOpen = false" @changed="load" />
+    <ReportGenerationDialog :open="createOpen" :refresh="load" @close="createOpen = false" />
     <ReportFilterBar :query="query" @apply="applyFilters" />
     <template v-if="loading && reports.length === 0">
       <div class="report-center__state">{{ t('maintenance.reports.loading') }}</div>
     </template>
-    <template v-else-if="error">
-      <p class="report-center__error" role="alert">{{ error }} <button type="button" @click="load">{{ t('maintenance.reports.actions.retry') }}</button></p>
+    <template v-else-if="errorKey">
+      <p class="report-center__error" role="alert">{{ t(errorKey) }}<template v-if="requestId"> {{ t('maintenance.reports.errors.requestId', { requestId }) }}</template> <button type="button" @click="load">{{ t('maintenance.reports.actions.retry') }}</button></p>
     </template>
     <template v-else-if="reports.length === 0">
       <div class="report-center__state">{{ t('maintenance.reports.empty') }}</div>
     </template>
     <ReportListTable v-else :reports="reports" :role="reportRole" @open="openReport" @generate="openReport" @validate="openReport" @finalize="openReport" @regenerate="openReport" @export="emitAction" />
-    <footer v-if="!loading && !error && pages > 1" class="report-center__pagination"><button type="button" :disabled="loading || query.page <= 1" @click="setPage(query.page - 1)">{{ t('maintenance.reports.actions.previous') }}</button><span>{{ query.page }} / {{ pages }}</span><button type="button" :disabled="loading || query.page >= pages" @click="setPage(query.page + 1)">{{ t('maintenance.reports.actions.next') }}</button></footer>
+    <footer v-if="!loading && !errorKey && pages > 1" class="report-center__pagination"><button type="button" :disabled="loading || query.page <= 1" @click="setPage(query.page - 1)">{{ t('maintenance.reports.actions.previous') }}</button><span>{{ query.page }} / {{ pages }}</span><button type="button" :disabled="loading || query.page >= pages" @click="setPage(query.page + 1)">{{ t('maintenance.reports.actions.next') }}</button></footer>
   </main>
 </template>
 
@@ -26,17 +26,17 @@ import { normalizeMaintenanceError } from '@/api/maintenance/client'
 import ReportFilterBar from '@/components/maintenance/report/ReportFilterBar.vue'
 import ReportListTable from '@/components/maintenance/report/ReportListTable.vue'
 import ReportGenerationDialog from '@/components/maintenance/report/ReportGenerationDialog.vue'
-import type { ReportRole } from '@/components/maintenance/report/report-actions'
+import { reportErrorMessageKey, type ReportRole } from '@/components/maintenance/report/report-actions'
 import { useAuthStore } from '@/stores/auth'
 import { normalizeReportListQuery, type ReportListQuery } from '@/components/maintenance/report/report-types'
 
 const { t } = useI18n(); const route = useRoute(); const router = useRouter(); const authStore = useAuthStore()
-const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const error = ref(''); const createOpen = ref(false)
+const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const errorKey = ref(''); const requestId = ref(''); const createOpen = ref(false)
 const query = computed(() => normalizeReportListQuery(route.query) as ReportListQuery)
 const reportRole = computed<ReportRole>(() => authStore.hasRole('admin') ? 'ADMIN' : authStore.hasRole('contributor') ? 'CONTRIBUTOR' : 'VIEWER')
 let request = 0
 function routeQuery(value: ReportListQuery): Record<string, string> { return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item)])) }
-async function load(): Promise<void> { const current = ++request; loading.value = true; error.value = ''; reports.value = []; pages.value = 0; try { const result = await reportApi.listReports(query.value); if (current !== request) return; reports.value = result.data.items; pages.value = result.data.pages } catch (value) { if (current === request) error.value = normalizeMaintenanceError(value).message } finally { if (current === request) loading.value = false } }
+async function load(): Promise<void> { const current = ++request; loading.value = true; errorKey.value = ''; requestId.value = ''; reports.value = []; pages.value = 0; try { const result = await reportApi.listReports(query.value); if (current !== request) return; reports.value = result.data.items; pages.value = result.data.pages } catch (value) { if (current === request) { const error = normalizeMaintenanceError(value); errorKey.value = reportErrorMessageKey(error.code); requestId.value = error.request_id ?? '' } } finally { if (current === request) loading.value = false } }
 function applyFilters(value: ReportListQuery): void { void router.push({ path: '/platform/maintenance/reports', query: routeQuery(value) }) }
 function setPage(page: number): void { applyFilters({ ...query.value, page }) }
 function openReport(reportId: number): void { void router.push({ name: 'maintenanceReportDetail', params: { reportId } }) }
