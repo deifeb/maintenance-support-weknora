@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter, RouterView, type LocationQueryRaw } 
 import ReportCenter from '@/views/maintenance/reports/ReportCenter.vue'
 import ReportListTable from '../ReportListTable.vue'
 import { getReportActions, type ReportRole } from '../report-actions'
-import { normalizeReportListQuery, type ReportListItem, type ReportListQuery } from '../report-types'
+import { normalizeReportListQuery, REPORT_JOB_STATUSES, type ReportListItem, type ReportListQuery } from '../report-types'
 import type { MaintenanceResult, PageData } from '@/api/maintenance/types'
 
 const mocks = vi.hoisted(() => ({ listReports: vi.fn(), hasRole: vi.fn() }))
@@ -80,6 +80,16 @@ describe('report center query and navigation', () => {
       version_status: 'fake', source_type: ' FUTURE ', source_version: 'x'.repeat(129),
       source_id: -1, session_id: 1.5, sort_by: 'updated_at', sort_order: 'invalid', generator: 'fake',
     })).toEqual({ ...defaults, source_type: 'FUTURE' })
+  })
+
+  it('rejects report job statuses outside the C3 API allowlist', () => {
+    expect(REPORT_JOB_STATUSES).toEqual([
+      'CREATED', 'GENERATING_SECTIONS', 'VALIDATING_NUMBERS',
+      'READY_FOR_REVIEW', 'PARTIALLY_COMPLETED', 'FAILED', 'FINALIZED',
+    ])
+    for (const jobStatus of ['BUILDING_SKELETON', 'VALIDATING_CITATIONS']) {
+      expect(normalizeReportListQuery({ job_status: jobStatus })).not.toHaveProperty('job_status')
+    }
   })
 
   it('dispatches a backend-valid normalized query from the URL', async () => {

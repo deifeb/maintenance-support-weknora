@@ -202,3 +202,27 @@ git diff --check
 
 Scope remains limited to the Task 2 report view, its component test, and this
 report; backend/shared client/Task 3 files were not changed.
+
+### C3 final review allowlist and event-type follow-up
+
+The report job status union and runtime normalizer allowlist now contain only
+the C3-supported values: `CREATED`, `GENERATING_SECTIONS`,
+`VALIDATING_NUMBERS`, `READY_FOR_REVIEW`, `PARTIALLY_COMPLETED`, `FAILED`,
+and `FINALIZED`. `BUILDING_SKELETON` and `VALIDATING_CITATIONS` are rejected
+by query normalization and are not sent to the list API. Report table runtime
+buttons are unchanged, including the `view` button mapped to `open`, while
+the component emit type is narrowed to `open`, `generate`, `validate`,
+`finalize`, `regenerate`, and `export`; `view`, `versions`, and `create` are
+not valid emitted event types.
+
+Verification:
+
+```powershell
+cd frontend
+npm run test:components -- src/components/maintenance/report/__tests__/report-list-state.test.ts
+cd ..
+git diff --check
+```
+
+- Component suite: exit 0, **18/18 passed**.
+- `git diff --check`: exit 0 (only expected LF-to-CRLF conversion notices).

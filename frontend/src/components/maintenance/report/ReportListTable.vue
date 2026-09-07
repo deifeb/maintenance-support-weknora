@@ -18,13 +18,20 @@ import { useI18n } from 'vue-i18n'
 import { getReportActions, type ReportRole } from './report-actions'
 import type { ReportAction, ReportListItem } from './report-types'
 
+type ReportRowAction = 'generate' | 'validate' | 'finalize' | 'regenerate' | 'export'
+type ReportDisplayAction = 'view' | ReportRowAction
+const reportDisplayActions: readonly ReportDisplayAction[] = ['view', 'generate', 'validate', 'finalize', 'regenerate', 'export']
+
 const props = withDefaults(defineProps<{ reports: ReportListItem[]; role?: ReportRole }>(), { role: 'VIEWER' })
-const emit = defineEmits<{ (event: 'open' | ReportAction, reportId: number): void }>()
+const emit = defineEmits<{ (event: 'open' | ReportRowAction, reportId: number): void }>()
 const { t, locale } = useI18n()
 
-function reportActions(report: ReportListItem): ReportAction[] {
+function isReportDisplayAction(action: ReportAction): action is ReportDisplayAction {
+  return reportDisplayActions.includes(action as ReportDisplayAction)
+}
+function reportActions(report: ReportListItem): ReportDisplayAction[] {
   return getReportActions({ role: props.role, jobStatus: report.job_status, versionStatus: report.latest_version?.status ?? null })
-    .filter((action) => !['versions', 'create'].includes(action))
+    .filter(isReportDisplayAction)
 }
 function formatDate(value: string): string { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date) }
 </script>
