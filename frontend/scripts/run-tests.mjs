@@ -28,7 +28,7 @@ function run(command, args) {
 
 const requested = process.argv.slice(2)
 const targets = requested.length > 0 ? requested : ['src']
-const files = (await Promise.all(targets.map(collectTestFiles))).flat().sort()
+const files = [...new Set((await Promise.all(targets.map(collectTestFiles))).flat())].sort()
 const nodeTests = []
 const vitestTests = []
 

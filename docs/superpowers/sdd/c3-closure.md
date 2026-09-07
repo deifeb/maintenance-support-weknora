@@ -3,8 +3,15 @@
 ## Revision evidence
 
 - Base: `b96a281fbc6d1809a5bb1e0a0ab6bbe32d797330`
-- Validated C3 head: `7c6f8e3e4f7b7529905d5f592979e47655f85327`
+- Original C3 implementation head: `7c6f8e3e4f7b7529905d5f592979e47655f85327`
+- Closure commit: `9349822c4107220e93a56710fa928266ec089ede`
 - Branch: `codex/maintenance-plan05-5-c3`
+
+The final commands below were run against the pre-commit working tree whose
+committed representation is closure commit `9349822c4`; they did not run
+against `7c6f8e3` alone. This evidence-correction follow-up commit is a child
+of `9349822c4`, and does not claim that its own later HEAD was validated by
+those earlier commands.
 
 ## Reproducible gates
 
@@ -19,7 +26,7 @@ Run from `frontend` unless noted otherwise.
 | `npm run build` | exit 0; Vite transformed 6,635 modules and built in 1m42s |
 | `git diff --check` | exit 0 |
 
-`npm test` now invokes `scripts/run-tests.mjs`: it recursively expands the supplied files or directories, runs ordinary `node:test` suites through `tsx --tsconfig tsconfig.app.json --test`, and runs explicit Vitest suites through Vitest. This preserves the Node suite while loading Vue SFC tests with the Vue-aware runner. The focused commands in the task brief use this same reproducible entrypoint.
+`npm test` now invokes `scripts/run-tests.mjs`: it recursively expands the supplied files or directories, removes duplicate resolved paths, then runs ordinary `node:test` suites through `tsx --tsconfig tsconfig.app.json --test` and explicit Vitest suites through Vitest. This preserves the Node suite while loading Vue SFC tests with the Vue-aware runner. The focused commands in the task brief use this same reproducible entrypoint.
 
 ## Accepted warnings and artifacts
 

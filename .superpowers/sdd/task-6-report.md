@@ -3,7 +3,14 @@
 Working directory: `E:\weknora_projects\maintenance-support-weknora\.worktrees\maintenance-plan05-5-c3`
 Branch: `codex/maintenance-plan05-5-c3`
 Base: `b96a281fbc6d1809a5bb1e0a0ab6bbe32d797330`
-Validated head: `7c6f8e3e4f7b7529905d5f592979e47655f85327`
+Original C3 implementation head: `7c6f8e3e4f7b7529905d5f592979e47655f85327`
+Closure commit: `9349822c4107220e93a56710fa928266ec089ede`
+
+The final commands below ran against the pre-commit working tree represented
+by closure commit `9349822c4`, including its unified test runner and route
+expectation repair. This evidence-correction follow-up commit is a child of
+that closure commit; it does not assert that the later follow-up HEAD was
+validated by the earlier command runs.
 
 ## Commands and complete result summaries
 
@@ -22,7 +29,13 @@ Validated head: `7c6f8e3e4f7b7529905d5f592979e47655f85327`
 
 ## Diagnosed and repaired test runtime defects
 
-The original `npm test` command was `tsx --test`. It attempted to load Vue SFC/Vitest suites directly and treated a supplied test directory as an `index.ts` module. It also read the root solution tsconfig, which does not provide the `@/*` mapping required by one Node test’s shared request interceptor import. `frontend/scripts/run-tests.mjs` is the single test entrypoint: it expands explicit files/directories, dispatches `node:test` sources to `tsx --tsconfig tsconfig.app.json --test`, and dispatches Vitest sources to Vitest. No tests are omitted. The C3 `maintenanceReportDetail` hidden route was also added to the legacy route-regression expectation.
+The original `npm test` command was `tsx --test`. It attempted to load Vue SFC/Vitest suites directly and treated a supplied test directory as an `index.ts` module. It also read the root solution tsconfig, which does not provide the `@/*` mapping required by one Node test’s shared request interceptor import. `frontend/scripts/run-tests.mjs` is the single test entrypoint: it expands explicit files/directories, dispatches `node:test` sources to `tsx --tsconfig tsconfig.app.json --test`, and dispatches Vitest sources to Vitest. It deduplicates resolved paths before stable sorting/classification, so an explicit file overlapping a requested directory is not passed twice. No tests are omitted. The C3 `maintenanceReportDetail` hidden route was also added to the legacy route-regression expectation.
+
+## Follow-up runner verification
+
+`cd frontend; npm run test -- src/components/maintenance/chat/__tests__ src/components/maintenance/chat/__tests__/card-host.test.ts` exited 0. It reported 9 tests and 9 passes, proving the directory plus explicit-child input executes the three unique Chat Card test files once rather than reporting the overlapping child twice.
+
+The follow-up full `cd frontend; npm run test` exited 0: Node/tsx reported 505 passed and Vitest reported 30 passed (535 total, 0 failed).
 
 ## Accepted warnings and artifacts
 
