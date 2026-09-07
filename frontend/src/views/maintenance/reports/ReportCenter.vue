@@ -2,11 +2,17 @@
   <main class="report-center">
     <header class="report-center__header"><div><h1>{{ t('maintenance.pages.reports') }}</h1><p>{{ t('maintenance.reports.description') }}</p></div><button type="button" class="report-center__primary" disabled :title="t('maintenance.reports.createComingSoon')">{{ t('maintenance.reports.actions.create') }}</button></header>
     <ReportFilterBar :query="query" @apply="applyFilters" />
-    <p v-if="error" class="report-center__error" role="alert">{{ error }} <button type="button" @click="load">{{ t('maintenance.reports.actions.retry') }}</button></p>
-    <div v-if="loading && reports.length === 0" class="report-center__state">{{ t('maintenance.reports.loading') }}</div>
-    <div v-else-if="!error && reports.length === 0" class="report-center__state">{{ t('maintenance.reports.empty') }}</div>
+    <template v-if="loading && reports.length === 0">
+      <div class="report-center__state">{{ t('maintenance.reports.loading') }}</div>
+    </template>
+    <template v-else-if="error">
+      <p class="report-center__error" role="alert">{{ error }} <button type="button" @click="load">{{ t('maintenance.reports.actions.retry') }}</button></p>
+    </template>
+    <template v-else-if="reports.length === 0">
+      <div class="report-center__state">{{ t('maintenance.reports.empty') }}</div>
+    </template>
     <ReportListTable v-else :reports="reports" :role="reportRole" @open="openReport" @generate="emitAction" @validate="emitAction" @finalize="emitAction" @regenerate="emitAction" @export="emitAction" />
-    <footer v-if="pages > 1" class="report-center__pagination"><button type="button" :disabled="loading || query.page <= 1" @click="setPage(query.page - 1)">{{ t('maintenance.reports.actions.previous') }}</button><span>{{ query.page }} / {{ pages }}</span><button type="button" :disabled="loading || query.page >= pages" @click="setPage(query.page + 1)">{{ t('maintenance.reports.actions.next') }}</button></footer>
+    <footer v-if="!loading && !error && pages > 1" class="report-center__pagination"><button type="button" :disabled="loading || query.page <= 1" @click="setPage(query.page - 1)">{{ t('maintenance.reports.actions.previous') }}</button><span>{{ query.page }} / {{ pages }}</span><button type="button" :disabled="loading || query.page >= pages" @click="setPage(query.page + 1)">{{ t('maintenance.reports.actions.next') }}</button></footer>
   </main>
 </template>
 

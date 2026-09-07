@@ -219,6 +219,8 @@ describe('report center asynchronous DOM states', () => {
     second.reject(new Error('Network unavailable'))
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Network unavailable')
+    expect(wrapper.findComponent(ReportListTable).exists()).toBe(false)
+    expect(wrapper.find('table').exists()).toBe(false)
     expect(wrapper.find('tbody tr').exists()).toBe(false)
     expect(wrapper.find('footer').exists()).toBe(false)
     expect(wrapper.find('.report-center__state').exists()).toBe(false)

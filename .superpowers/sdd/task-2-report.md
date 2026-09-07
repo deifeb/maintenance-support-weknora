@@ -178,3 +178,27 @@ lockfile and this appended report changed. Existing Task 2 production fixes,
 backend/C2D/shared client, and Task 3 remain untouched.
 `.superpowers/sdd/progress.md` is preserved as found and is not staged or
 committed.
+
+### C3 final review P1 remediation
+
+The report-center state branches are now mutually exclusive: loading, error,
+empty, and the report table are rendered through one `v-if`/`v-else-if`/
+`v-else` chain. Pagination is also suppressed while loading or after an API
+error. The existing error-state test now asserts that both `ReportListTable`
+and the native `<table>` are absent, while retry and successful rendering
+remain covered by the same case.
+
+Verification:
+
+```powershell
+cd frontend
+npm run test:components -- src/components/maintenance/report/__tests__/report-list-state.test.ts
+cd ..
+git diff --check
+```
+
+- Component suite: exit 0, **17/17 passed**.
+- `git diff --check`: exit 0 (only expected LF-to-CRLF conversion notices).
+
+Scope remains limited to the Task 2 report view, its component test, and this
+report; backend/shared client/Task 3 files were not changed.
