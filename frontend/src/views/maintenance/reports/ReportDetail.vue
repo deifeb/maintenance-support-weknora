@@ -5,7 +5,7 @@
     <p v-else-if="notFound" role="status">This report was not found.</p>
     <p v-else-if="errorKey" role="alert">{{ t(errorKey) }}<template v-if="requestId"> {{ t('maintenance.reports.errors.requestId', { requestId }) }}</template></p>
     <p v-else-if="loading && !detail" role="status">Loading report…</p>
-    <template v-else-if="detail"><section class="report-detail__summary"><p>{{ detail.report_code }} · {{ detail.report_type }}</p><p>Job status: {{ detail.job_status ?? 'Unavailable' }}</p><p>Version {{ detail.version_number }} · {{ detail.status }}</p></section><ReportLifecycleActions v-if="detail.job_status" :report-id="detail.report_id" :job-status="detail.job_status" :version-status="detail.status" :version-generated="Boolean(detail.generated_at)" :actions="lifecycleActions" :refresh="load" /><ReportRegenerateDialog v-if="actions.includes('regenerate')" :open="regenerateOpen" :allowed="actions.includes('regenerate')" :report-id="detail.report_id" :refresh="load" @close="regenerateOpen = false" /><button v-if="actions.includes('regenerate')" type="button" @click="regenerateOpen = true">Regenerate as new version</button><ReportProvenancePanel :sources="provenanceSources" /><ReportVersionTimeline :versions="versions" /><ReportValidationFindings :findings="detail.findings ?? []" /><ReportSections :sections="detail.sections" :citations="detail.citations" /></template>
+    <template v-else-if="detail"><section class="report-detail__summary"><p>{{ detail.report_code }} · {{ detail.report_type }}</p><p>Job status: {{ detail.job_status ?? 'Unavailable' }}</p><p>Version {{ detail.version_number }} · {{ detail.status }}</p></section><ReportLifecycleActions v-if="detail.job_status" :report-id="detail.report_id" :job-status="detail.job_status" :version-status="detail.status" :version-generated="Boolean(detail.generated_at)" :actions="lifecycleActions" :refresh="load" /><ReportExportActions :report-id="detail.report_id" :actions="actions" /><ReportRegenerateDialog v-if="actions.includes('regenerate')" :open="regenerateOpen" :allowed="actions.includes('regenerate')" :report-id="detail.report_id" :refresh="load" @close="regenerateOpen = false" /><button v-if="actions.includes('regenerate')" type="button" @click="regenerateOpen = true">Regenerate as new version</button><ReportProvenancePanel :sources="provenanceSources" /><ReportVersionTimeline :versions="versions" /><ReportValidationFindings :findings="detail.findings ?? []" /><ReportSections :sections="detail.sections" :citations="detail.citations" /></template>
   </main>
 </template>
 
@@ -21,6 +21,7 @@ import ReportValidationFindings from '@/components/maintenance/report/ReportVali
 import ReportVersionTimeline from '@/components/maintenance/report/ReportVersionTimeline.vue'
 import ReportLifecycleActions from '@/components/maintenance/report/ReportLifecycleActions.vue'
 import ReportRegenerateDialog from '@/components/maintenance/report/ReportRegenerateDialog.vue'
+import ReportExportActions from '@/components/maintenance/report/ReportExportActions.vue'
 import { getReportActions, reportErrorMessageKey, type ReportRole } from '@/components/maintenance/report/report-actions'
 import type { ReportAction } from '@/components/maintenance/report/report-types'
 import { useAuthStore } from '@/stores/auth'

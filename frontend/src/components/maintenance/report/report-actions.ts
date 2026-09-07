@@ -1,8 +1,10 @@
 import type {
   ReportAction,
+  ReportExportFormat,
   ReportJobStatus,
   ReportVersionStatus,
 } from './report-types'
+import type { MaintenanceDownload } from '../../../api/maintenance/client'
 
 export type ReportRole = 'VIEWER' | 'CONTRIBUTOR' | 'ADMIN'
 
@@ -94,3 +96,50 @@ export const createReportLifecycleController = Object.assign(
     regenerateExplanation: 'A new version is created, its source snapshot is copied from the current report version, and no business source data is recalculated.',
   },
 )
+
+export interface ReportExportController {
+  download(format: ReportExportFormat): Promise<void>
+  messageFor(error: unknown): string
+  requestIdFor(error: unknown): string | undefined
+}
+
+interface DownloadAnchor {
+  href: string
+  download: string
+  click(): void
+  remove(): void
+}
+
+export function createReportExportController(input: {
+  reportId: number
+  actions: readonly ReportAction[]
+  exportReport: (reportId: number, format: ReportExportFormat) => Promise<MaintenanceDownload>
+  createObjectURL: (blob: Blob) => string
+  revokeObjectURL: (url: string) => void
+  createAnchor: () => DownloadAnchor
+}): ReportExportController {
+  return {
+    async download(format) {
+      if (!input.actions.includes('export')) throw new Error('Report action export is not allowed')
+      const response = await input.exportReport(input.reportId, format)
+      const blob = new Blob([response.blob], { type: response.contentType })
+      let objectUrl: string | undefined
+      let anchor: DownloadAnchor | undefined
+      try {
+        objectUrl = input.createObjectURL(blob)
+        anchor = input.createAnchor()
+        anchor.href = objectUrl
+        anchor.download = response.filename
+        anchor.click()
+      } finally {
+        anchor?.remove()
+        if (objectUrl) input.revokeObjectURL(objectUrl)
+      }
+    },
+    messageFor(error) { return reportErrorMessageKey(errorField(error, 'code')) },
+    requestIdFor(error) {
+      const requestId = errorField(error, 'request_id')
+      return typeof requestId === 'string' ? requestId : undefined
+    },
+  }
+}

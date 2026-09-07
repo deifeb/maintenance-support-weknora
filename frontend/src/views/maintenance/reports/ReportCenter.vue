@@ -12,7 +12,8 @@
     <template v-else-if="reports.length === 0">
       <div class="report-center__state">{{ t('maintenance.reports.empty') }}</div>
     </template>
-    <ReportListTable v-else :reports="reports" :role="reportRole" @open="openReport" @generate="openReport" @validate="openReport" @finalize="openReport" @regenerate="openReport" @export="emitAction" />
+    <ReportListTable v-else :reports="reports" :role="reportRole" @open="openReport" @generate="openReport" @validate="openReport" @finalize="openReport" @regenerate="openReport" @export="selectExport" />
+    <ReportExportActions v-if="exportReportId !== null" :report-id="exportReportId" :actions="exportActions" @exported="exportReportId = null" />
     <footer v-if="!loading && !errorKey && pages > 1" class="report-center__pagination"><button type="button" :disabled="loading || query.page <= 1" @click="setPage(query.page - 1)">{{ t('maintenance.reports.actions.previous') }}</button><span>{{ query.page }} / {{ pages }}</span><button type="button" :disabled="loading || query.page >= pages" @click="setPage(query.page + 1)">{{ t('maintenance.reports.actions.next') }}</button></footer>
   </main>
 </template>
@@ -26,12 +27,13 @@ import { normalizeMaintenanceError } from '@/api/maintenance/client'
 import ReportFilterBar from '@/components/maintenance/report/ReportFilterBar.vue'
 import ReportListTable from '@/components/maintenance/report/ReportListTable.vue'
 import ReportGenerationDialog from '@/components/maintenance/report/ReportGenerationDialog.vue'
-import { reportErrorMessageKey, type ReportRole } from '@/components/maintenance/report/report-actions'
+import ReportExportActions from '@/components/maintenance/report/ReportExportActions.vue'
+import { getReportActions, reportErrorMessageKey, type ReportRole } from '@/components/maintenance/report/report-actions'
 import { useAuthStore } from '@/stores/auth'
 import { normalizeReportListQuery, type ReportListQuery } from '@/components/maintenance/report/report-types'
 
 const { t } = useI18n(); const route = useRoute(); const router = useRouter(); const authStore = useAuthStore()
-const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const errorKey = ref(''); const requestId = ref(''); const createOpen = ref(false)
+const reports = ref<ReportListItem[]>([]); const pages = ref(0); const loading = ref(false); const errorKey = ref(''); const requestId = ref(''); const createOpen = ref(false); const exportReportId = ref<number | null>(null)
 const query = computed(() => normalizeReportListQuery(route.query) as ReportListQuery)
 const reportRole = computed<ReportRole>(() => authStore.hasRole('admin') ? 'ADMIN' : authStore.hasRole('contributor') ? 'CONTRIBUTOR' : 'VIEWER')
 let request = 0
@@ -40,7 +42,11 @@ async function load(): Promise<void> { const current = ++request; loading.value 
 function applyFilters(value: ReportListQuery): void { void router.push({ path: '/platform/maintenance/reports', query: routeQuery(value) }) }
 function setPage(page: number): void { applyFilters({ ...query.value, page }) }
 function openReport(reportId: number): void { void router.push({ name: 'maintenanceReportDetail', params: { reportId } }) }
-function emitAction(_reportId: number): void { /* Task 4/5 supplies lifecycle and export handling. */ }
+const exportActions = computed(() => {
+  const report = reports.value.find((item) => item.report_id === exportReportId.value)
+  return report ? getReportActions({ role: reportRole.value, jobStatus: report.job_status, versionStatus: report.latest_version?.status ?? null }) : []
+})
+function selectExport(reportId: number): void { exportReportId.value = reportId }
 watch(query, () => { void load() }, { immediate: true })
 onBeforeUnmount(() => { request += 1 })
 </script>
