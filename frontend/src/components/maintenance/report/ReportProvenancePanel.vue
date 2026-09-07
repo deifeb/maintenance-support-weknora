@@ -24,6 +24,8 @@ const sourceNames: Record<PublicSourceVersion['type'], string> = {
 function isPublicSource(source: unknown): source is PublicSourceVersion {
   if (typeof source !== 'object' || source === null) return false
   const value = source as Record<string, unknown>
+  const allowedFields = ['type', 'id', 'version', 'lineage_id', 'digest']
+  if (Object.keys(value).some((field) => !allowedFields.includes(field))) return false
   return typeof value.type === 'string' && value.type in sourceNames
     && ['string', 'number', 'boolean'].includes(typeof value.id)
     && ['string', 'number', 'boolean'].includes(typeof value.version)

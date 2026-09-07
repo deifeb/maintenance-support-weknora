@@ -10,6 +10,9 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     // Existing node:test suites continue to run through npm test.
-    include: ['src/components/maintenance/report/__tests__/report-list-state.test.ts'],
+    include: [
+      'src/components/maintenance/report/__tests__/report-list-state.test.ts',
+      'src/components/maintenance/report/__tests__/report-detail-state.test.ts',
+    ],
   },
 })
