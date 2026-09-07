@@ -4,12 +4,13 @@ import { defineComponent, h, ref } from 'vue'
 import { createMemoryHistory, createRouter, RouterView, type LocationQueryRaw } from 'vue-router'
 import ReportCenter from '@/views/maintenance/reports/ReportCenter.vue'
 import ReportListTable from '../ReportListTable.vue'
+import ReportExportActions from '../ReportExportActions.vue'
 import { getReportActions, type ReportRole } from '../report-actions'
 import { normalizeReportListQuery, REPORT_JOB_STATUSES, type ReportListItem, type ReportListQuery } from '../report-types'
 import type { MaintenanceResult, PageData } from '@/api/maintenance/types'
 
-const mocks = vi.hoisted(() => ({ listReports: vi.fn(), hasRole: vi.fn() }))
-vi.mock('@/api/maintenance/reports', () => ({ reportApi: { listReports: mocks.listReports } }))
+const mocks = vi.hoisted(() => ({ listReports: vi.fn(), exportReport: vi.fn(), hasRole: vi.fn() }))
+vi.mock('@/api/maintenance/reports', () => ({ reportApi: { listReports: mocks.listReports, exportReport: mocks.exportReport } }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ hasRole: mocks.hasRole }) }))
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string, values?: { requestId?: string }) => values?.requestId ? `${key}:${values.requestId}` : key, locale: ref('en-US') }),
@@ -19,6 +20,7 @@ enableAutoUnmount(afterEach)
 afterEach(() => vi.restoreAllMocks())
 beforeEach(() => {
   mocks.listReports.mockReset()
+  mocks.exportReport.mockReset()
   mocks.hasRole.mockReset().mockReturnValue(false)
 })
 
@@ -185,6 +187,81 @@ describe('report table actions', () => {
       })
     }
   }
+
+  it('keeps keyboard export activation inside the action cell and does not open the row', async () => {
+    const wrapper = mount(ReportListTable, { props: { reports: [item], role: 'VIEWER' } })
+    const exportButton = wrapper.findAll('tbody button').find((button) => button.text() === actionKey('export'))!
+    await exportButton.trigger('keydown.enter')
+    await exportButton.trigger('keydown.space')
+    await exportButton.trigger('click')
+    expect(wrapper.emitted('export')).toEqual([[item.report_id]])
+    expect(wrapper.emitted('open')).toBeUndefined()
+  })
+})
+
+describe('report export production wiring', () => {
+  it('passes the selected list report ID to a viewer-permitted mounted export control without navigating', async () => {
+    const pending = request()
+    const { wrapper, push } = await mountCenter()
+    pending.resolve(response())
+    await flushPromises()
+    const exportButton = wrapper.findAll('tbody button').find((button) => button.text() === actionKey('export'))!
+    await exportButton.trigger('keydown.enter')
+    await exportButton.trigger('click')
+    await flushPromises()
+    const exportActions = wrapper.findComponent(ReportExportActions)
+    expect(exportActions.exists()).toBe(true)
+    expect(exportActions.props('reportId')).toBe(item.report_id)
+    expect(exportActions.props('actions')).toContain('export')
+    expect(exportActions.text()).toContain(actionKey('export'))
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('does not emit exported and renders only safe failure feedback from the mounted list control', async () => {
+    mocks.exportReport.mockRejectedValue({ code: 'PRIVATE_BACKEND_DETAIL', message: 'C:\\secret\\report.docx', request_id: 'request-42' })
+    const pending = request()
+    const { wrapper, push } = await mountCenter()
+    pending.resolve(response())
+    await flushPromises()
+    await wrapper.findAll('tbody button').find((button) => button.text() === actionKey('export'))!.trigger('click')
+    await flushPromises()
+    const exportActions = wrapper.findComponent(ReportExportActions)
+    await exportActions.find('button').trigger('click')
+    await flushPromises()
+    expect(exportActions.emitted('exported')).toBeUndefined()
+    expect(exportActions.get('[role="alert"]').text()).toContain('maintenance.reports.errors.generic')
+    expect(exportActions.text()).toContain('request-42')
+    expect(exportActions.text()).not.toContain('secret\\report.docx')
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('cleans up and maps a browser click failure without emitting exported', async () => {
+    mocks.exportReport.mockResolvedValue({ blob: new Blob(['report']), filename: 'RPT-7-v1.docx', contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    const createObjectURL = vi.fn(() => 'blob:report')
+    const revokeObjectURL = vi.fn()
+    const createDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { throw { code: 'PRIVATE_BACKEND_DETAIL', message: 'C:\\secret\\report.docx', request_id: 'request-42' } })
+    try {
+      const wrapper = mount(ReportExportActions, { props: { reportId: item.report_id, actions: ['export'] } })
+      await wrapper.get('button').trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('exported')).toBeUndefined()
+      expect(wrapper.get('[role="alert"]').text()).toContain('maintenance.reports.errors.generic')
+      expect(wrapper.text()).toContain('request-42')
+      expect(wrapper.text()).not.toContain('secret\\report.docx')
+      expect(createObjectURL).toHaveBeenCalledOnce()
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:report')
+      expect(click).toHaveBeenCalledOnce()
+    } finally {
+      if (createDescriptor) Object.defineProperty(URL, 'createObjectURL', createDescriptor)
+      else delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL
+      if (revokeDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeDescriptor)
+      else delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL
+    }
+  })
 })
 
 describe('report center asynchronous DOM states', () => {

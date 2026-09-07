@@ -132,8 +132,11 @@ export function createReportExportController(input: {
         anchor.download = response.filename
         anchor.click()
       } finally {
-        anchor?.remove()
-        if (objectUrl) input.revokeObjectURL(objectUrl)
+        try {
+          anchor?.remove()
+        } finally {
+          if (objectUrl) input.revokeObjectURL(objectUrl)
+        }
       }
     },
     messageFor(error) { return reportErrorMessageKey(errorField(error, 'code')) },

@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 
 import ReportProvenancePanel from '../ReportProvenancePanel.vue'
 import ReportVersionTimeline from '../ReportVersionTimeline.vue'
+import ReportExportActions from '../ReportExportActions.vue'
 import ReportDetail from '@/views/maintenance/reports/ReportDetail.vue'
 import type { MaintenanceResult } from '@/api/maintenance/types'
 import type { ReportDetail as ReportDetailData, ReportVersionSummary } from '@/api/maintenance/reports'
@@ -21,7 +22,7 @@ afterEach(() => vi.resetAllMocks())
 
 const detail: ReportDetailData = {
   report_id: 7, report_code: 'RPT-7', report_type: 'MANAGEMENT_DECISION', title: 'Weekly report',
-  status: 'DRAFT', version_id: 9, version_number: 2, parent_version_id: 8, template_version: 'v3',
+  status: 'DRAFT', job_status: 'READY_FOR_REVIEW', version_id: 9, version_number: 2, parent_version_id: 8, template_version: 'v3',
   input_digest: 'input-digest', generation_mode: 'MANUAL', generated_at: '2026-09-07T00:00:00Z',
   source_versions: { capture_mode: 'AUTHORITATIVE_CREATE', provenance_completeness: 'AUTHORITATIVE', sources: [] },
   sections: [], citations: [],
@@ -57,5 +58,18 @@ describe('report detail rendered state', () => {
     expect(wrapper.text()).toContain('The report identifier is invalid.')
     expect(wrapper.text()).not.toContain('STALE report')
     expect(wrapper.text()).not.toContain('content-digest')
+  })
+
+  it('passes the loaded detail report ID to the viewer-permitted mounted export control', async () => {
+    mocks.getReport.mockResolvedValue(result(detail)); mocks.listReportVersions.mockResolvedValue(result([version]))
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/reports/:reportId', name: 'maintenanceReportDetail', component: ReportDetail }] })
+    await router.push('/reports/7'); await router.isReady()
+    const wrapper = mount(RouterView, { global: { plugins: [router] } })
+    await flushPromises()
+    const exportActions = wrapper.findComponent(ReportExportActions)
+    expect(exportActions.exists()).toBe(true)
+    expect(exportActions.props('reportId')).toBe(detail.report_id)
+    expect(exportActions.props('actions')).toContain('export')
+    expect(exportActions.text()).toContain('maintenance.reports.actions.export')
   })
 })

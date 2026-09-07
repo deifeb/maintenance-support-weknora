@@ -6,7 +6,7 @@
         <tr v-for="report in reports" :key="report.report_id" tabindex="0" @click="emit('open', report.report_id)" @keydown.enter="emit('open', report.report_id)">
           <td><code>{{ report.report_code }}</code></td><td>{{ report.title }}</td><td>{{ report.report_type }}</td><td>{{ report.job_status }}</td>
           <td>{{ report.latest_version ? `v${report.latest_version.version_number} · ${report.latest_version.status}` : '—' }}</td><td>{{ report.progress_percent }}%</td><td>{{ formatDate(report.created_at) }}</td><td>{{ formatDate(report.updated_at) }}</td>
-          <td class="report-list-table__actions" @click.stop><button v-for="action in reportActions(report)" :key="action" type="button" @click="emit(action === 'view' ? 'open' : action, report.report_id)">{{ t(`maintenance.reports.actions.${action}`) }}</button></td>
+          <td class="report-list-table__actions" @click.stop @keydown.enter.stop @keydown.space.stop><button v-for="action in reportActions(report)" :key="action" type="button" @click="emit(action === 'view' ? 'open' : action, report.report_id)">{{ t(`maintenance.reports.actions.${action}`) }}</button></td>
         </tr>
       </tbody>
     </table>

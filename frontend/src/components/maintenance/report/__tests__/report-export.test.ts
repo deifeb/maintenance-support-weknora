@@ -6,6 +6,7 @@ import { createReportExportController } from '../report-actions.ts'
 test('downloads every supported report format using the server supplied filename and content type', async () => {
   const downloads: Array<{ filename: string; type: string }> = []
   const calls: Array<{ reportId: number; format: string }> = []
+  const cleanup: string[] = []
   const controller = createReportExportController({
     reportId: 42,
     actions: ['view', 'export'],
@@ -20,11 +21,11 @@ test('downloads every supported report format using the server supplied filename
       }
     },
     createObjectURL: (blob) => { downloads.push({ filename: '', type: blob.type }); return 'blob:report' },
-    revokeObjectURL: (url) => assert.equal(url, 'blob:report'),
+    revokeObjectURL: (url) => { assert.equal(url, 'blob:report'); cleanup.push(`revoke:${url}`) },
     createAnchor: () => ({
       href: '', download: '',
       click() { downloads.at(-1)!.filename = this.download },
-      remove() {},
+      remove() { cleanup.push('remove') },
     }),
   })
 
@@ -39,6 +40,7 @@ test('downloads every supported report format using the server supplied filename
     { filename: 'RPT-1-v2.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   ])
   assert.equal(downloads[2].filename.includes('/'), false)
+  assert.deepEqual(cleanup, ['remove', 'revoke:blob:report', 'remove', 'revoke:blob:report', 'remove', 'revoke:blob:report'])
 })
 
 test('does not click an anchor and exposes only mapped feedback for an export failure', async () => {
@@ -56,4 +58,23 @@ test('does not click an anchor and exposes only mapped feedback for an export fa
   assert.equal(clicked, false)
   assert.equal(controller.messageFor({ code: 'PRIVATE_BACKEND_DETAIL' }), 'maintenance.reports.errors.generic')
   assert.equal(controller.requestIdFor({ request_id: 'request-42' }), 'request-42')
+})
+
+test('removes the anchor and revokes the URL when clicking or removal throws', async () => {
+  const cleanup: string[] = []
+  const controller = createReportExportController({
+    reportId: 42,
+    actions: ['export'],
+    exportReport: async () => ({ blob: new Blob(['report']), filename: 'RPT-1-v2.docx', contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    createObjectURL: () => 'blob:report',
+    revokeObjectURL: (url) => { cleanup.push(`revoke:${url}`) },
+    createAnchor: () => ({
+      href: '', download: '',
+      click() { cleanup.push('click'); throw { code: 'PRIVATE_BACKEND_DETAIL', message: 'C:\\secret\\report.docx', request_id: 'request-42' } },
+      remove() { cleanup.push('remove'); throw new Error('remove failure') },
+    }),
+  })
+
+  await assert.rejects(controller.download('DOCX'))
+  assert.deepEqual(cleanup, ['click', 'remove', 'revoke:blob:report'])
 })
