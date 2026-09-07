@@ -209,6 +209,12 @@ export const maintenanceRouteRecords: RouteRecordRaw[] = [
         component: () => import('@/views/maintenance/reports/ReportCenter.vue'),
         meta: { ...maintenanceRouteMeta },
       },
+      {
+        path: 'reports/:reportId',
+        name: 'maintenanceReportDetail',
+        component: () => import('@/views/maintenance/reports/ReportDetail.vue'),
+        meta: { ...maintenanceRouteMeta, hideInMaintenanceMenu: true },
+      },
     ],
   },
 ]
