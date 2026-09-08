@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 from app.db.base import Base
 from app.db.session import engine
-from app.models import WarehouseInventory
+from app.models import InventoryBalance
 from sqlalchemy import inspect
 
 EXPECTED_TABLES = {
@@ -14,7 +14,14 @@ EXPECTED_TABLES = {
     "spare_parts",
     "reliability_profiles",
     "warehouses",
-    "warehouse_inventories",
+    "warehouse_locations",
+    "inventory_policies",
+    "inventory_expiry_rules",
+    "inventory_lots",
+    "serialized_items",
+    "inventory_balances",
+    "inventory_transactions",
+    "inventory_ledger_entries",
     "suppliers",
     "supplier_offers",
 }
@@ -32,15 +39,14 @@ def test_each_table_has_primary_key(table_name: str) -> None:
 
 
 def test_inventory_available_quantity_is_derived() -> None:
-    inventory = WarehouseInventory(
+    inventory = InventoryBalance(
         warehouse_id=1,
+        location_id=1,
         spare_part_id=1,
         on_hand_quantity=Decimal("100"),
         reserved_quantity=Decimal("10"),
         damaged_quantity=Decimal("5"),
         quarantined_quantity=Decimal("3"),
         in_transit_quantity=Decimal("0"),
-        safety_stock=Decimal("10"),
-        reorder_point=Decimal("20"),
     )
     assert inventory.available_quantity == Decimal("82")

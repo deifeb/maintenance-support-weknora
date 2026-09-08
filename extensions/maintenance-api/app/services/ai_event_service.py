@@ -1,24 +1,68 @@
+from __future__ import annotations
+
 from sqlalchemy.orm import Session
 
-from app.repositories.ai_session_repository import ai_session_repository
+from app.core.exceptions import NotFoundError
+from app.repositories.ai_session_repository import (
+    AISessionRepository,
+    ai_session_repository,
+)
+from app.security.actor import ActorContext
 
 
 class AIEventService:
+    def __init__(
+        self,
+        *,
+        repository: AISessionRepository | None = None,
+    ) -> None:
+        self.repository = repository or ai_session_repository
+
     def append(
         self,
         session: Session,
+        actor: ActorContext,
         session_id: int,
         event_type: str,
         payload: dict,
         *,
         visibility: str = "USER",
     ):
-        return ai_session_repository.append_event(
-            session, session_id, event_type, payload, visibility=visibility
-        )
+        try:
+            return self.repository.append_event(
+                session,
+                actor.tenant_id,
+                session_id,
+                event_type,
+                payload,
+                visibility=visibility,
+            )
+        except LookupError as exc:
+            raise NotFoundError(
+                "ai_session",
+                session_id,
+            ) from exc
 
-    def list(self, session: Session, session_id: int, *, after_sequence: int = 0):
-        return ai_session_repository.list_events(session, session_id, after_sequence=after_sequence)
+    def list(
+        self,
+        session: Session,
+        actor: ActorContext,
+        session_id: int,
+        *,
+        after_sequence: int = 0,
+    ):
+        try:
+            return self.repository.list_events(
+                session,
+                actor.tenant_id,
+                session_id,
+                after_sequence=after_sequence,
+            )
+        except LookupError as exc:
+            raise NotFoundError(
+                "ai_session",
+                session_id,
+            ) from exc
 
 
 ai_event_service = AIEventService()

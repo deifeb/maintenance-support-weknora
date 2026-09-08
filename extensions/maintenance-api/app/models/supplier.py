@@ -2,21 +2,42 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 if TYPE_CHECKING:
     from app.models.catalog import SparePart
 
 
-class Supplier(Base, ActiveMixin, TimestampMixin):
+class Supplier(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "suppliers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     supplier_type: Mapped[str | None] = mapped_column(String(100))
     contact_person: Mapped[str | None] = mapped_column(String(100))
@@ -31,17 +52,29 @@ class Supplier(Base, ActiveMixin, TimestampMixin):
     offers: Mapped[list["SupplierOffer"]] = relationship(back_populates="supplier")
 
     __table_args__ = (
+        Index(
+            "uq_suppliers_tenant_code",
+            "tenant_id",
+            "code",
+            unique=True,
+        ),
         CheckConstraint(
             "rating IS NULL OR (rating >= 0 AND rating <= 100)", name="ck_supplier_rating"
         ),
     )
 
 
-class SupplierOffer(Base, ActiveMixin, TimestampMixin):
+class SupplierOffer(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "supplier_offers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    offer_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    offer_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     supplier_id: Mapped[int] = mapped_column(
         ForeignKey("suppliers.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -69,6 +102,12 @@ class SupplierOffer(Base, ActiveMixin, TimestampMixin):
     spare_part: Mapped["SparePart"] = relationship(back_populates="supplier_offers")
 
     __table_args__ = (
+        Index(
+            "uq_supplier_offers_tenant_offer_code",
+            "tenant_id",
+            "offer_code",
+            unique=True,
+        ),
         CheckConstraint("unit_price >= 0", name="ck_offer_price_nonnegative"),
         CheckConstraint(
             "tax_rate IS NULL OR (tax_rate >= 0 AND tax_rate <= 1)", name="ck_offer_tax_rate"

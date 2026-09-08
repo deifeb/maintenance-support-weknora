@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -28,14 +29,19 @@ from app.models.enums import (
     RerunMode,
     ShortageRiskLevel,
 )
-from app.models.mixins import TimestampMixin
+from app.models.mixins import TenantScopedMixin, TimestampMixin, VersionedMixin
 
 
-class DemandCalculation(Base, TimestampMixin):
+class DemandCalculation(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_calculations"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     calculation_code: Mapped[str] = mapped_column(
-        String(64), nullable=False, unique=True, index=True
+        String(64), nullable=False, index=True
     )
     calculation_name: Mapped[str] = mapped_column(String(200), nullable=False)
     scenario_version_id: Mapped[int | None] = mapped_column(
@@ -62,7 +68,7 @@ class DemandCalculation(Base, TimestampMixin):
     progress_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=0)
     current_stage: Mapped[str | None] = mapped_column(String(200))
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), index=True)
     input_snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     input_snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     inventory_snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -78,6 +84,18 @@ class DemandCalculation(Base, TimestampMixin):
         back_populates="calculation", cascade="all, delete-orphan"
     )
     __table_args__ = (
+        Index(
+            "uq_demand_calculations_tenant_code",
+            "tenant_id",
+            "calculation_code",
+            unique=True,
+        ),
+        Index(
+            "uq_demand_calculations_tenant_idempotency",
+            "tenant_id",
+            "idempotency_key",
+            unique=True,
+        ),
         CheckConstraint(
             "progress_percent >= 0 AND progress_percent <= 100",
             name="ck_demand_calculation_progress",
@@ -85,7 +103,11 @@ class DemandCalculation(Base, TimestampMixin):
     )
 
 
-class DemandCalculationRun(Base, TimestampMixin):
+class DemandCalculationRun(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_calculation_runs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     calculation_id: Mapped[int] = mapped_column(
@@ -139,7 +161,11 @@ class DemandCalculationRun(Base, TimestampMixin):
     )
 
 
-class DemandRunItemResult(Base, TimestampMixin):
+class DemandRunItemResult(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_run_item_results"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     calculation_run_id: Mapped[int] = mapped_column(
@@ -212,7 +238,11 @@ class DemandRunItemResult(Base, TimestampMixin):
     )
 
 
-class DemandRunContribution(Base, TimestampMixin):
+class DemandRunContribution(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "demand_run_contributions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     calculation_run_id: Mapped[int] = mapped_column(

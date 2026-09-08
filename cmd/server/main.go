@@ -35,6 +35,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/container"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/router"
 	"github.com/Tencent/WeKnora/internal/runtime"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
@@ -64,13 +65,13 @@ func main() {
 	// Run application
 	err := c.Invoke(func(
 		cfg *config.Config,
-		router *gin.Engine,
+		applicationHandler *router.ApplicationHandler,
 		resourceCleaner interfaces.ResourceCleaner,
 		systemSettingSvc interfaces.SystemSettingService,
 	) error {
 		// Create HTTP server
 		server := &http.Server{
-			Handler: router,
+			Handler: applicationHandler,
 		}
 
 		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

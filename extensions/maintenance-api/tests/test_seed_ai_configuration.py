@@ -10,5 +10,5 @@ def test_seed_ai_configuration_is_idempotent(session) -> None:
     assert first["routes"] == 4
     assert first["tools"] >= 20
     assert first["review_rules"] >= 30
-    assert first["report_templates"] == 3
+    assert first["report_templates"] == 8
     assert len(first["digest"]) == 64

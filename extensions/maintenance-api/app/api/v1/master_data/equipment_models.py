@@ -7,8 +7,14 @@ from app.api.v1.master_data.common import list_params
 from app.core.responses import success_response
 from app.db.session import get_db_session
 from app.schemas.base import ActivePatch, DeleteResult
-from app.schemas.common import PageData, SuccessResponse
+from app.schemas.common import MaintenanceSuccessResponse, PageData
 from app.schemas.equipment import EquipmentModelCreate, EquipmentModelRead, EquipmentModelUpdate
+from app.security.actor import ActorContext
+from app.security.permissions import (
+    require_admin,
+    require_contributor,
+    require_viewer,
+)
 from app.services import equipment_service
 
 router = APIRouter(prefix="/equipment-models", tags=["master-data: equipment models"])
@@ -16,42 +22,72 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 
 
 @router.post(
-    "", response_model=SuccessResponse[EquipmentModelRead], status_code=status.HTTP_201_CREATED
+    "", response_model=MaintenanceSuccessResponse[EquipmentModelRead], status_code=status.HTTP_201_CREATED
 )
-def create_equipment(payload: EquipmentModelCreate, session: SessionDep):
-    item = equipment_service.create(session, payload)
-    return success_response(EquipmentModelRead.model_validate(item), "Equipment model created")
+def create_equipment(
+    payload: EquipmentModelCreate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = equipment_service.create(session, actor, payload)
+    return success_response(EquipmentModelRead.model_validate(item), "Equipment model created", actor=actor, version=item.version)
 
 
-@router.get("", response_model=SuccessResponse[PageData[EquipmentModelRead]])
-def list_equipment(session: SessionDep, params: Annotated[dict, Depends(list_params)]):
-    return success_response(equipment_service.list(session, **params), "Query completed")
+@router.get("", response_model=MaintenanceSuccessResponse[PageData[EquipmentModelRead]])
+def list_equipment(
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
+    params: Annotated[dict, Depends(list_params)],
+):
+    return success_response(equipment_service.list(session, actor, **params), "Query completed", actor=actor)
 
 
-@router.get("/{identifier}", response_model=SuccessResponse[EquipmentModelRead])
-def get_equipment(identifier: int, session: SessionDep):
+@router.get("/{identifier}", response_model=MaintenanceSuccessResponse[EquipmentModelRead])
+def get_equipment(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_viewer)],
+):
     return success_response(
-        EquipmentModelRead.model_validate(equipment_service.get(session, identifier))
+        EquipmentModelRead.model_validate(equipment_service.get(session, actor, identifier)),
+        actor=actor,
     )
 
 
-@router.put("/{identifier}", response_model=SuccessResponse[EquipmentModelRead])
-def update_equipment(identifier: int, payload: EquipmentModelUpdate, session: SessionDep):
-    item = equipment_service.update(session, identifier, payload)
-    return success_response(EquipmentModelRead.model_validate(item), "Equipment model updated")
+@router.put("/{identifier}", response_model=MaintenanceSuccessResponse[EquipmentModelRead])
+def update_equipment(
+    identifier: int,
+    payload: EquipmentModelUpdate,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = equipment_service.update(session, actor, identifier, payload)
+    return success_response(EquipmentModelRead.model_validate(item), "Equipment model updated", actor=actor, version=item.version)
 
 
-@router.patch("/{identifier}/active", response_model=SuccessResponse[EquipmentModelRead])
-def set_equipment_active(identifier: int, payload: ActivePatch, session: SessionDep):
-    item = equipment_service.set_active(session, identifier, payload.is_active)
+@router.patch("/{identifier}/active", response_model=MaintenanceSuccessResponse[EquipmentModelRead])
+def set_equipment_active(
+    identifier: int,
+    payload: ActivePatch,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_contributor)],
+):
+    item = equipment_service.set_active(session, actor, identifier, payload.is_active)
     return success_response(
-        EquipmentModelRead.model_validate(item), "Equipment model status updated"
+        EquipmentModelRead.model_validate(item), "Equipment model status updated",
+        actor=actor,
+        version=item.version,
     )
 
 
-@router.delete("/{identifier}", response_model=SuccessResponse[DeleteResult])
-def delete_equipment(identifier: int, session: SessionDep):
-    equipment_service.delete(session, identifier)
+@router.delete("/{identifier}", response_model=MaintenanceSuccessResponse[DeleteResult])
+def delete_equipment(
+    identifier: int,
+    session: SessionDep,
+    actor: Annotated[ActorContext, Depends(require_admin)],
+):
+    equipment_service.delete(session, actor, identifier)
     return success_response(
-        DeleteResult(deleted=True, resource="equipment_model", identifier=identifier)
+        DeleteResult(deleted=True, resource="equipment_model", identifier=identifier),
+        actor=actor,
     )

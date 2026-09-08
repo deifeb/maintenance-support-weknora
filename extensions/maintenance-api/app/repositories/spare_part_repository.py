@@ -6,36 +6,51 @@ from app.models import (
     ReliabilityProfile,
     SparePart,
     SupplierOffer,
-    WarehouseInventory,
 )
 from app.repositories.base import BaseRepository
+from app.repositories.inventory_ledger_repository import InventoryLedgerRepository
 
 
 class SparePartRepository(BaseRepository[SparePart]):
     def __init__(self) -> None:
         super().__init__(SparePart)
+        self.inventory_ledger_repository = InventoryLedgerRepository()
 
-    def count_references(self, session: Session, identifier: int) -> int:
+    def count_references(
+        self,
+        session: Session,
+        tenant_id: str,
+        identifier: int,
+    ) -> int:
         counts = [
             session.scalar(
                 select(func.count())
                 .select_from(ConfigurationItem)
-                .where(ConfigurationItem.spare_part_id == identifier)
+                .where(
+                    ConfigurationItem.tenant_id == tenant_id,
+                    ConfigurationItem.spare_part_id == identifier,
+                )
             ),
             session.scalar(
                 select(func.count())
                 .select_from(ReliabilityProfile)
-                .where(ReliabilityProfile.spare_part_id == identifier)
+                .where(
+                    ReliabilityProfile.tenant_id == tenant_id,
+                    ReliabilityProfile.spare_part_id == identifier,
+                )
             ),
-            session.scalar(
-                select(func.count())
-                .select_from(WarehouseInventory)
-                .where(WarehouseInventory.spare_part_id == identifier)
+            self.inventory_ledger_repository.count_spare_part_references(
+                session,
+                tenant_id,
+                identifier,
             ),
             session.scalar(
                 select(func.count())
                 .select_from(SupplierOffer)
-                .where(SupplierOffer.spare_part_id == identifier)
+                .where(
+                    SupplierOffer.tenant_id == tenant_id,
+                    SupplierOffer.spare_part_id == identifier,
+                )
             ),
         ]
         return sum(int(value or 0) for value in counts)

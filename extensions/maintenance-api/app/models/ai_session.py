@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -22,13 +23,23 @@ from app.models.enums import (
     AIModelCallStatus,
     AISessionStatus,
 )
-from app.models.mixins import TimestampMixin, utc_now
+from app.models.mixins import (
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+    utc_now,
+)
 
 
-class AISession(Base, TimestampMixin):
+class AISession(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_sessions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    session_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[AISessionStatus] = mapped_column(
         Enum(AISessionStatus, native_enum=False, length=32),
@@ -55,11 +66,21 @@ class AISession(Base, TimestampMixin):
     created_by: Mapped[str | None] = mapped_column(String(128))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
+        Index(
+            "uq_ai_sessions_tenant_code",
+            "tenant_id",
+            "session_code",
+            unique=True,
+        ),
         CheckConstraint("last_event_sequence >= 0", name="ck_ai_session_event_sequence"),
     )
 
 
-class AIMessage(Base, TimestampMixin):
+class AIMessage(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_messages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(
@@ -83,7 +104,11 @@ class AIMessage(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("session_id", "sequence", name="uq_ai_message_sequence"),)
 
 
-class AISessionSnapshot(Base, TimestampMixin):
+class AISessionSnapshot(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_session_snapshots"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(
@@ -102,7 +127,10 @@ class AISessionSnapshot(Base, TimestampMixin):
     )
 
 
-class AIEvent(Base):
+class AIEvent(
+    Base,
+    TenantScopedMixin,
+):
     __tablename__ = "ai_events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int] = mapped_column(
@@ -119,13 +147,17 @@ class AIEvent(Base):
     __table_args__ = (UniqueConstraint("session_id", "sequence", name="uq_ai_event_sequence"),)
 
 
-class AIModelCall(Base, TimestampMixin):
+class AIModelCall(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_model_calls"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int | None] = mapped_column(
         ForeignKey("ai_sessions.id", ondelete="SET NULL"), index=True
     )
-    request_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     function_name: Mapped[str] = mapped_column(String(100), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -150,3 +182,12 @@ class AIModelCall(Base, TimestampMixin):
     fallback_used: Mapped[bool] = mapped_column(nullable=False, default=False)
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        Index(
+            "uq_ai_model_calls_tenant_request",
+            "tenant_id",
+            "request_id",
+            unique=True,
+        ),
+    )

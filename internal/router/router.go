@@ -22,6 +22,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/handler"
 	"github.com/Tencent/WeKnora/internal/handler/session"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/maintenanceproxy"
 	"github.com/Tencent/WeKnora/internal/middleware"
 	"github.com/Tencent/WeKnora/internal/tracing/langfuse"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -36,6 +37,7 @@ type RouterParams struct {
 	dig.In
 
 	Config                       *config.Config
+	MaintenanceProxy             *maintenanceproxy.Proxy
 	FileService                  interfaces.FileService
 	UserService                  interfaces.UserService
 	KBService                    interfaces.KnowledgeBaseService
@@ -196,6 +198,8 @@ func NewRouter(params RouterParams) *gin.Engine {
 	// nil (e.g. lite mode without DB), so the rbac path degrades to
 	// "log to stderr only" instead of crashing.
 	r.Use(middleware.AuditServiceProvider(params.AuditLogService))
+
+	RegisterMaintenanceRoutes(r, params.MaintenanceProxy)
 
 	// 需要认证的API路由
 	v1 := r.Group("/api/v1")

@@ -37,5 +37,5 @@ def test_ai_configuration_files_load_and_cross_references_are_valid() -> None:
     )
 
     templates = yaml.safe_load(Path(settings.ai_report_templates_path).read_text(encoding="utf-8"))
-    assert len(templates["templates"]) == 3
-    assert all(len(row["sections"]) == 17 for row in templates["templates"].values())
+    assert len(templates["templates"]) == 8
+    assert all(row["sections"] for row in templates["templates"])

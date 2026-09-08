@@ -1,6 +1,16 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.enums import AIReportSourceType
+
+
+class ReportSourceRefInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: AIReportSourceType
+    id: int = Field(gt=0)
+    version: str | None = None
 
 
 class AIReportSectionInput(BaseModel):
@@ -8,8 +18,12 @@ class AIReportSectionInput(BaseModel):
     title: str
     content: str = ""
     source_type: str = "DETERMINISTIC"
-    citations: list[str] = Field(default_factory=list)
-    tables: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list[str] = Field(
+        default_factory=list
+    )
+    tables: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
 
 
 class AIReportCitationInput(BaseModel):
@@ -20,20 +34,29 @@ class AIReportCitationInput(BaseModel):
     page_number: int | None = None
     chunk_reference: str | None = None
     knowledge_node: str | None = None
-    database_record_json: dict[str, Any] | None = None
+    database_record_json: (
+        dict[str, Any] | None
+    ) = None
 
 
 class AIReportCreateRequest(BaseModel):
     title: str = Field(min_length=1)
-    report_type: str = "MANAGEMENT_DECISION"
+    report_type: str = (
+        "MANAGEMENT_DECISION"
+    )
     session_id: int | None = None
     scenario_version_id: int | None = None
     calculation_run_id: int | None = None
     review_run_id: int | None = None
-    sections: list[AIReportSectionInput] = Field(default_factory=list)
-    citations: list[AIReportCitationInput] = Field(default_factory=list)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class AIReportFinalizeRequest(BaseModel):
-    actor: str = Field(default="system", min_length=1, max_length=128)
+    source_refs: list[ReportSourceRefInput] = Field(
+        default_factory=list
+    )
+    sections: list[
+        AIReportSectionInput
+    ] = Field(default_factory=list)
+    citations: list[
+        AIReportCitationInput
+    ] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )

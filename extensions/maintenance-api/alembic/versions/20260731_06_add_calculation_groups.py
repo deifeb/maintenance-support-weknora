@@ -1,0 +1,572 @@
+"""add calculation groups
+
+Revision ID: 20260731_06
+Revises: 20260729_05
+Create Date: 2026-07-31 18:00:00
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "20260731_06"
+down_revision: str | None = "20260729_05"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+GROUP_STATUSES = (
+    "PENDING",
+    "RUNNING",
+    "COMPLETED",
+    "PARTIALLY_COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "INTERRUPTED",
+)
+RELIABILITY_MODELS = (
+    "EXPONENTIAL",
+    "WEIBULL",
+    "BINOMIAL",
+    "NEGATIVE_BINOMIAL",
+    "EMPIRICAL",
+)
+EXECUTION_MODES = (
+    "AUTO",
+    "ANALYTICAL",
+    "MONTE_CARLO",
+    "COMPARE",
+)
+DECISION_TYPES = (
+    "SYSTEM_RECOMMENDATION",
+    "ALTERNATIVE_CANDIDATE",
+    "MANUAL_QUANTITY",
+)
+
+
+def _timestamps() -> tuple[sa.Column, sa.Column]:
+    return (
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+        ),
+    )
+
+
+def upgrade() -> None:
+    op.create_table(
+        "calculation_groups",
+        sa.Column(
+            "id",
+            sa.Integer(),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column(
+            "scenario_version_id",
+            sa.Integer(),
+            nullable=False,
+        ),
+        sa.Column(
+            "status",
+            sa.Enum(
+                *GROUP_STATUSES,
+                name="calculationgroupstatus",
+                native_enum=False,
+                length=32,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "primary_candidate_key",
+            sa.String(length=80),
+            nullable=False,
+        ),
+        sa.Column(
+            "recommendation_snapshot_json",
+            sa.JSON(),
+            nullable=False,
+        ),
+        sa.Column(
+            "parameter_snapshot_json",
+            sa.JSON(),
+            nullable=False,
+        ),
+        sa.Column(
+            "idempotency_key",
+            sa.String(length=128),
+            nullable=True,
+        ),
+        sa.Column(
+            "request_hash",
+            sa.String(length=64),
+            nullable=True,
+        ),
+        sa.Column(
+            "last_event_sequence",
+            sa.Integer(),
+            server_default=sa.text("0"),
+            nullable=False,
+        ),
+        sa.Column(
+            "version",
+            sa.Integer(),
+            server_default=sa.text("1"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by_user_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by_request_id",
+            sa.String(length=128),
+            nullable=False,
+        ),
+        sa.Column(
+            "tenant_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        *_timestamps(),
+        sa.CheckConstraint(
+            "last_event_sequence >= 0",
+            name="ck_calculation_group_event_sequence",
+        ),
+        sa.ForeignKeyConstraint(
+            ["scenario_version_id"],
+            ["demand_scenario_versions.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_calculation_groups_tenant_id",
+        "calculation_groups",
+        ["tenant_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_calculation_groups_scenario_version_id",
+        "calculation_groups",
+        ["scenario_version_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_calculation_groups_status",
+        "calculation_groups",
+        ["status"],
+        unique=False,
+    )
+    op.create_index(
+        "uq_calculation_groups_tenant_idempotency",
+        "calculation_groups",
+        ["tenant_id", "idempotency_key"],
+        unique=True,
+    )
+
+    op.create_table(
+        "calculation_group_children",
+        sa.Column(
+            "id",
+            sa.Integer(),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column(
+            "group_id",
+            sa.Integer(),
+            nullable=False,
+        ),
+        sa.Column(
+            "candidate_key",
+            sa.String(length=80),
+            nullable=False,
+        ),
+        sa.Column(
+            "reliability_model",
+            sa.Enum(
+                *RELIABILITY_MODELS,
+                name="reliabilitymodeltype",
+                native_enum=False,
+                length=32,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "execution_mode",
+            sa.Enum(
+                *EXECUTION_MODES,
+                name="demandexecutionmode",
+                native_enum=False,
+                length=20,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "calculation_id",
+            sa.Integer(),
+            nullable=False,
+        ),
+        sa.Column(
+            "attempt_number",
+            sa.Integer(),
+            server_default=sa.text("1"),
+            nullable=False,
+        ),
+        sa.Column(
+            "is_current_attempt",
+            sa.Boolean(),
+            server_default=sa.true(),
+            nullable=False,
+        ),
+        sa.Column(
+            "is_primary",
+            sa.Boolean(),
+            server_default=sa.false(),
+            nullable=False,
+        ),
+        sa.Column(
+            "selection_reason",
+            sa.Text(),
+            nullable=True,
+        ),
+        sa.Column(
+            "tenant_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        *_timestamps(),
+        sa.CheckConstraint(
+            "attempt_number >= 1",
+            name="ck_calculation_group_child_attempt",
+        ),
+        sa.ForeignKeyConstraint(
+            ["calculation_id"],
+            ["demand_calculations.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["group_id"],
+            ["calculation_groups.id"],
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "group_id",
+            "candidate_key",
+            "attempt_number",
+            name="uq_calculation_group_child_attempt",
+        ),
+    )
+    for name, columns in (
+        (
+            "ix_calculation_group_children_tenant_id",
+            ["tenant_id"],
+        ),
+        (
+            "ix_calculation_group_children_group_id",
+            ["group_id"],
+        ),
+        (
+            "ix_calculation_group_children_calculation_id",
+            ["calculation_id"],
+        ),
+        (
+            "ix_calculation_group_children_current",
+            ["is_current_attempt"],
+        ),
+    ):
+        op.create_index(
+            name,
+            "calculation_group_children",
+            columns,
+            unique=False,
+        )
+
+    op.create_table(
+        "calculation_group_events",
+        sa.Column(
+            "id",
+            sa.Integer(),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("group_id", sa.Integer(), nullable=False),
+        sa.Column("child_id", sa.Integer(), nullable=True),
+        sa.Column("sequence", sa.Integer(), nullable=False),
+        sa.Column(
+            "event_type",
+            sa.String(length=80),
+            nullable=False,
+        ),
+        sa.Column(
+            "payload_json",
+            sa.JSON(),
+            nullable=False,
+        ),
+        sa.Column(
+            "occurred_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+        ),
+        sa.Column(
+            "tenant_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "sequence >= 1",
+            name="ck_calculation_group_event_sequence_positive",
+        ),
+        sa.ForeignKeyConstraint(
+            ["child_id"],
+            ["calculation_group_children.id"],
+            ondelete="SET NULL",
+        ),
+        sa.ForeignKeyConstraint(
+            ["group_id"],
+            ["calculation_groups.id"],
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "group_id",
+            "sequence",
+            name="uq_calculation_group_event_sequence",
+        ),
+    )
+    for name, columns in (
+        (
+            "ix_calculation_group_events_tenant_id",
+            ["tenant_id"],
+        ),
+        (
+            "ix_calculation_group_events_group_id",
+            ["group_id"],
+        ),
+        (
+            "ix_calculation_group_events_child_id",
+            ["child_id"],
+        ),
+        (
+            "ix_calculation_group_events_event_type",
+            ["event_type"],
+        ),
+    ):
+        op.create_index(
+            name,
+            "calculation_group_events",
+            columns,
+            unique=False,
+        )
+
+    op.create_table(
+        "calculation_item_decisions",
+        sa.Column(
+            "id",
+            sa.Integer(),
+            autoincrement=True,
+            nullable=False,
+        ),
+        sa.Column("group_id", sa.Integer(), nullable=False),
+        sa.Column(
+            "spare_part_id",
+            sa.Integer(),
+            nullable=False,
+        ),
+        sa.Column(
+            "source_child_id",
+            sa.Integer(),
+            nullable=False,
+        ),
+        sa.Column(
+            "selected_child_id",
+            sa.Integer(),
+            nullable=False,
+        ),
+        sa.Column(
+            "original_quantity",
+            sa.Numeric(20, 6),
+            nullable=False,
+        ),
+        sa.Column(
+            "final_quantity",
+            sa.Numeric(20, 6),
+            nullable=False,
+        ),
+        sa.Column(
+            "decision_type",
+            sa.Enum(
+                *DECISION_TYPES,
+                name="calculationdecisiontype",
+                native_enum=False,
+                length=32,
+            ),
+            nullable=False,
+        ),
+        sa.Column("reason", sa.Text(), nullable=True),
+        sa.Column(
+            "risk",
+            sa.String(length=20),
+            nullable=False,
+        ),
+        sa.Column(
+            "requires_admin_confirmation",
+            sa.Boolean(),
+            server_default=sa.false(),
+            nullable=False,
+        ),
+        sa.Column(
+            "confirmed_by_admin",
+            sa.Boolean(),
+            server_default=sa.false(),
+            nullable=False,
+        ),
+        sa.Column(
+            "risk_rule_version",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column(
+            "decided_by_user_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column(
+            "decided_by_request_id",
+            sa.String(length=128),
+            nullable=False,
+        ),
+        sa.Column(
+            "version",
+            sa.Integer(),
+            server_default=sa.text("1"),
+            nullable=False,
+        ),
+        sa.Column(
+            "tenant_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        *_timestamps(),
+        sa.CheckConstraint(
+            "original_quantity >= 0",
+            name="ck_calculation_decision_original_quantity",
+        ),
+        sa.CheckConstraint(
+            "final_quantity >= 0",
+            name="ck_calculation_decision_final_quantity",
+        ),
+        sa.ForeignKeyConstraint(
+            ["group_id"],
+            ["calculation_groups.id"],
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["selected_child_id"],
+            ["calculation_group_children.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["source_child_id"],
+            ["calculation_group_children.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["spare_part_id"],
+            ["spare_parts.id"],
+            ondelete="RESTRICT",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "group_id",
+            "spare_part_id",
+            name="uq_calculation_item_decision",
+        ),
+    )
+    for name, columns in (
+        (
+            "ix_calculation_item_decisions_tenant_id",
+            ["tenant_id"],
+        ),
+        (
+            "ix_calculation_item_decisions_group_id",
+            ["group_id"],
+        ),
+        (
+            "ix_calculation_item_decisions_spare_part_id",
+            ["spare_part_id"],
+        ),
+    ):
+        op.create_index(
+            name,
+            "calculation_item_decisions",
+            columns,
+            unique=False,
+        )
+
+
+def downgrade() -> None:
+    for name in (
+        "ix_calculation_item_decisions_spare_part_id",
+        "ix_calculation_item_decisions_group_id",
+        "ix_calculation_item_decisions_tenant_id",
+    ):
+        op.drop_index(
+            name,
+            table_name="calculation_item_decisions",
+        )
+    op.drop_table("calculation_item_decisions")
+
+    for name in (
+        "ix_calculation_group_events_event_type",
+        "ix_calculation_group_events_child_id",
+        "ix_calculation_group_events_group_id",
+        "ix_calculation_group_events_tenant_id",
+    ):
+        op.drop_index(
+            name,
+            table_name="calculation_group_events",
+        )
+    op.drop_table("calculation_group_events")
+
+    for name in (
+        "ix_calculation_group_children_current",
+        "ix_calculation_group_children_calculation_id",
+        "ix_calculation_group_children_group_id",
+        "ix_calculation_group_children_tenant_id",
+    ):
+        op.drop_index(
+            name,
+            table_name="calculation_group_children",
+        )
+    op.drop_table("calculation_group_children")
+
+    op.drop_index(
+        "uq_calculation_groups_tenant_idempotency",
+        table_name="calculation_groups",
+    )
+    op.drop_index(
+        "ix_calculation_groups_status",
+        table_name="calculation_groups",
+    )
+    op.drop_index(
+        "ix_calculation_groups_scenario_version_id",
+        table_name="calculation_groups",
+    )
+    op.drop_index(
+        "ix_calculation_groups_tenant_id",
+        table_name="calculation_groups",
+    )
+    op.drop_table("calculation_groups")

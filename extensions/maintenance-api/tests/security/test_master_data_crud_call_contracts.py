@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass
+from pathlib import Path
+
+MASTER_DATA_ROOT = Path("app/api/v1/master_data")
+DIRECT_SERVICE_TEST = Path("tests/services/test_services.py")
+
+NO_ACTOR_SERVICE_CALLS = {
+    ("master_data_import_service", "template_bytes"),
+    ("master_data_import_service", "validate"),
+}
+
+
+@dataclass(frozen=True)
+class ServiceCall:
+    path: Path
+    function: ast.FunctionDef | ast.AsyncFunctionDef
+    receiver: str
+    method: str
+    call: ast.Call
+
+
+class _ServiceCallVisitor(ast.NodeVisitor):
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.function_stack: list[
+            ast.FunctionDef | ast.AsyncFunctionDef
+        ] = []
+        self.calls: list[ServiceCall] = []
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.function_stack.append(node)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
+    def visit_AsyncFunctionDef(
+        self,
+        node: ast.AsyncFunctionDef,
+    ) -> None:
+        self.function_stack.append(node)
+        self.generic_visit(node)
+        self.function_stack.pop()
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if (
+            self.function_stack
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id.endswith("_service")
+        ):
+            self.calls.append(
+                ServiceCall(
+                    path=self.path,
+                    function=self.function_stack[-1],
+                    receiver=node.func.value.id,
+                    method=node.func.attr,
+                    call=node,
+                )
+            )
+        self.generic_visit(node)
+
+
+def _service_calls(path: Path) -> list[ServiceCall]:
+    tree = ast.parse(
+        path.read_text(encoding="utf-8"),
+        filename=str(path),
+    )
+    visitor = _ServiceCallVisitor(path)
+    visitor.visit(tree)
+    return visitor.calls
+
+
+def _function_actor_names(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    names: set[str] = set()
+    arguments = [
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    ]
+
+    for argument in arguments:
+        annotation = (
+            ast.unparse(argument.annotation)
+            if argument.annotation is not None
+            else ""
+        )
+        if (
+            "actor" in argument.arg.lower()
+            or "ActorContext" in annotation
+        ):
+            names.add(argument.arg)
+
+    return names
+
+
+def _supplied_actor_expression(call: ast.Call) -> str | None:
+    if len(call.args) >= 2:
+        return ast.unparse(call.args[1])
+
+    for keyword in call.keywords:
+        if keyword.arg in {
+            "actor",
+            "actor_context",
+            "context",
+        }:
+            return ast.unparse(keyword.value)
+
+    return None
+
+
+def _format_failure(item: ServiceCall) -> str:
+    return (
+        f"{item.path}:{item.call.lineno}: "
+        f"{ast.unparse(item.call)}"
+    )
+
+
+def test_master_data_service_calls_supply_route_actor() -> None:
+    failures: list[str] = []
+    observed_no_actor_calls: set[tuple[str, str]] = set()
+
+    for path in sorted(MASTER_DATA_ROOT.rglob("*.py")):
+        for item in _service_calls(path):
+            call_key = (item.receiver, item.method)
+            if call_key in NO_ACTOR_SERVICE_CALLS:
+                observed_no_actor_calls.add(call_key)
+                continue
+
+            actor_names = _function_actor_names(item.function)
+            actor_expression = _supplied_actor_expression(
+                item.call
+            )
+            if (
+                not actor_names
+                or actor_expression not in actor_names
+            ):
+                failures.append(_format_failure(item))
+
+    assert observed_no_actor_calls == NO_ACTOR_SERVICE_CALLS
+    assert failures == [], (
+        f"{len(failures)} actor-aware route service calls "
+        "omit the authenticated ActorContext:\n"
+        + "\n".join(failures)
+    )
+
+
+def test_direct_service_calls_supply_explicit_actor() -> None:
+    failures: list[str] = []
+
+    for item in _service_calls(DIRECT_SERVICE_TEST):
+        actor_names = _function_actor_names(item.function)
+        actor_expression = _supplied_actor_expression(item.call)
+
+        if (
+            not actor_names
+            or actor_expression not in actor_names
+        ):
+            failures.append(_format_failure(item))
+
+    assert failures == [], (
+        f"{len(failures)} actor-aware direct service calls "
+        "omit an explicit ActorContext:\n"
+        + "\n".join(failures)
+    )
+
+HTTP_ROLE_DEPENDENCIES = {
+    "get": "require_viewer",
+    "post": "require_contributor",
+    "put": "require_contributor",
+    "patch": "require_contributor",
+    "delete": "require_admin",
+}
+MASTER_ROUTE_ROLE_OVERRIDES = {
+    (
+        "inventories.py",
+        "create_inventory",
+    ): "require_admin",
+    (
+        "inventories.py",
+        "update_inventory",
+    ): "require_admin",
+    (
+        "inventories.py",
+        "adjust_inventory",
+    ): "require_admin",
+    (
+        "imports.py",
+        "read_import_task",
+    ): "require_contributor",
+    (
+        "imports.py",
+        "download_import_errors",
+    ): "require_contributor",
+    (
+        "imports.py",
+        "execute_import",
+    ): "require_admin",
+    (
+        "imports.py",
+        "execute_import_task",
+    ): "require_admin",
+}
+
+
+def test_inventory_adjust_route_delegates_to_inventory_service_only() -> None:
+    path = MASTER_DATA_ROOT / "inventories.py"
+    calls = [
+        item
+        for item in _service_calls(path)
+        if item.function.name == "adjust_inventory"
+    ]
+
+    assert [
+        (item.receiver, item.method)
+        for item in calls
+    ] == [("inventory_service", "adjust")]
+    assert _supplied_actor_expression(calls[0].call) == "actor"
+
+
+def _route_http_method(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> str | None:
+    methods = {
+        decorator.func.attr
+        for decorator in function.decorator_list
+        if (
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr in HTTP_ROLE_DEPENDENCIES
+        )
+    }
+    assert len(methods) <= 1, (
+        f"{function.name} has multiple HTTP route decorators: "
+        f"{sorted(methods)}"
+    )
+    return next(iter(methods), None)
+
+
+def _route_actor_dependency(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    aliases: dict[str, ast.expr],
+) -> str | None:
+    matches: list[ast.expr] = []
+
+    for argument in [
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    ]:
+        if argument.annotation is None:
+            continue
+
+        if argument.arg == "actor":
+            matches.append(argument.annotation)
+
+    assert len(matches) <= 1, (
+        f"{function.name} has multiple ActorContext parameters"
+    )
+    if not matches:
+        return None
+
+    roots: list[ast.AST] = [matches[0]]
+    if isinstance(matches[0], ast.Name):
+        alias = aliases.get(matches[0].id)
+        if alias is not None:
+            roots.append(alias)
+    for root in roots:
+        for node in ast.walk(root):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "Depends"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+            ):
+                return node.args[0].id
+
+    return "<missing-role-dependency>"
+
+
+def test_master_data_routes_use_http_role_dependencies() -> None:
+    failures: list[str] = []
+    route_count = 0
+
+    for path in sorted(MASTER_DATA_ROOT.rglob("*.py")):
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        aliases = {
+            node.targets[0].id: node.value
+            for node in tree.body
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            )
+        }
+        for function in tree.body:
+            if not isinstance(
+                function,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+
+            http_method = _route_http_method(function)
+            if http_method is None:
+                continue
+
+            route_count += 1
+            expected = MASTER_ROUTE_ROLE_OVERRIDES.get(
+                (
+                    path.name,
+                    function.name,
+                ),
+                HTTP_ROLE_DEPENDENCIES[http_method],
+            )
+            actual = _route_actor_dependency(function, aliases)
+            if actual != expected:
+                failures.append(
+                    f"{path}:{function.lineno}: "
+                    f"{http_method.upper()} {function.name} "
+                    f"expected {expected}, found {actual}"
+                )
+
+    assert route_count == 67
+    assert failures == [], (
+        f"{len(failures)} master-data routes omit the "
+        "required HTTP-role ActorContext dependency:\n"
+        + "\n".join(failures)
+    )
+
+
+def test_master_data_success_responses_include_actor_metadata(
+) -> None:
+    failures: list[str] = []
+
+    for path in sorted(MASTER_DATA_ROOT.rglob("*.py")):
+        tree = ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        for function in tree.body:
+            if not isinstance(
+                function,
+                (ast.FunctionDef, ast.AsyncFunctionDef),
+            ):
+                continue
+            if _route_http_method(function) is None:
+                continue
+            for call in ast.walk(function):
+                if not (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "success_response"
+                ):
+                    continue
+                has_actor = any(
+                    keyword.arg == "actor"
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id == "actor"
+                    for keyword in call.keywords
+                )
+                if not has_actor:
+                    failures.append(
+                        f"{path}:{function.name}:{call.lineno}"
+                    )
+
+    assert failures == [], "\n".join(failures)
+
+IMPORT_ROUTE = MASTER_DATA_ROOT / "imports.py"
+TENANT_SCOPED_IMPORT_METHODS = {"validate", "apply"}
+
+
+def _keyword_expression(
+    call: ast.Call,
+    keyword_name: str,
+) -> str | None:
+    for keyword in call.keywords:
+        if keyword.arg == keyword_name:
+            return ast.unparse(keyword.value)
+    return None
+
+
+def test_import_routes_supply_actor_tenant_without_request_tenant_field(
+) -> None:
+    tree = ast.parse(
+        IMPORT_ROUTE.read_text(encoding="utf-8"),
+        filename=str(IMPORT_ROUTE),
+    )
+    observed: set[str] = set()
+    failures: list[str] = []
+
+    for function in tree.body:
+        if not isinstance(
+            function,
+            (ast.FunctionDef, ast.AsyncFunctionDef),
+        ):
+            continue
+
+        service_calls = [
+            call
+            for call in ast.walk(function)
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id
+                == "master_data_import_service"
+                and call.func.attr
+                in TENANT_SCOPED_IMPORT_METHODS
+            )
+        ]
+        if not service_calls:
+            continue
+
+        argument_names = {
+            argument.arg
+            for argument in [
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            ]
+        }
+        if "tenant_id" in argument_names:
+            failures.append(
+                f"{function.name} exposes tenant_id as a request field"
+            )
+
+        actor_names = _function_actor_names(function)
+        expected_expressions = {
+            f"{actor_name}.tenant_id"
+            for actor_name in actor_names
+        }
+
+        for call in service_calls:
+            observed.add(call.func.attr)
+            if call.func.attr == "apply":
+                actual = _keyword_expression(call, "actor")
+                expected = actor_names
+                label = "actor"
+            else:
+                actual = _keyword_expression(call, "tenant_id")
+                expected = expected_expressions
+                label = "tenant_id"
+            if actual not in expected:
+                failures.append(
+                    f"{function.name}:{call.lineno}: "
+                    f"{call.func.attr} {label}={actual!r}, "
+                    f"expected one of "
+                    f"{sorted(expected)!r}"
+                )
+
+    assert observed == TENANT_SCOPED_IMPORT_METHODS
+    assert failures == [], "\n".join(failures)

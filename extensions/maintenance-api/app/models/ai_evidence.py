@@ -5,10 +5,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.enums import AIEvidenceStatus
-from app.models.mixins import TimestampMixin
+from app.models.mixins import TenantScopedMixin, TimestampMixin
 
 
-class AIEvidencePackage(Base, TimestampMixin):
+class AIEvidencePackage(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_evidence_packages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[int | None] = mapped_column(
@@ -22,7 +26,11 @@ class AIEvidencePackage(Base, TimestampMixin):
     content_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
 
-class AIEvidenceItem(Base, TimestampMixin):
+class AIEvidenceItem(
+    Base,
+    TenantScopedMixin,
+    TimestampMixin,
+):
     __tablename__ = "ai_evidence_items"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     package_id: Mapped[int] = mapped_column(

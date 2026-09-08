@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -18,18 +19,29 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.enums import DataSourceType, ReliabilityModelType
-from app.models.mixins import ActiveMixin, TimestampMixin
+from app.models.mixins import (
+    ActiveMixin,
+    TenantScopedMixin,
+    TimestampMixin,
+    VersionedMixin,
+)
 
 if TYPE_CHECKING:
     from app.models.catalog import SparePart
     from app.models.equipment import ConfigurationVersion
 
 
-class ReliabilityProfile(Base, ActiveMixin, TimestampMixin):
+class ReliabilityProfile(
+    Base,
+    TenantScopedMixin,
+    VersionedMixin,
+    ActiveMixin,
+    TimestampMixin,
+):
     __tablename__ = "reliability_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    profile_code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    profile_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     spare_part_id: Mapped[int] = mapped_column(
         ForeignKey("spare_parts.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -68,6 +80,12 @@ class ReliabilityProfile(Base, ActiveMixin, TimestampMixin):
     )
 
     __table_args__ = (
+        Index(
+            "uq_reliability_profiles_tenant_profile_code",
+            "tenant_id",
+            "profile_code",
+            unique=True,
+        ),
         CheckConstraint(
             "failure_rate IS NULL OR failure_rate > 0", name="ck_reliability_failure_rate"
         ),
