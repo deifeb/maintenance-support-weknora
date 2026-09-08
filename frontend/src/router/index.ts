@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { maintenanceRouteRecords } from './maintenance'
 import { autoSetup, getCurrentUser, userInfoFromApi } from '@/api/auth'
 
 /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
@@ -95,6 +96,7 @@ const router = createRouter({
       component: () => import("../views/platform/index.vue"),
       meta: { requiresInit: true, requiresAuth: true },
       children: [
+        ...maintenanceRouteRecords,
         {
           path: "tenant",
           redirect: "/platform/settings"

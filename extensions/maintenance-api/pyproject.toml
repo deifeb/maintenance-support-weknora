@@ -1,0 +1,28 @@
+[project]
+name = "maintenance-api"
+version = "0.2.0"
+description = "Maintenance support business API"
+requires-python = ">=3.11,<3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = [
+  "performance: long-running performance checks",
+  "external: calls an external service",
+  "ollama: calls a real local Ollama service",
+  "openai_compatible: calls a configured OpenAI-compatible service",
+]
+addopts = "-ra -m 'not performance and not external'"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E402"]

@@ -57,3 +57,33 @@ fix-docker.sh
 
 # WeChat Mini Program local/private configuration
 miniprogram/project.private.config.json
+
+# Maintenance Python extensions
+extensions/**/.venv/
+extensions/**/.env
+extensions/**/.pytest_cache/
+extensions/**/.ruff_cache/
+extensions/**/data/*.db
+extensions/**/data/*.db-shm
+extensions/**/data/*.db-wal
+# Maintenance master data phase
+extensions/**/templates/~$*.xlsx
+extensions/**/imports/
+extensions/**/data/*.db
+extensions/**/data/*.db-shm
+extensions/**/data/*.db-wal
+.phase02-backup-*/
+.phase03-backup-*/
+extensions/maintenance-api/exports/
+extensions/maintenance-api/data/demand-*.json
+.phase04-backup-*/
+extensions/maintenance-api/exports/ai-reports/
+extensions/maintenance-api/data/ai-*.json
+extensions/maintenance-api/data/ai-*.docx
+extensions/maintenance-ai/.pytest_cache/
+extensions/maintenance-ai/.ruff_cache/
+extensions/maintenance-ai/src/*.egg-info/
+*.egg-info/
+# Keep Maintenance API tests under tests/imports tracked.
+!extensions/maintenance-api/tests/imports/
+!extensions/maintenance-api/tests/imports/*.py

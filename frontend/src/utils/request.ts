@@ -1,10 +1,14 @@
 // src/utils/request.js
-import axios from "axios";
+import axios, { type AxiosRequestConfig, type AxiosResponse } from "axios";
 import { generateRandomString, MAX_FILE_SIZE_MB } from "./index";
 import i18n from '@/i18n'
 import { getApiBaseUrl } from './api-base';
 
 const t = (key: string) => i18n.global.t(key)
+const MAINTENANCE_DOWNLOAD_RESPONSE = '__maintenanceDownloadResponse'
+type MaintenanceDownloadResponseConfig = {
+  [MAINTENANCE_DOWNLOAD_RESPONSE]: true
+}
 
 // API基础URL
 const BASE_URL = getApiBaseUrl();
@@ -111,6 +115,9 @@ function redirectToLogin() {
 
 instance.interceptors.response.use(
   (response) => {
+    if ((response.config as unknown as Partial<MaintenanceDownloadResponseConfig>)[MAINTENANCE_DOWNLOAD_RESPONSE]) {
+      return response;
+    }
     // 根据业务状态码处理逻辑
     const { status, data } = response;
     if (status >= 200 && status < 300) {
@@ -213,6 +220,16 @@ instance.interceptors.response.use(
       }
     }
     
+    const { status, data, headers } = error.response;
+
+    // Keep blob error bodies intact for authenticated metadata downloads.
+    if (
+      (originalRequest as unknown as Partial<MaintenanceDownloadResponseConfig>)?.[MAINTENANCE_DOWNLOAD_RESPONSE]
+      && data instanceof Blob
+    ) {
+      return Promise.reject({ status, data, headers });
+    }
+
     // 处理 Nginx 413 Request Entity Too Large
     if (error.response.status === 413) {
       return Promise.reject({ 
@@ -222,7 +239,6 @@ instance.interceptors.response.use(
       });
     }
 
-    const { status, data } = error.response;
     // 将HTTP状态码一并抛出，方便上层判断401等场景
     // 后端返回格式: { success: false, error: { code, message, details } }
     // 提取 error.message 作为顶层 message，方便前端使用 error?.message 获取
@@ -248,6 +264,19 @@ instance.interceptors.response.use(
 
 export function get<T = any>(url: string, config?: any): Promise<T> {
   return instance.get<T>(url, config) as unknown as Promise<T>;
+}
+
+// Keeps the shared axios authentication and error interceptors while allowing
+// the maintenance client to read export response headers.
+export function getDownloadResponse(
+  url: string,
+  config: AxiosRequestConfig = {},
+): Promise<AxiosResponse<Blob>> {
+  return instance.get<Blob>(url, {
+    ...config,
+    responseType: 'blob',
+    [MAINTENANCE_DOWNLOAD_RESPONSE]: true,
+  } as AxiosRequestConfig & MaintenanceDownloadResponseConfig) as unknown as Promise<AxiosResponse<Blob>>
 }
 
 export async function getDown(url: string): Promise<Blob> {
@@ -289,6 +318,10 @@ export function post<T = any>(url: string, data = {}, config?: any): Promise<T> 
 
 export function put<T = any>(url: string, data = {}, config?: any): Promise<T> {
   return instance.put<T>(url, data, config) as unknown as Promise<T>;
+}
+
+export function patch<T = any>(url: string, data = {}, config?: any): Promise<T> {
+  return instance.patch<T>(url, data, config) as unknown as Promise<T>;
 }
 
 export function del<T = any>(url: string, data?: any): Promise<T> {

@@ -1,0 +1,97 @@
+schema_version: '1.0'
+templates:
+  - report_type: DEMAND_CALCULATION
+    title: 维修器材需求计算报告
+    version: '1.0'
+    sections: &legacy_sections
+      - { code: report_information, title: 报告基本信息 }
+      - { code: management_summary, title: 管理摘要 }
+      - { code: mission_and_configuration, title: 任务场景与装备构型 }
+      - { code: data_and_parameter_sources, title: 数据与参数来源 }
+      - { code: calculation_method, title: 需求计算方法 }
+      - { code: calculation_results, title: 需求计算结果 }
+      - { code: inventory_and_repair_analysis, title: 库存与修理资源分析 }
+      - { code: gap_and_support_risk, title: 需求缺口与保障风险 }
+      - { code: review_findings, title: 智能审查结果 }
+      - { code: model_comparison_and_uncertainty, title: 模型对比与不确定性 }
+      - { code: support_recommendations, title: 保障建议 }
+      - { code: decision_items, title: 需确认与决策事项 }
+      - { code: conclusion, title: 结论 }
+      - { code: appendix_demand_items, title: 附录A：器材需求明细 }
+      - { code: appendix_parameters, title: 附录B：计算参数与模型版本 }
+      - { code: appendix_citations, title: 附录C：证据和引用 }
+      - { code: appendix_audit, title: 附录D：审计与确认记录 }
+  - { report_type: INVENTORY_GAP, title: 库存缺口与保障分析报告, version: '1.0', sections: *legacy_sections }
+  - { report_type: MANAGEMENT_DECISION, title: 维修保障管理决策综合报告, version: '1.0', sections: *legacy_sections }
+  - report_type: MODEL_COMPARISON
+    title: 模型对比分析报告
+    version: '1.0'
+    sections:
+      - { code: report_information, title: 报告基本信息 }
+      - { code: management_summary, title: 管理摘要 }
+      - { code: mission_and_configuration, title: 任务场景与装备构型 }
+      - { code: model_scope, title: 模型范围 }
+      - { code: model_assumptions, title: 模型假设 }
+      - { code: comparison_results, title: 对比结果 }
+      - { code: difference_analysis, title: 差异分析 }
+      - { code: uncertainty_and_risk, title: 不确定性与风险 }
+      - { code: decision_items, title: 决策事项 }
+      - { code: citations, title: 引用 }
+      - { code: audit, title: 审计记录 }
+  - report_type: DEMAND_REVIEW
+    title: 需求审查报告
+    version: '1.0'
+    sections:
+      - { code: report_information, title: 报告基本信息 }
+      - { code: management_summary, title: 管理摘要 }
+      - { code: source_demand_list, title: 来源需求清单 }
+      - { code: review_rule_set, title: 审查规则集 }
+      - { code: findings_summary, title: 发现摘要 }
+      - { code: blocking_findings, title: 阻断性发现 }
+      - { code: decisions, title: 决策 }
+      - { code: derived_demand_impact, title: 派生需求影响 }
+      - { code: citations, title: 引用 }
+      - { code: audit, title: 审计记录 }
+  - report_type: ALLOCATION_PLAN
+    title: 配置分配计划报告
+    version: '1.0'
+    sections:
+      - { code: report_information, title: 报告基本信息 }
+      - { code: management_summary, title: 管理摘要 }
+      - { code: source_demand, title: 来源需求 }
+      - { code: allocation_rule, title: 分配规则 }
+      - { code: inventory_snapshot, title: 库存快照 }
+      - { code: allocation_results, title: 分配结果 }
+      - { code: unfulfilled_gap, title: 未满足缺口 }
+      - { code: risk_items, title: 风险事项 }
+      - { code: reservation_execution_state, title: 预留执行状态 }
+      - { code: citations, title: 引用 }
+      - { code: audit, title: 审计记录 }
+  - report_type: STOCKTAKE
+    title: 库存盘点报告
+    version: '1.0'
+    sections:
+      - { code: report_information, title: 报告基本信息 }
+      - { code: management_summary, title: 管理摘要 }
+      - { code: scope_and_snapshot, title: 范围与快照 }
+      - { code: count_progress, title: 盘点进度 }
+      - { code: variance_summary, title: 差异摘要 }
+      - { code: conflicts, title: 冲突 }
+      - { code: confirmation_state, title: 确认状态 }
+      - { code: inventory_impact, title: 库存影响 }
+      - { code: citations, title: 引用 }
+      - { code: audit, title: 审计记录 }
+  - report_type: SPARE_PART_RISK
+    title: 备件风险分析报告
+    version: '1.0'
+    sections:
+      - { code: report_information, title: 报告基本信息 }
+      - { code: management_summary, title: 管理摘要 }
+      - { code: demand_exposure, title: 需求暴露 }
+      - { code: inventory_exposure, title: 库存暴露 }
+      - { code: repair_reliability_context, title: 修理可靠性背景 }
+      - { code: shortage_risk, title: 短缺风险 }
+      - { code: high_priority_parts, title: 高优先级备件 }
+      - { code: mitigation_recommendations, title: 缓解建议 }
+      - { code: citations, title: 引用 }
+      - { code: audit, title: 审计记录 }
