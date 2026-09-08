@@ -118,11 +118,14 @@ try {
     Assert-ValidatorSuccess 'committed matrix' (Write-Fixture 'committed-matrix' $matrix)
 
     if (-not $SkipTempOwnershipRegression) {
-        $unownedRoot = Join-Path ([System.IO.Path]::GetTempPath()) "plan05-gap-matrix-unowned-$([guid]::NewGuid())"
+        $unownedRoot = Join-Path ([System.IO.Path]::GetTempPath()) "plan05-gap-matrix-$([guid]::NewGuid())"
         New-Item -ItemType Directory -Path $unownedRoot | Out-Null
         $markerPath = Join-Path $unownedRoot 'must-survive.txt'
         Set-Content -LiteralPath $markerPath -Value 'unowned' -Encoding utf8NoBOM
         try {
+            if (-not (Test-CanonicalTemporaryTarget $unownedRoot)) {
+                throw 'Fixture setup did not create a canonical temporary target.'
+            }
             $output = (& pwsh -NoProfile -File $PSCommandPath -MatrixPath $sourceMatrix -TemporaryRoot $unownedRoot -SkipTempOwnershipRegression 2>&1 | Out-String)
             if ($LASTEXITCODE -eq 0 -or $output -notmatch 'TemporaryRootInvariant') {
                 throw "failed temp creation should report TemporaryRootInvariant, but output was: $output"
