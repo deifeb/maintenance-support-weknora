@@ -641,6 +641,28 @@ def test_validate_rejects_final_version_without_mutation(
     assert final_after.finalized_by == admin.user_id
 
 
+def test_regenerate_rejects_final_version_without_creating_child(
+    session,
+    actor_context,
+) -> None:
+    contributor = _actor(actor_context)
+    admin = _actor(actor_context, role=MaintenanceRole.ADMIN)
+    job = _create_job(session, contributor)
+    ai_report_service.generate(session, contributor, job.id)
+    assert ai_report_service.validate(session, contributor, job.id) == []
+    final = ai_report_service.finalize(session, admin, job.id)
+    assert final.status is AIReportVersionStatus.FINAL
+
+    with pytest.raises(BusinessValidationError) as exc_info:
+        ai_report_service.regenerate(session, contributor, job.id)
+
+    assert exc_info.value.code == "REPORT_FINAL_VERSION_IMMUTABLE"
+    session.expire_all()
+    versions = ai_report_service.list_versions(session, contributor, job.id)
+    assert [version.id for version in versions] == [final.id]
+    assert versions[0].status is AIReportVersionStatus.FINAL
+
+
 def test_regenerate_resets_job_execution_error_state(
     session,
     actor_context,
