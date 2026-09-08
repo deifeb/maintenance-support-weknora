@@ -7,9 +7,9 @@
     <p v-else-if="loading && !detail" role="status">{{ t('maintenance.reports.detail.loading') }}</p>
     <template v-else-if="detail">
       <section class="report-detail__summary"><p>{{ detail.report_code }} · {{ t(`maintenance.reports.types.${detail.report_type}`) }}</p><p>{{ t('maintenance.reports.columns.jobStatus') }}: {{ detail.job_status ? t(`maintenance.reports.jobStatuses.${detail.job_status}`) : t('maintenance.reports.presentation.unavailable') }}</p><p>{{ t('maintenance.reports.presentation.version') }} {{ detail.version_number }} · {{ t(`maintenance.reports.versionStatuses.${detail.status}`) }}</p></section>
-      <ReportLifecycleActions v-if="detail.job_status" :report-id="detail.report_id" :job-status="detail.job_status" :version-status="detail.status" :version-generated="versionGenerated" :actions="lifecycleActions" :refresh="load" :busy="busy" />
+      <ReportLifecycleActions v-if="detail.job_status" :report-id="detail.report_id" :job-status="detail.job_status" :version-status="detail.status" :version-generated="versionGenerated" :actions="lifecycleActions" :refresh="refreshOwnedReport" :busy="busy" />
       <ReportExportActions :report-id="detail.report_id" :actions="actions" />
-      <ReportRegenerateDialog v-if="actions.includes('regenerate')" :open="regenerateOpen" :allowed="actions.includes('regenerate')" :report-id="detail.report_id" :refresh="load" :busy="busy" @close="regenerateOpen = false" />
+      <ReportRegenerateDialog v-if="actions.includes('regenerate')" :open="regenerateOpen" :allowed="actions.includes('regenerate')" :report-id="detail.report_id" :refresh="refreshOwnedReport" :busy="busy" @close="regenerateOpen = false" />
       <button v-if="actions.includes('regenerate')" type="button" :disabled="busy" @click="openRegenerate">{{ t('maintenance.reports.detail.regenerate') }}</button>
       <ReportProvenancePanel :sources="provenanceSources" /><ReportVersionTimeline :versions="versions" /><ReportValidationFindings :findings="detail.findings ?? []" /><ReportSections :sections="detail.sections" :citations="detail.citations" />
     </template>
@@ -41,6 +41,13 @@ const actions = computed<ReportAction[]>(() => detail.value && detail.value.job_
 const lifecycleActions = computed<ReportAction[]>(() => actions.value.filter((action) => action !== 'regenerate'))
 function positiveReportRouteId(value: unknown): number | null { const raw = Array.isArray(value) ? value[0] : value; const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN; return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null }
 const routeId = computed(() => positiveReportRouteId(route.params.reportId)); const invalidRoute = computed(() => routeId.value === null)
+let disposed = false
+const refreshOwnedReport = computed(() => {
+  const reportId = routeId.value
+  return async (): Promise<void> => {
+    if (!disposed && routeId.value === reportId) await load()
+  }
+})
 const busy = computed(() => loading.value || (routeId.value !== null && pendingReportMutations.has(routeId.value)))
 function refreshManually(): void { if (!busy.value) void load() }
 function openRegenerate(): void { if (!busy.value) regenerateOpen.value = true }
@@ -48,8 +55,8 @@ const provenanceSources = computed<PublicSourceVersion[] | null>(() => { const p
 async function load(): Promise<void> { const current = ++request; const reportId = routeId.value; if (reportId === null) { loading.value = false; detail.value = null; versions.value = []; errorKey.value = ''; requestId.value = ''; notFound.value = false; return }; loading.value = true; errorKey.value = ''; requestId.value = ''; notFound.value = false; detail.value = null; versions.value = []; try { const [report, timeline] = await Promise.all([reportApi.getReport(reportId), reportApi.listReportVersions(reportId)]); if (current !== request) return; detail.value = report.data; versions.value = timeline.data } catch (reason) { if (current !== request) return; const normalized = normalizeMaintenanceError(reason); notFound.value = normalized.status === 404; if (!notFound.value) { errorKey.value = reportErrorMessageKey(normalized.code); requestId.value = normalized.request_id ?? '' } } finally { if (current === request) loading.value = false } }
 function backToReports(): void { void router.push({ name: 'maintenanceReports' }) }
 let unregisterReader: (() => void) | undefined
-watch(routeId, (reportId) => { unregisterReader?.(); regenerateOpen.value = false; if (reportId !== null) unregisterReader = registerReportReader(reportId, load); void load() }, { immediate: true })
-onBeforeUnmount(() => { request += 1; unregisterReader?.() })
+watch(routeId, (reportId) => { unregisterReader?.(); regenerateOpen.value = false; if (reportId !== null) unregisterReader = registerReportReader(reportId, refreshOwnedReport.value); void load() }, { immediate: true })
+onBeforeUnmount(() => { disposed = true; request += 1; unregisterReader?.() })
 </script>
 
 <style scoped>

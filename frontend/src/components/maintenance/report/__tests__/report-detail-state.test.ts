@@ -7,6 +7,7 @@ import ReportVersionTimeline from '../ReportVersionTimeline.vue'
 import ReportExportActions from '../ReportExportActions.vue'
 import ReportLifecycleActions from '../ReportLifecycleActions.vue'
 import ReportSections from '../ReportSections.vue'
+import { pendingReportMutations } from '../report-mutation-state'
 import ReportDetail from '@/views/maintenance/reports/ReportDetail.vue'
 import en from '@/i18n/locales/en-US'
 import zh from '@/i18n/locales/zh-CN'
@@ -84,6 +85,29 @@ describe('report detail rendered state', () => {
     expect(wrapper.findComponent(ReportLifecycleActions).props('actions')).toContain('validate')
     expect(wrapper.findComponent(ReportLifecycleActions).props('actions')).not.toContain('generate')
     expect(wrapper.get('.report-detail > button').exists()).toBe(true)
+  })
+
+  it('does not refresh another report after its original reader is unregistered by route reuse', async () => {
+    const mutation = deferred<unknown>()
+    mocks.regenerate.mockReturnValue(mutation.promise)
+    const { wrapper, router } = await mountDetail()
+    const detailInstanceId = wrapper.findComponent(ReportDetail).vm.$.uid
+    await wrapper.get('.report-detail > button').trigger('click')
+    await wrapper.get('[role="dialog"] button').trigger('click')
+    expect(pendingReportMutations.has(7)).toBe(true)
+    mocks.getReport.mockImplementation((reportId: number) => Promise.resolve(result({ ...detail, report_id: reportId, title: `Report ${reportId}` })))
+    await router.push('/reports/8'); await flushPromises()
+    expect(wrapper.findComponent(ReportDetail).vm.$.uid).toBe(detailInstanceId)
+    await wrapper.get('.report-detail > button').trigger('click')
+    const report8Dialog = wrapper.get('[role="dialog"]').element
+    mutation.resolve({}); await flushPromises()
+    expect(mocks.getReport.mock.calls.map(([reportId]) => reportId)).toEqual([7, 8])
+    expect(mocks.listReportVersions.mock.calls.map(([reportId]) => reportId)).toEqual([7, 8])
+    expect(wrapper.get('[role="dialog"]').element).toBe(report8Dialog)
+    expect(wrapper.get('[role="dialog"] button').attributes('disabled')).toBeUndefined()
+    expect(pendingReportMutations.has(7)).toBe(false)
+    expect(pendingReportMutations.has(8)).toBe(false)
+    expect(mocks.regenerate).toHaveBeenCalledExactlyOnceWith(7)
   })
 
   it('renders backend-shaped public citation evidence without unknown private fields', () => {

@@ -84,20 +84,55 @@ The exact commands and totals are also recorded in
 
 | Gate | Command | Final result |
 | --- | --- | --- |
-| Exact planned focused C3 | `npm run test -- src/components/maintenance/report/__tests__/report-actions.test.ts src/components/maintenance/report/__tests__/report-api-contract.test.ts src/components/maintenance/report/__tests__/report-list-state.test.ts src/components/maintenance/report/__tests__/report-detail-state.test.ts src/components/maintenance/report/__tests__/report-lifecycle-actions.test.ts src/components/maintenance/report/__tests__/report-export.test.ts` | exit 0; 17 Node + 32 Vitest = 49 |
-| All C3 + shared client | `npm run test -- src/components/maintenance/report/__tests__ src/api/maintenance/__tests__/client.test.ts` | exit 0; 35 Node + 37 Vitest = 72 |
+| Exact planned focused C3 | `npm run test -- src/components/maintenance/report/__tests__/report-actions.test.ts src/components/maintenance/report/__tests__/report-api-contract.test.ts src/components/maintenance/report/__tests__/report-list-state.test.ts src/components/maintenance/report/__tests__/report-detail-state.test.ts src/components/maintenance/report/__tests__/report-lifecycle-actions.test.ts src/components/maintenance/report/__tests__/report-export.test.ts` | exit 0; 17 Node + 33 Vitest = 50 |
+| All C3 + shared client | `npm run test -- src/components/maintenance/report/__tests__ src/api/maintenance/__tests__/client.test.ts` | exit 0; 35 Node + 38 Vitest = 73 |
 | Chat Cards | `npm run test -- src/components/maintenance/chat/__tests__` | exit 0; 9 |
 | Existing MJS suites | `$mjsSuites = @(rg --files src -g '*.test.mjs'); npm run test -- $mjsSuites` | exit 0; 22 files, 117 tests |
-| Full frontend | `npm run test` | exit 0; 626 Node + 37 Vitest = 663; zero failures/skips/cancellations/todo |
+| Full frontend | `npm run test` | exit 0; 626 Node + 38 Vitest = 664; zero failures/skips/cancellations/todo |
 | Types | `npm run type-check` | exit 0 |
-| Build | `npm run build` | exit 0; 6,636 modules, 1m43s |
+| Build | `npm run build` | exit 0; 6,636 modules, 1m52s |
 | Whitespace | `git diff --check` at worktree root | exit 0 |
 
 The extended, full, type and build commands yielded running sessions; each was
 polled to its final exit code. No completion result was inferred from an early
 yield. The 117 MJS tests are included once in the 626 Node total. The earlier
-535 total omitted these suites; adding those 117 and 11 new regressions produces
-the corrected 663 total.
+535 total omitted these suites; adding those 117 and 12 new regressions produces
+the corrected 664 total.
+
+
+## Route-reuse ownership follow-up after 6ddf64f05
+
+Final review reproduced a remaining fallback ownership error when no reader for
+the original report remained registered. A deferred report 7 regeneration was
+started, the memory router navigated directly to report 8 (same Detail component
+UID), and report 8's regeneration dialog was opened. When report 7 completed,
+the fallback load callback read the reactive current route ID and caused an
+unrelated report 8 reload.
+
+The new regression uses the compiled ReportDetail and production children.
+After correcting the test's instance-identity assertion to use Vue's stable UID
+instead of the test wrapper's changing proxy, the RED run was:
+
+`npm run test -- src/components/maintenance/report/__tests__/report-detail-state.test.ts src/components/maintenance/report/__tests__/report-lifecycle-ui.test.ts`
+
+Result: exit 1; 1 failed and 13 passed. getReport calls were [7, 8, 8] instead
+of [7, 8]. This directly exercised unregistering reader 7 through route reuse.
+
+The fix binds the Detail refresh callback to its owning report ID and mounted
+instance, uses that callback for reader registration and both mutation controls,
+and captures the regeneration callback at submission time. A stale callback
+returns without reading another report. Shared lock cleanup still runs.
+
+GREEN command:
+
+`npm run test -- src/components/maintenance/report/__tests__/report-detail-state.test.ts src/components/maintenance/report/__tests__/report-lifecycle-ui.test.ts src/components/maintenance/report/__tests__/report-lifecycle-actions.test.ts`
+
+Result: exit 0; 4 Node + 14 Vitest = 18 passed. The new assertions prove reads
+remain [7, 8] for detail and timeline, report 8 keeps its exact dialog DOM node
+and enabled confirmation control, report 7's lock releases, and regeneration
+was called exactly once with report 7. All final gates above were then rerun,
+including full tests, type checking and production build. The additional test
+raises the final total from 663 to 664 without changing the 626 Node count.
 
 ## Scope and handoff
 
