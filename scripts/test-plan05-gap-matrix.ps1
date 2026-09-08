@@ -23,16 +23,23 @@ if (-not (Test-Path -LiteralPath $MatrixPath -PathType Leaf)) {
 }
 
 $content = Get-Content -LiteralPath $MatrixPath -Raw -Encoding utf8
-foreach ($header in $requiredHeaders) {
-    if ($content -notmatch [regex]::Escape("| $header |")) {
-        Throw-Invariant 'HeaderInvariant' "Missing required header: $header"
+$lines = @($content -split "`r?`n")
+$headerIndex = -1
+for ($index = 0; $index -lt ($lines.Count - 1); $index++) {
+    if ($lines[$index] -match '^\|' -and $lines[$index + 1] -match '^\|\s*-+') {
+        $headerIndex = $index
+        break
     }
 }
 
-foreach ($capability in $requiredCapabilities) {
-    if ($content -notmatch [regex]::Escape("| $capability |")) {
-        Throw-Invariant 'CoverageInvariant' "Missing required capability: $capability"
-    }
+if ($headerIndex -lt 0) {
+    Throw-Invariant 'HeaderInvariant' 'Missing Markdown table header.'
+}
+
+$headerCells = @($lines[$headerIndex].Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+if ($headerCells.Count -ne $requiredHeaders.Count -or
+    ($headerCells -join "`0") -cne ($requiredHeaders -join "`0")) {
+    Throw-Invariant 'HeaderInvariant' 'Required table headers are missing or out of order.'
 }
 
 if ($content -match '(?i)(?<![A-Z])(?:TBD|TODO)(?![A-Z])|待补充|N/A') {
@@ -40,10 +47,9 @@ if ($content -match '(?i)(?<![A-Z])(?:TBD|TODO)(?![A-Z])|待补充|N/A') {
 }
 
 $dataRows = @(
-    $content -split "`r?`n" |
-        Where-Object { $_ -match '^\|' } |
-        Where-Object { $_ -notmatch '^\|\s*-+' } |
-        Select-Object -Skip 1
+    for ($index = $headerIndex + 2; $index -lt $lines.Count -and $lines[$index] -match '^\|'; $index++) {
+        $lines[$index]
+    }
 )
 
 if ($dataRows.Count -eq 0) {
@@ -65,6 +71,12 @@ foreach ($line in $dataRows) {
     }
     if ($status -eq 'deferred' -and [string]::IsNullOrWhiteSpace($cells[11])) {
         Throw-Invariant 'DeferredReasonInvariant' "Deferred capability '$($cells[0])' has no reason."
+    }
+}
+
+foreach ($capability in $requiredCapabilities) {
+    if (-not ($dataRows | Where-Object { $_ -match [regex]::Escape("| $capability |") })) {
+        Throw-Invariant 'CoverageInvariant' "Missing required capability: $capability"
     }
 }
 
