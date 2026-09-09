@@ -69,7 +69,7 @@ def test_report_job_create_request_is_fail_closed():
     with pytest.raises(ValidationError):
         request_type(
             title="unsupported type",
-            report_type="ALLOCATION_PLAN",
+            report_type="NOT_A_REPORT",
         )
 
 
