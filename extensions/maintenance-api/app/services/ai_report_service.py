@@ -707,6 +707,12 @@ class AIReportService:
                 report_job_id,
             )
 
+        if parent.status is AIReportVersionStatus.FINAL:
+            raise BusinessValidationError(
+                "final report version is immutable",
+                code="REPORT_FINAL_VERSION_IMMUTABLE",
+            )
+
         if not self._is_version_generated(
             session,
             actor,
