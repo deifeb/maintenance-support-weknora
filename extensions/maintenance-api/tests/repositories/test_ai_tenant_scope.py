@@ -730,7 +730,7 @@ def test_review_finding_ignores_untrusted_resolution_fields(
     assert finding.resolution_comment is None
 
 
-def test_report_version_ignores_untrusted_audit_fields(
+def test_report_version_preserves_creator_but_ignores_terminal_audit_fields(
     session: Session,
 ) -> None:
     sessions = repositories.AISessionRepository()
@@ -755,12 +755,12 @@ def test_report_version_ignores_untrusted_audit_fields(
         report_job_id=job.id,
         template_version="1.0",
         content_digest="c" * 64,
-        created_by="forged-creator",
+        created_by="authoritative-creator",
         reviewed_by="forged-reviewer",
         finalized_by="forged-finalizer",
     )
 
-    assert version.created_by is None
+    assert version.created_by == "authoritative-creator"
     assert version.reviewed_by is None
     assert version.finalized_by is None
 

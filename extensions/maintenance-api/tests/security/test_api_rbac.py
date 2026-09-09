@@ -30,7 +30,7 @@ EXCLUDED = {
 EXPECTED_COUNTS = {
     "master_data": 67,
     "demand": 64,
-    "ai": 26,
+    "ai": 27,
     "inventory": 33,
     "reviews": 7,
     "allocations": 14,
@@ -373,7 +373,7 @@ def test_business_route_inventory_is_exact() -> None:
     assert counts == EXPECTED_COUNTS, (
         f"{TASK6_FEATURE_MISSING}: route counts {counts}"
     )
-    assert sum(counts.values()) == 211
+    assert sum(counts.values()) == 212
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
     )

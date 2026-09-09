@@ -35,6 +35,11 @@ from sqlalchemy import func, select
 TASK5_FEATURE_MISSING = "PLAN05_4D_TASK5_FEATURE_MISSING"
 TASK5_CONTRACT_MISSING = "PLAN05_4D_TASK5_CONTRACT_MISSING"
 ZERO4 = Decimal("0.0000")
+FUTURE_LOT_EXPIRY_DAYS = 365
+
+
+def _future_lot_expiry(index: int) -> date:
+    return date.today() + timedelta(days=FUTURE_LOT_EXPIRY_DAYS + index)
 
 
 def _allocation_modules():
@@ -267,7 +272,7 @@ def _seed_plan_context(
             spare_part_id=spare.id,
             lot_code=f"LOT-{suffix}-{index}",
             received_date=date(2026, 7, index),
-            expiry_date=date(2026, 9, index),
+            expiry_date=_future_lot_expiry(index),
             quality_status="AVAILABLE",
             is_frozen=False,
         )
@@ -636,7 +641,7 @@ def _seed_strict_inventory(
             spare_part_id=spare.id,
             lot_code=f"LOT-STRICT-{suffix}-{index}",
             received_date=date(2026, 7, index),
-            expiry_date=date(2026, 9, index),
+            expiry_date=_future_lot_expiry(index),
             quality_status="AVAILABLE",
             is_frozen=False,
         )

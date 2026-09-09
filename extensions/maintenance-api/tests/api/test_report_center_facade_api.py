@@ -140,7 +140,7 @@ def test_report_center_jobs_create_rejects_tenant_override(
     assert response.status_code == 422
 
 
-def test_report_center_jobs_create_rejects_unsupported_report_type(
+def test_report_center_jobs_create_rejects_unknown_report_type(
     client: TestClient,
     internal_auth_headers: Callable[
         ...,
@@ -159,7 +159,7 @@ def test_report_center_jobs_create_rejects_unsupported_report_type(
         headers=contributor,
         json={
             "title": "unsupported type",
-            "report_type": "ALLOCATION_PLAN",
+            "report_type": "NOT_A_REPORT",
         },
     )
 

@@ -126,7 +126,7 @@ def test_every_ai_route_declares_one_role_dependency() -> None:
                 role_dependencies,
             )
 
-    assert endpoint_count == 26
+    assert endpoint_count == 27
 
 
 @pytest.mark.parametrize(
