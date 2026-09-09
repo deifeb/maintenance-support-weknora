@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -49,6 +49,11 @@ from app.workers.allocation_simulation_executor import AllocationSimulationExecu
 from sqlalchemy import func, select
 
 ZERO4 = Decimal("0.0000")
+FUTURE_LOT_EXPIRY_DAYS = 365
+
+
+def _future_lot_expiry(index: int) -> date:
+    return date.today() + timedelta(days=FUTURE_LOT_EXPIRY_DAYS + index)
 
 
 def _snapshot_value(value):
@@ -208,7 +213,7 @@ def _seed_domain(session, actor, *, suffix: str):
             spare_part_id=spare.id,
             lot_code=f"LOT-{suffix}-{index}",
             received_date=date(2026, 7, index),
-            expiry_date=date(2026, 9, index),
+            expiry_date=_future_lot_expiry(index),
             quality_status="AVAILABLE",
             is_frozen=False,
         )
