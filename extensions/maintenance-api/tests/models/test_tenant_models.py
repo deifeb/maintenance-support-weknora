@@ -64,6 +64,7 @@ TENANT_TABLES = {
     "ai_review_findings",
     "ai_report_jobs",
     "ai_report_versions",
+    "ai_report_source_refs",
     "ai_report_sections",
     "ai_report_citations",
     "ai_report_validation_findings",
