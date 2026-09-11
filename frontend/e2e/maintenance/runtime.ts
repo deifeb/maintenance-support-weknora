@@ -139,8 +139,10 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
 
 export class MaintenanceE2ERuntime {
   readonly artifactsDir: string
+  readonly actorManifestPath: string
   readonly baseURL: string
   readonly containerName: string
+  readonly fixtureManifestPath: string
   readonly runDir: string
 
   private readonly config: RuntimeConfig
@@ -148,6 +150,7 @@ export class MaintenanceE2ERuntime {
   private readonly databaseName = 'weknora_e2e'
   private readonly databaseUser = 'weknora_e2e'
   private readonly databasePassword = randomBytes(32).toString('base64url')
+  private readonly testPassword = randomBytes(32).toString('base64url')
   private readonly signingSecret = randomBytes(48).toString('base64url')
   private readonly processes = new Map<ServiceName, ManagedProcess>()
   private postgresPort?: number
@@ -160,6 +163,8 @@ export class MaintenanceE2ERuntime {
     this.runDir = resolve(this.config.rootDir, `maintenance-e2e-${runId}`)
     this.containerName = `maintenance-e2e-${runId}`
     this.artifactsDir = join(this.runDir, 'artifacts')
+    this.actorManifestPath = join(this.runDir, 'actors.json')
+    this.fixtureManifestPath = join(this.runDir, 'fixtures.json')
     this.baseURL = `http://127.0.0.1:${this.config.frontendPort}`
     this.dependencies = {
       runCommand,
@@ -214,6 +219,7 @@ export class MaintenanceE2ERuntime {
       { cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'), env: this.maintenanceEnvironment() },
     ))
     await this.waitForHealthy('maintenance')
+    await this.seed()
     const vite = runtimeCommand('npm', ['run', 'dev', '--', '--port', String(this.config.frontendPort), '--strictPort'])
     this.processes.set('vite', await this.dependencies.startProcess(
       'vite', vite.command, vite.args,
@@ -234,7 +240,13 @@ export class MaintenanceE2ERuntime {
   }
 
   playwrightEnvironment(): NodeJS.ProcessEnv {
-    return { E2E_BASE_URL: this.baseURL, E2E_PLAYWRIGHT_OUTPUT_DIR: this.artifactsDir }
+    return {
+      E2E_BASE_URL: this.baseURL,
+      E2E_PLAYWRIGHT_OUTPUT_DIR: this.artifactsDir,
+      E2E_ACTOR_MANIFEST_PATH: this.actorManifestPath,
+      E2E_FIXTURE_MANIFEST_PATH: this.fixtureManifestPath,
+      E2E_TEST_PASSWORD: this.testPassword,
+    }
   }
 
   async appendServiceLog(service: ServiceName, content: string): Promise<void> {
@@ -286,6 +298,43 @@ export class MaintenanceE2ERuntime {
         if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error
       }
     }
+  }
+
+  private async seed(): Promise<void> {
+    await this.dependencies.runCommand(
+      runtimeExecutable('go'),
+      [
+        'run', './cmd/e2e-seed',
+        '--database-url', this.postgresDatabaseURL(),
+        '--manifest-path', this.actorManifestPath,
+      ],
+      { cwd: repositoryRoot(), env: this.seedEnvironment() },
+    )
+    await this.dependencies.runCommand(
+      runtimeExecutable('python'),
+      [
+        'scripts/e2e_seed.py',
+        '--database-url', this.sqliteDatabaseURL(),
+      '--manifest-path', this.fixtureManifestPath,
+      ],
+      {
+        cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'),
+        env: { ...process.env, E2E_ACTOR_MANIFEST_PATH: this.actorManifestPath },
+      },
+    )
+  }
+
+  private seedEnvironment(): NodeJS.ProcessEnv {
+    return { ...process.env, E2E_TEST_PASSWORD: this.testPassword }
+  }
+
+  private postgresDatabaseURL(): string {
+    return `postgres://${this.databaseUser}:${this.databasePassword}@127.0.0.1:${this.postgresPort}/${this.databaseName}?sslmode=disable`
+  }
+
+  private sqliteDatabaseURL(): string {
+    const databasePath = join(this.runDir, 'maintenance.sqlite3').replaceAll('\\', '/')
+    return `sqlite:///${databasePath}`
   }
 
   private redactDiagnostic(content: string): string {

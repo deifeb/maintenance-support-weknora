@@ -90,7 +90,9 @@ function testDependencies(
 ): RuntimeDependencies {
   return {
     runCommand: async (command, args) => {
-      events.push(command === runtimeExecutable('python') ? commandEvent(command, args) : `${command} ${args[0]}`)
+      if (args.includes('./cmd/e2e-seed')) events.push('seed go')
+      else if (args.includes('scripts/e2e_seed.py')) events.push('seed python')
+      else events.push(command === runtimeExecutable('python') ? commandEvent(command, args) : `${command} ${args[0]}`)
       if (failCommand?.(command, args)) throw new Error('command failed')
     },
     startProcess: async (name, command, args) => {
@@ -177,8 +179,37 @@ test('starts each dependency only after its prerequisite is healthy', async () =
       `${runtimeExecutable('python')} -m alembic upgrade head`,
       `start maintenance: ${commandEvent(runtimeExecutable('python'), ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8101'])}`,
       'healthy maintenance',
+      'seed go',
+      'seed python',
       `start vite: ${runtimeCommandEvent('npm', ['run', 'dev', '--', '--port', '5174', '--strictPort'])}`,
     ])
+    await runtime.stop({ failed: false })
+  })
+})
+
+test('seeds private databases before starting Maintenance and Vite', async () => {
+  await withRoot(async (root) => {
+    const events: string[] = []
+    const runtime = new MaintenanceE2ERuntime(
+      { E2E_ROOT_DIR: root },
+      testDependencies(events),
+    )
+
+    await runtime.start()
+
+    assert.deepEqual(events.slice(-4), [
+      'healthy maintenance',
+      'seed go',
+      'seed python',
+      `start vite: ${runtimeCommandEvent('npm', ['run', 'dev', '--', '--port', '5174', '--strictPort'])}`,
+    ])
+
+    const playwrightEnv = runtime.playwrightEnvironment()
+    assert.equal(playwrightEnv.E2E_BASE_URL, runtime.baseURL)
+    assert.equal(playwrightEnv.E2E_ACTOR_MANIFEST_PATH?.startsWith(runtime.runDir), true)
+    assert.equal(playwrightEnv.E2E_FIXTURE_MANIFEST_PATH?.startsWith(runtime.runDir), true)
+    assert.equal(playwrightEnv.E2E_TEST_PASSWORD?.length, 43)
+    assert.equal(playwrightEnv.DATABASE_URL, undefined)
     await runtime.stop({ failed: false })
   })
 })
