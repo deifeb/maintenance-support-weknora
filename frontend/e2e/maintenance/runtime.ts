@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,6 +35,7 @@ export interface RuntimeDependencies {
   runCommand(command: string, args: string[], options?: ProcessOptions): Promise<void>
   startProcess(name: ServiceName, command: string, args: string[], options: ProcessOptions): ManagedProcess
   waitForPostgres(containerName: string, username: string, database: string): Promise<void>
+  waitForWeKnoraMigrations(containerName: string, username: string, database: string, version: number): Promise<void>
   waitForHttp(name: ServiceName, url: string): Promise<void>
 }
 
@@ -47,8 +48,10 @@ function isSafeDockerImage(value: string): boolean {
   return dockerImageReference.test(value) && !sensitiveValue.test(value)
 }
 
-function executable(command: string): string {
-  return process.platform === 'win32' ? `${command}.cmd` : command
+export function runtimeExecutable(command: string, platform = process.platform): string {
+  if (platform !== 'win32') return command
+  if (command === 'npm' || command === 'npx') return `${command}.cmd`
+  return `${command}.exe`
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -150,6 +153,7 @@ export class MaintenanceE2ERuntime {
       runCommand,
       startProcess: this.startChildProcess.bind(this),
       waitForPostgres: this.waitForPostgres.bind(this),
+      waitForWeKnoraMigrations: this.waitForWeKnoraMigrations.bind(this),
       waitForHttp: this.waitForHttp.bind(this),
       ...dependencies,
     }
@@ -179,16 +183,27 @@ export class MaintenanceE2ERuntime {
     this.postgresStarted = true
     await this.waitForHealthy('postgres')
     this.processes.set('weknora', this.dependencies.startProcess(
-      'weknora', 'go', ['run', './cmd/server'], { cwd: repositoryRoot(), env: this.weknoraEnvironment() },
+      'weknora', runtimeExecutable('go'), ['run', './cmd/server'], { cwd: repositoryRoot(), env: this.weknoraEnvironment() },
     ))
+    await this.dependencies.waitForWeKnoraMigrations(
+      this.containerName,
+      this.databaseUser,
+      this.databaseName,
+      await weknoraMigrationHead(),
+    )
     await this.waitForHealthy('weknora')
+    await this.dependencies.runCommand(
+      runtimeExecutable('python'),
+      ['-m', 'alembic', 'upgrade', 'head'],
+      { cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'), env: this.maintenanceEnvironment() },
+    )
     this.processes.set('maintenance', this.dependencies.startProcess(
-      'maintenance', executable('python'), ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(this.config.maintenancePort)],
+      'maintenance', runtimeExecutable('python'), ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(this.config.maintenancePort)],
       { cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'), env: this.maintenanceEnvironment() },
     ))
     await this.waitForHealthy('maintenance')
     this.processes.set('vite', this.dependencies.startProcess(
-      'vite', executable('npm'), ['run', 'dev', '--', '--port', String(this.config.frontendPort), '--strictPort'],
+      'vite', runtimeExecutable('npm'), ['run', 'dev', '--', '--port', String(this.config.frontendPort), '--strictPort'],
       { cwd: join(repositoryRoot(), 'frontend'), env: this.viteEnvironment() },
     ))
   }
@@ -263,7 +278,9 @@ export class MaintenanceE2ERuntime {
   private redactDiagnostic(content: string): string {
     return content
       .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`]+/gi, '[redacted-url]')
-      .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|DATABASE_URL)[A-Z0-9_]*)\s*[=:]\s*\S+/gi, '$1=[redacted]')
+      .replace(/\bAuthorization\s*:\s*Bearer\s+[^\s'"`]+/gi, 'Authorization: Bearer [redacted]')
+      .replace(/\b([A-Z0-9_]*(?:TOKEN|JWT|SECRET|PASSWORD|API_KEY|DATABASE_URL|AUTHORIZATION)[A-Z0-9_]*)\s*[=:]\s*\S+/gi, '$1=[redacted]')
+      .replace(/\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/g, '[redacted-token]')
       .replace(new RegExp(escapeRegularExpression(this.runDir), 'g'), '[run-directory]')
       .replace(/(?:[A-Za-z]:[\\/][^\s'"`]+|\/(?:tmp|private\/tmp|var\/folders)\/[^\s'"`]+)/g, '[temporary-path]')
   }
@@ -309,6 +326,25 @@ export class MaintenanceE2ERuntime {
     ))
   }
 
+  private async waitForWeKnoraMigrations(
+    containerName: string,
+    username: string,
+    database: string,
+    version: number,
+  ): Promise<void> {
+    const query = [
+      'DO $$ BEGIN',
+      `IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = ${version} AND dirty = false) THEN`,
+      "RAISE EXCEPTION 'WeKnora E2E migration head is not ready';",
+      'END IF;',
+      'END $$;',
+    ].join(' ')
+    await this.waitFor(() => this.dependencies.runCommand('docker', [
+      'exec', containerName, 'psql', '--username', username, '--dbname', database,
+      '--set', 'ON_ERROR_STOP=1', '--command', query,
+    ]))
+  }
+
   private async waitForHttp(_name: ServiceName, url: string): Promise<void> {
     await this.waitFor(async () => {
       const response = await fetch(url)
@@ -332,6 +368,17 @@ export class MaintenanceE2ERuntime {
 
 function repositoryRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+}
+
+async function weknoraMigrationHead(): Promise<number> {
+  const files = await readdir(join(repositoryRoot(), 'migrations', 'versioned'))
+  const versions = files.flatMap((file) => {
+    const match = /^(\d+)_.*\.up\.sql$/.exec(file)
+    return match ? [Number(match[1])] : []
+  })
+  const head = Math.max(...versions)
+  if (!Number.isSafeInteger(head)) throw new Error('Unable to determine the WeKnora migration head')
+  return head
 }
 
 function escapeRegularExpression(value: string): string {

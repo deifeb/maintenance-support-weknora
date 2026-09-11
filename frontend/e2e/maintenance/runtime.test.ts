@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
   MaintenanceE2ERuntime,
   readRuntimeConfig,
+  runtimeExecutable,
   sanitizeCommandEnvironment,
   type RuntimeDependencies,
 } from './runtime'
@@ -80,19 +81,36 @@ async function withRoot(run: (root: string) => Promise<void>): Promise<void> {
   }
 }
 
-function testDependencies(events: string[]): RuntimeDependencies {
+function testDependencies(
+  events: string[],
+  failMigration = false,
+  failCommand?: (command: string, args: string[]) => boolean,
+): RuntimeDependencies {
   return {
     runCommand: async (command, args) => {
       events.push(`${command} ${args[0]}`)
+      if (failCommand?.(command, args)) throw new Error('command failed')
     },
     startProcess: (name) => {
       events.push(`start ${name}`)
       return { stop: async () => events.push(`stop ${name}`) }
     },
     waitForPostgres: async () => events.push('healthy postgres'),
+    waitForWeKnoraMigrations: async () => {
+      events.push('migrated weknora')
+      if (failMigration) throw new Error('migration check failed')
+    },
     waitForHttp: async (name) => events.push(`healthy ${name}`),
   }
 }
+
+test('uses Windows command shims only for npm executables', () => {
+  assert.equal(runtimeExecutable('npm', 'win32'), 'npm.cmd')
+  assert.equal(runtimeExecutable('npx', 'win32'), 'npx.cmd')
+  assert.equal(runtimeExecutable('python', 'win32'), 'python.exe')
+  assert.equal(runtimeExecutable('go', 'win32'), 'go.exe')
+  assert.equal(runtimeExecutable('npm', 'linux'), 'npm')
+})
 
 test('creates an isolated run directory below the E2E root', async () => {
   await withRoot(async (root) => {
@@ -128,10 +146,52 @@ test('starts each dependency only after its prerequisite is healthy', async () =
       'docker run',
       'healthy postgres',
       'start weknora',
+      'migrated weknora',
       'healthy weknora',
+      'python.exe -m',
       'start maintenance',
       'healthy maintenance',
       'start vite',
+    ])
+    await runtime.stop({ failed: false })
+  })
+})
+
+test('aborts before WeKnora health acceptance when its migration check fails', async () => {
+  await withRoot(async (root) => {
+    const events: string[] = []
+    const runtime = new MaintenanceE2ERuntime(
+      { E2E_ROOT_DIR: root },
+      testDependencies(events, true),
+    )
+
+    await assert.rejects(runtime.start(), /migration check failed/)
+    assert.deepEqual(events, [
+      'docker run',
+      'healthy postgres',
+      'start weknora',
+      'migrated weknora',
+    ])
+    await runtime.stop({ failed: false })
+  })
+})
+
+test('aborts before Maintenance starts when its Alembic migration fails', async () => {
+  await withRoot(async (root) => {
+    const events: string[] = []
+    const runtime = new MaintenanceE2ERuntime(
+      { E2E_ROOT_DIR: root },
+      testDependencies(events, false, (command, args) => command === 'python.exe' && args[1] === 'alembic'),
+    )
+
+    await assert.rejects(runtime.start(), /command failed/)
+    assert.deepEqual(events, [
+      'docker run',
+      'healthy postgres',
+      'start weknora',
+      'migrated weknora',
+      'healthy weknora',
+      'python.exe -m',
     ])
     await runtime.stop({ failed: false })
   })
@@ -145,7 +205,16 @@ test('stops services in reverse order and retains only redacted failure logs', a
       testDependencies(events),
     )
     await runtime.start()
-    await runtime.appendServiceLog('weknora', `DATABASE_URL=postgres://secret@127.0.0.1\n${runtime.runDir}`)
+    const reportDir = join(runtime.artifactsDir, 'playwright-report')
+    await mkdir(reportDir, { recursive: true })
+    await writeFile(join(reportDir, 'index.html'), 'failure report')
+    await runtime.appendServiceLog('weknora', [
+      'DATABASE_URL=postgres://secret@127.0.0.1',
+      'JWT=header.payload.signature',
+      'Authorization: Bearer bearer-secret',
+      'access_token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature',
+      runtime.runDir,
+    ].join('\n'))
 
     await runtime.stop({ failed: true })
 
@@ -156,7 +225,8 @@ test('stops services in reverse order and retains only redacted failure logs', a
       'docker rm',
     ])
     const retainedLog = await readFile(join(runtime.artifactsDir, 'logs', 'weknora.log'), 'utf8')
-    assert.doesNotMatch(retainedLog, /postgres:\/\/secret|maintenance-e2e-runtime-/)
+    assert.doesNotMatch(retainedLog, /postgres:\/\/secret|maintenance-e2e-runtime-|header\.payload\.signature|bearer-secret|eyJhbGci/)
+    assert.equal(await readFile(join(reportDir, 'index.html'), 'utf8'), 'failure report')
     await assert.rejects(stat(join(runtime.runDir, 'postgres-data')))
     await assert.rejects(stat(join(runtime.runDir, 'maintenance.sqlite3')))
   })
