@@ -41,7 +41,10 @@ test('creates real browser storage states for maintenance actors', async ({ brow
       await page.goto('/login')
       await page.locator('input[autocomplete="email"]').fill(`${alias}@example.test`)
       await page.locator('input[autocomplete="current-password"]').fill(password)
-      await page.getByRole('button', { name: /登录|log in|sign in/i }).click()
+      await Promise.all([
+        page.waitForResponse((response) => response.url().includes('/api/v1/auth/login') && response.request().method() === 'POST' && response.ok()),
+        page.getByRole('button', { name: /登录|log in|sign in/i }).click(),
+      ])
       await page.goto('/platform/maintenance/')
       await expect(page).toHaveURL(/\/platform\/maintenance\//)
       await context.storageState({ path: join(stateDir, `${alias}.json`) })

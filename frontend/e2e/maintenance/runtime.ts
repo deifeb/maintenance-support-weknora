@@ -319,7 +319,7 @@ export class MaintenanceE2ERuntime {
       ],
       {
         cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'),
-        env: { ...process.env, E2E_ACTOR_MANIFEST_PATH: this.actorManifestPath },
+        env: { ...this.maintenanceEnvironment(), E2E_ACTOR_MANIFEST_PATH: this.actorManifestPath },
       },
     )
   }
