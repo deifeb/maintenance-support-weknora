@@ -31,9 +31,14 @@ export interface ManagedProcess {
   stop(): Promise<void>
 }
 
+export interface RuntimeCommand {
+  command: string
+  args: string[]
+}
+
 export interface RuntimeDependencies {
   runCommand(command: string, args: string[], options?: ProcessOptions): Promise<void>
-  startProcess(name: ServiceName, command: string, args: string[], options: ProcessOptions): ManagedProcess
+  startProcess(name: ServiceName, command: string, args: string[], options: ProcessOptions): Promise<ManagedProcess>
   waitForPostgres(containerName: string, username: string, database: string): Promise<void>
   waitForWeKnoraMigrations(containerName: string, username: string, database: string, version: number): Promise<void>
   waitForHttp(name: ServiceName, url: string): Promise<void>
@@ -50,8 +55,15 @@ function isSafeDockerImage(value: string): boolean {
 
 export function runtimeExecutable(command: string, platform = process.platform): string {
   if (platform !== 'win32') return command
-  if (command === 'npm' || command === 'npx') return `${command}.cmd`
+  if (command === 'npm' || command === 'npx') return command
   return `${command}.exe`
+}
+
+export function runtimeCommand(command: string, args: string[], platform = process.platform): RuntimeCommand {
+  if (platform === 'win32' && (command === 'npm' || command === 'npx')) {
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `${command}.cmd`, ...args] }
+  }
+  return { command: runtimeExecutable(command, platform), args }
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -182,7 +194,7 @@ export class MaintenanceE2ERuntime {
     ])
     this.postgresStarted = true
     await this.waitForHealthy('postgres')
-    this.processes.set('weknora', this.dependencies.startProcess(
+    this.processes.set('weknora', await this.dependencies.startProcess(
       'weknora', runtimeExecutable('go'), ['run', './cmd/server'], { cwd: repositoryRoot(), env: this.weknoraEnvironment() },
     ))
     await this.dependencies.waitForWeKnoraMigrations(
@@ -197,13 +209,14 @@ export class MaintenanceE2ERuntime {
       ['-m', 'alembic', 'upgrade', 'head'],
       { cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'), env: this.maintenanceEnvironment() },
     )
-    this.processes.set('maintenance', this.dependencies.startProcess(
+    this.processes.set('maintenance', await this.dependencies.startProcess(
       'maintenance', runtimeExecutable('python'), ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(this.config.maintenancePort)],
       { cwd: join(repositoryRoot(), 'extensions', 'maintenance-api'), env: this.maintenanceEnvironment() },
     ))
     await this.waitForHealthy('maintenance')
-    this.processes.set('vite', this.dependencies.startProcess(
-      'vite', runtimeExecutable('npm'), ['run', 'dev', '--', '--port', String(this.config.frontendPort), '--strictPort'],
+    const vite = runtimeCommand('npm', ['run', 'dev', '--', '--port', String(this.config.frontendPort), '--strictPort'])
+    this.processes.set('vite', await this.dependencies.startProcess(
+      'vite', vite.command, vite.args,
       { cwd: join(repositoryRoot(), 'frontend'), env: this.viteEnvironment() },
     ))
   }
@@ -279,7 +292,7 @@ export class MaintenanceE2ERuntime {
     return content
       .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`]+/gi, '[redacted-url]')
       .replace(/\bAuthorization\s*:\s*Bearer\s+[^\s'"`]+/gi, 'Authorization: Bearer [redacted]')
-      .replace(/\b([A-Z0-9_]*(?:TOKEN|JWT|SECRET|PASSWORD|API_KEY|DATABASE_URL|AUTHORIZATION)[A-Z0-9_]*)\s*[=:]\s*\S+/gi, '$1=[redacted]')
+      .replace(/\b([A-Z0-9_]*(?:TOKEN|JWT|SECRET|PASSWORD|API_KEY|DATABASE_URL|AUTHORIZATION)[A-Z0-9_]*)\s*[=:]\s*(?:Bearer\s+)?\S+/gi, '$1=[redacted]')
       .replace(/\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b/g, '[redacted-token]')
       .replace(new RegExp(escapeRegularExpression(this.runDir), 'g'), '[run-directory]')
       .replace(/(?:[A-Za-z]:[\\/][^\s'"`]+|\/(?:tmp|private\/tmp|var\/folders)\/[^\s'"`]+)/g, '[temporary-path]')
@@ -312,12 +325,8 @@ export class MaintenanceE2ERuntime {
     return { ...process.env, VITE_DEV_PROXY_TARGET: `http://127.0.0.1:${this.config.weknoraPort}` }
   }
 
-  private startChildProcess(name: ServiceName, command: string, args: string[], options: ProcessOptions): ManagedProcess {
-    const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-    const output = createWriteStream(join(this.runDir, 'logs', `${name}.raw.log`), { flags: 'a' })
-    child.stdout.pipe(output)
-    child.stderr.pipe(output)
-    return { stop: () => stopChild(child) }
+  private startChildProcess(name: ServiceName, command: string, args: string[], options: ProcessOptions): Promise<ManagedProcess> {
+    return startManagedProcess(command, args, options, join(this.runDir, 'logs', `${name}.raw.log`))
   }
 
   private async waitForPostgres(containerName: string, username: string, database: string): Promise<void> {
@@ -364,6 +373,31 @@ export class MaintenanceE2ERuntime {
     }
     throw new Error('E2E service did not become healthy')
   }
+}
+
+export function startManagedProcess(
+  command: string,
+  args: string[],
+  options: ProcessOptions,
+  outputPath: string,
+): Promise<ManagedProcess> {
+  const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  const output = createWriteStream(outputPath, { flags: 'a' })
+  child.stdout?.pipe(output)
+  child.stderr?.pipe(output)
+  return new Promise((resolveStart, rejectStart) => {
+    let settled = false
+    child.once('error', () => {
+      if (settled) return
+      settled = true
+      output.destroy()
+      rejectStart(commandFailure(command))
+    })
+    child.once('spawn', () => {
+      settled = true
+      resolveStart({ stop: () => stopChild(child) })
+    })
+  })
 }
 
 function repositoryRoot(): string {

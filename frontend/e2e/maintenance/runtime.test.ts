@@ -7,8 +7,10 @@ import { join } from 'node:path'
 import {
   MaintenanceE2ERuntime,
   readRuntimeConfig,
+  runtimeCommand,
   runtimeExecutable,
   sanitizeCommandEnvironment,
+  startManagedProcess,
   type RuntimeDependencies,
 } from './runtime'
 
@@ -88,11 +90,11 @@ function testDependencies(
 ): RuntimeDependencies {
   return {
     runCommand: async (command, args) => {
-      events.push(`${command} ${args[0]}`)
+      events.push(command === runtimeExecutable('python') ? commandEvent(command, args) : `${command} ${args[0]}`)
       if (failCommand?.(command, args)) throw new Error('command failed')
     },
-    startProcess: (name) => {
-      events.push(`start ${name}`)
+    startProcess: async (name, command, args) => {
+      events.push(`start ${name}: ${commandEvent(command, args)}`)
       return { stop: async () => events.push(`stop ${name}`) }
     },
     waitForPostgres: async () => events.push('healthy postgres'),
@@ -104,12 +106,36 @@ function testDependencies(
   }
 }
 
-test('uses Windows command shims only for npm executables', () => {
-  assert.equal(runtimeExecutable('npm', 'win32'), 'npm.cmd')
-  assert.equal(runtimeExecutable('npx', 'win32'), 'npx.cmd')
+function commandEvent(command: string, args: string[]): string {
+  return [command, ...args].join(' ')
+}
+
+function runtimeCommandEvent(command: string, args: string[]): string {
+  const invocation = runtimeCommand(command, args)
+  return commandEvent(invocation.command, invocation.args)
+}
+
+test('wraps Windows npm command scripts in cmd.exe while preserving native executables', () => {
+  assert.deepEqual(
+    runtimeCommand('npm', ['run', 'dev'], 'win32'),
+    { command: 'cmd.exe', args: ['/d', '/s', '/c', 'npm.cmd', 'run', 'dev'] },
+  )
+  assert.deepEqual(
+    runtimeCommand('npx', ['playwright', 'test'], 'win32'),
+    { command: 'cmd.exe', args: ['/d', '/s', '/c', 'npx.cmd', 'playwright', 'test'] },
+  )
   assert.equal(runtimeExecutable('python', 'win32'), 'python.exe')
   assert.equal(runtimeExecutable('go', 'win32'), 'go.exe')
-  assert.equal(runtimeExecutable('npm', 'linux'), 'npm')
+  assert.deepEqual(runtimeCommand('npm', ['run', 'dev'], 'linux'), { command: 'npm', args: ['run', 'dev'] })
+})
+
+test('rejects an asynchronous missing child executable', async () => {
+  await withRoot(async (root) => {
+    await assert.rejects(
+      startManagedProcess('definitely-missing-e2e-command', [], { cwd: root, env: process.env }, join(root, 'missing.log')),
+      /definitely-missing-e2e-command exited unsuccessfully/,
+    )
+  })
 })
 
 test('creates an isolated run directory below the E2E root', async () => {
@@ -145,13 +171,13 @@ test('starts each dependency only after its prerequisite is healthy', async () =
     assert.deepEqual(events, [
       'docker run',
       'healthy postgres',
-      'start weknora',
+      `start weknora: ${commandEvent(runtimeExecutable('go'), ['run', './cmd/server'])}`,
       'migrated weknora',
       'healthy weknora',
-      'python.exe -m',
-      'start maintenance',
+      `${runtimeExecutable('python')} -m alembic upgrade head`,
+      `start maintenance: ${commandEvent(runtimeExecutable('python'), ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8101'])}`,
       'healthy maintenance',
-      'start vite',
+      `start vite: ${runtimeCommandEvent('npm', ['run', 'dev', '--', '--port', '5174', '--strictPort'])}`,
     ])
     await runtime.stop({ failed: false })
   })
@@ -169,7 +195,7 @@ test('aborts before WeKnora health acceptance when its migration check fails', a
     assert.deepEqual(events, [
       'docker run',
       'healthy postgres',
-      'start weknora',
+      `start weknora: ${commandEvent(runtimeExecutable('go'), ['run', './cmd/server'])}`,
       'migrated weknora',
     ])
     await runtime.stop({ failed: false })
@@ -188,10 +214,10 @@ test('aborts before Maintenance starts when its Alembic migration fails', async 
     assert.deepEqual(events, [
       'docker run',
       'healthy postgres',
-      'start weknora',
+      `start weknora: ${commandEvent(runtimeExecutable('go'), ['run', './cmd/server'])}`,
       'migrated weknora',
       'healthy weknora',
-      'python.exe -m',
+      `${runtimeExecutable('python')} -m alembic upgrade head`,
     ])
     await runtime.stop({ failed: false })
   })
@@ -212,6 +238,9 @@ test('stops services in reverse order and retains only redacted failure logs', a
       'DATABASE_URL=postgres://secret@127.0.0.1',
       'JWT=header.payload.signature',
       'Authorization: Bearer bearer-secret',
+      'Authorization=Bearer assignment-secret',
+      'HTTP_AUTHORIZATION: Bearer http-assignment-secret',
+      'TOKEN=Bearer token-assignment-secret',
       'access_token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature',
       runtime.runDir,
     ].join('\n'))
@@ -225,7 +254,7 @@ test('stops services in reverse order and retains only redacted failure logs', a
       'docker rm',
     ])
     const retainedLog = await readFile(join(runtime.artifactsDir, 'logs', 'weknora.log'), 'utf8')
-    assert.doesNotMatch(retainedLog, /postgres:\/\/secret|maintenance-e2e-runtime-|header\.payload\.signature|bearer-secret|eyJhbGci/)
+    assert.doesNotMatch(retainedLog, /postgres:\/\/secret|maintenance-e2e-runtime-|header\.payload\.signature|bearer-secret|assignment-secret|http-assignment-secret|token-assignment-secret|eyJhbGci/)
     assert.equal(await readFile(join(reportDir, 'index.html'), 'utf8'), 'failure report')
     await assert.rejects(stat(join(runtime.runDir, 'postgres-data')))
     await assert.rejects(stat(join(runtime.runDir, 'maintenance.sqlite3')))
