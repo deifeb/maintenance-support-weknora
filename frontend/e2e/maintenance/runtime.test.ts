@@ -14,15 +14,26 @@ test('rejects an invalid port', () => {
   )
 })
 
-test('redacts diagnostic environment values', () => {
+test('only retains allowlisted diagnostic environment values', () => {
   assert.deepEqual(
     sanitizeCommandEnvironment({
       E2E_ROOT_DIR: 'C:/e2e',
+      E2E_FRONTEND_PORT: '5174',
+      E2E_MAINTENANCE_PORT: '8101',
+      E2E_POSTGRES_IMAGE: 'postgres:17-alpine',
+      E2E_WEKNORA_PORT: '8081',
       ACCESS_TOKEN: 'hidden',
+      DATABASE_URL: 'postgresql://user:password@localhost:5432/e2e',
       DB_PASSWORD: 'hidden',
       E2E_API_KEY: 'hidden',
       SIGNING_SECRET: 'hidden',
+      TEMP_PATH: 'C:/e2e/run-123',
     }),
-    { E2E_ROOT_DIR: 'C:/e2e' },
+    {
+      E2E_FRONTEND_PORT: '5174',
+      E2E_MAINTENANCE_PORT: '8101',
+      E2E_POSTGRES_IMAGE: 'postgres:17-alpine',
+      E2E_WEKNORA_PORT: '8081',
+    },
   )
 })

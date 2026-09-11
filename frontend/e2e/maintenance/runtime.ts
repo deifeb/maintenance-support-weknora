@@ -1,6 +1,13 @@
 export function sanitizeCommandEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  const diagnosticKeys = new Set([
+    'E2E_FRONTEND_PORT',
+    'E2E_MAINTENANCE_PORT',
+    'E2E_POSTGRES_IMAGE',
+    'E2E_WEKNORA_PORT',
+  ])
+
   return Object.fromEntries(Object.entries(env).filter(([key, value]) => (
-    value !== undefined && !/(TOKEN|SECRET|PASSWORD|API_KEY)/i.test(key)
+    value !== undefined && diagnosticKeys.has(key)
   )))
 }
 
