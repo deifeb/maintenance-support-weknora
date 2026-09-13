@@ -1296,9 +1296,15 @@ class AllocationPlanService:
             self._raise_conflict(actor, "allocation plan cannot retry in its current state", code="ALLOCATION_PLAN_STATE_CONFLICT", details={"status": plan.status, "retryable": False})
         lines = {line.id: line for line in self._current_plan_lines(session, actor.tenant_id, plan.id)}
         for line_id in sorted(line_ids):
-            stored = lines.get(line_id).result_json if lines.get(line_id) is not None else None
+            line = lines.get(line_id)
+            stored = line.result_json if line is not None else None
             if not isinstance(stored, dict) or stored.get("outcome") != "CONFLICT" or not bool((stored.get("details") or {}).get("cause_retryable")):
                 self._raise_conflict(actor, "allocation retry line is not retryable", code="ALLOCATION_RETRY_LINE_INVALID", details={"line_id": line_id, "retryable": False})
+            details = stored.get("details") or {}
+            latest_version = details.get("actual_version", details.get("expected_version"))
+            if latest_version is not None and line is not None:
+                line.expected_balance_version = int(latest_version)
+                session.flush()
         return self.execute(session, actor, plan_id, command=AllocationPlanExecuteCommand(expected_version=command.expected_version), idempotency_key=clean_key, _line_ids=set(line_ids), _action="RETRY")
 
     @staticmethod
