@@ -558,3 +558,38 @@ test(
     )
   },
 )
+
+test(
+  'retryPlan posts sorted unique line ids to the retry endpoint with idempotency',
+  { skip: !modulePresent },
+  async () => {
+    const { createAllocationApi } = await loadModule()
+    const calls: CapturedCall[] = []
+    const api = createAllocationApi(fakeClient(calls))
+
+    await api.retryPlan(
+      71,
+      {
+        expected_version: 9,
+        line_ids: [703, 701, 703, 702, 701],
+      },
+      'plan-retry-key',
+    )
+
+    assert.deepEqual(calls, [
+      {
+        method: 'POST',
+        path: '/v1/allocations/plans/71/retry',
+        body: {
+          expected_version: 9,
+          line_ids: [701, 702, 703],
+        },
+        config: {
+          headers: {
+            'Idempotency-Key': 'plan-retry-key',
+          },
+        },
+      },
+    ])
+  },
+)
