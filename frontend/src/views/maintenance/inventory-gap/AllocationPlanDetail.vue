@@ -395,6 +395,7 @@ async function retryExecutionLine(lineId: number): Promise<void> {
         line_ids: [lineId],
       },
     )
+    if (routeId.value !== plan.id || current.value?.id !== plan.id) return
     executionResult.value = mergeExecutionResult(
       execution,
       retryResult,
