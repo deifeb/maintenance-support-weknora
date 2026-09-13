@@ -97,7 +97,7 @@ describe('allocation execution retry controls', () => {
     })
 
     const retry = wrapper.get('tbody button')
-    expect(retry.text()).toBe('Retry line')
+    expect(retry.text()).toBe('Retry')
     expect(wrapper.findAll('button')).toHaveLength(2)
     expect(wrapper.findAll('button')[0].text()).toBe('Regenerate plan')
 
@@ -157,7 +157,7 @@ describe('allocation plan detail retry command', () => {
     await wrapper.get('.allocation-plan-detail__actions button').trigger('click')
     await flushPromises()
     const retry = wrapper.get('tbody button')
-    expect(retry.text()).toBe('Retry line')
+    expect(retry.text()).toBe('Retry')
 
     await retry.trigger('click')
     await wrapper.vm.$nextTick()
@@ -167,10 +167,23 @@ describe('allocation plan detail retry command', () => {
     })
     expect(retry.attributes('disabled')).toBeDefined()
 
-    retryDeferred.resolve(execution)
+    retryDeferred.resolve({
+      ...execution,
+      status: 'COMPLETED',
+      version: 6,
+      line_results: [{
+        ...execution.line_results[0],
+        outcome: 'RESERVED',
+        reservation_id: 55,
+        retryable: false,
+        suggested_action: null,
+      }],
+    })
     await flushPromises()
     expect(mocks.allocationStore.fetchPlanDetail).toHaveBeenCalledTimes(3)
-    expect(retry.attributes('disabled')).toBeUndefined()
+    expect(wrapper.findAll('tbody tr')).toHaveLength(3)
+    expect(wrapper.find('tbody tr[data-outcome="CONFLICT"] button').exists()).toBe(false)
+    expect(wrapper.find('tbody button').exists()).toBe(false)
   })
 })
 

@@ -12,6 +12,7 @@
       <button
         v-if="canRegenerate"
         type="button"
+        :disabled="retryingLineId !== null"
         @click="emit('regenerate')"
       >
         Regenerate plan
@@ -58,7 +59,7 @@
                 :disabled="retryingLineId !== null"
                 @click="emit('retry', lineResult.line_id)"
               >
-                {{ retryingLineId === lineResult.line_id ? 'Retrying…' : 'Retry line' }}
+                {{ retryingLineId === lineResult.line_id ? 'Retrying…' : 'Retry' }}
               </button>
             </td>
           </tr>

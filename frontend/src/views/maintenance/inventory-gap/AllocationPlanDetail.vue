@@ -38,6 +38,7 @@
             <button
               v-if="hasAction('preview')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="previewPlan"
             >
               Preview
@@ -45,6 +46,7 @@
             <button
               v-if="hasAction('confirm')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="confirmPlan"
             >
               Confirm
@@ -52,6 +54,7 @@
             <button
               v-if="hasAction('execute')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="executePlan"
             >
               Execute
@@ -59,6 +62,7 @@
             <button
               v-if="hasAction('void')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="voidPlan"
             >
               Void
@@ -66,6 +70,7 @@
             <button
               v-if="hasAction('regenerate')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="regeneratePlan"
             >
               Regenerate
@@ -383,18 +388,49 @@ async function retryExecutionLine(lineId: number): Promise<void> {
   retryingLineId.value = lineId
   actionError.value = null
   try {
-    executionResult.value = await allocationStore.retryPlan(
+    const retryResult = await allocationStore.retryPlan(
       plan.id,
       {
         expected_version: expectedVersion,
         line_ids: [lineId],
       },
     )
+    executionResult.value = mergeExecutionResult(
+      execution,
+      retryResult,
+    )
     await allocationStore.fetchPlanDetail(plan.id)
   } catch (error) {
     actionError.value = error
   } finally {
     retryingLineId.value = null
+  }
+}
+
+function mergeExecutionResult(
+  previous: AllocationPlanExecutionResult,
+  next: AllocationPlanExecutionResult,
+): AllocationPlanExecutionResult {
+  const nextByLineId = new Map(
+    next.line_results.map((line) => [line.line_id, line]),
+  )
+  const previousLineIds = new Set(
+    previous.line_results.map((line) => line.line_id),
+  )
+  const lineResults = previous.line_results.map(
+    (line) => nextByLineId.get(line.line_id) ?? line,
+  )
+
+  for (const line of next.line_results) {
+    if (!previousLineIds.has(line.line_id)) {
+      lineResults.push(line)
+    }
+  }
+
+  return {
+    ...previous,
+    ...next,
+    line_results: lineResults,
   }
 }
 
