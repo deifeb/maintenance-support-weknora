@@ -14,6 +14,7 @@ export default defineConfig({
       'src/components/maintenance/report/__tests__/report-list-state.test.ts',
       'src/components/maintenance/report/__tests__/report-detail-state.test.ts',
       'src/components/maintenance/report/__tests__/report-lifecycle-ui.test.ts',
+      'src/components/maintenance/allocation/__tests__/allocation-retry-ui.test.ts',
     ],
   },
 })

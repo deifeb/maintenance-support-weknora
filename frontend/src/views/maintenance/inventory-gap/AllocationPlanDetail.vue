@@ -144,7 +144,10 @@
         <PlanExecutionSummary
           :execution="executionResult"
           :can-regenerate="hasAction('regenerate')"
+          :can-retry="canContribute"
+          :retrying-line-id="retryingLineId"
           @regenerate="regeneratePlan"
+          @retry="retryExecutionLine"
         />
       </template>
     </template>
@@ -191,6 +194,7 @@ const editingLine = ref<AllocationPlanLineRead | null>(null)
 const allocatedQuantity = ref('')
 const editReason = ref('')
 const executionResult = ref<AllocationPlanExecutionResult | null>(null)
+const retryingLineId = ref<number | null>(null)
 
 const routeId = computed(
   () => positiveAllocationRouteId(route.params.planId),
@@ -356,6 +360,44 @@ async function executePlan(): Promise<void> {
   })
 }
 
+async function retryExecutionLine(lineId: number): Promise<void> {
+  const plan = current.value
+  const execution = executionResult.value
+  if (
+    plan === null
+    || execution === null
+    || !canContribute.value
+    || retryingLineId.value !== null
+  ) return
+
+  const lineResult = execution.line_results.find(
+    (item) => item.line_id === lineId,
+  )
+  if (
+    lineResult === undefined
+    || lineResult.outcome !== 'CONFLICT'
+    || !lineResult.retryable
+  ) return
+
+  const expectedVersion = plan.version
+  retryingLineId.value = lineId
+  actionError.value = null
+  try {
+    executionResult.value = await allocationStore.retryPlan(
+      plan.id,
+      {
+        expected_version: expectedVersion,
+        line_ids: [lineId],
+      },
+    )
+    await allocationStore.fetchPlanDetail(plan.id)
+  } catch (error) {
+    actionError.value = error
+  } finally {
+    retryingLineId.value = null
+  }
+}
+
 async function voidPlan(): Promise<void> {
   const plan = current.value
   if (plan === null || !hasAction('void')) return
@@ -392,6 +434,7 @@ watch(
   () => {
     editingLine.value = null
     executionResult.value = null
+    retryingLineId.value = null
     void load()
   },
   { immediate: true },
