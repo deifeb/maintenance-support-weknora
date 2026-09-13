@@ -1689,7 +1689,7 @@ def test_line_conflict_records_public_allocation_error_and_inventory_cause(
     assert conflict_event.error_code == "ALLOCATION_INVENTORY_CONFLICT"
 
 
-def test_line_conflict_contains_expected_actual_affected_line_retryability_and_regenerate_action(
+def test_line_conflict_contains_expected_actual_affected_line_retryability_and_retry_action(
     session,
     actor_contributor,
 ) -> None:
@@ -1710,11 +1710,11 @@ def test_line_conflict_contains_expected_actual_affected_line_retryability_and_r
     assert item.details["balance_id"] == line.recommended_balance_id
     assert item.details["expected_version"] == line.expected_balance_version
     assert item.details["actual_version"] == line.expected_balance_version + 1
-    assert item.retryable is False
-    assert item.suggested_action == "regenerate"
+    assert item.retryable is True
+    assert item.suggested_action == "retry"
 
 
-def test_allocation_line_retryable_is_false_while_inventory_cause_retryable_is_preserved_separately(
+def test_allocation_line_retryable_is_propagated_from_inventory_cause(
     session,
     actor_contributor,
 ) -> None:
@@ -1722,13 +1722,28 @@ def test_allocation_line_retryable_is_false_while_inventory_cause_retryable_is_p
     line = context["lines"][0]
     context["fake"].fail_line(line.id, _inventory_conflict(retryable=True))
     item = _execute(context, session, actor_contributor).line_results[0]
-    assert item.retryable is False
+    assert item.retryable is True
+    assert item.suggested_action == "retry"
     assert item.details["cause_retryable"] is True
 
 
 # ---------------------------------------------------------------------------
 # 9.8 Execution idempotency / retry
 # ---------------------------------------------------------------------------
+
+def test_retry_reserves_only_the_retryable_failed_line(session, actor_contributor) -> None:
+    context = _execute_context(session, actor_contributor, suffix="line-retry", demand_quantities=("1.000000", "1.000000"))
+    failed, succeeded = context["lines"]
+    context["fake"].fail_line(failed.id, _inventory_conflict(retryable=True))
+    first = _execute(context, session, actor_contributor)
+    assert first.status == "PARTIALLY_COMPLETED"
+    context["fake"].failures.pop(failed.id)
+    command = context["schema_api"].AllocationPlanRetryCommand(expected_version=context["plan"].version, line_ids=[failed.id])
+    retry = context["service"].retry(session, actor_contributor, context["plan"].id, command=command, idempotency_key="line-retry-key")
+    assert retry.status == "COMPLETED"
+    assert [item.line_id for item in retry.line_results] == [failed.id]
+    assert retry.line_results[0].outcome == "RESERVED"
+    assert succeeded.reservation_id is not None
 
 
 def test_execute_same_key_replays_exact_terminal_response_without_double_reserve(

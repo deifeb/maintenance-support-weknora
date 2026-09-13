@@ -14,6 +14,7 @@ from app.core.exceptions import (
     InsufficientMaintenanceRoleError,
     NotFoundError,
 )
+from app.core.config import get_settings
 from app.models import (
     AllocationPlan,
     AllocationPlanEvent,
@@ -29,6 +30,7 @@ from app.schemas.allocation import (
     AllocationPlanActionResult,
     AllocationPlanConfirmCommand,
     AllocationPlanExecuteCommand,
+    AllocationPlanRetryCommand,
     AllocationPlanExecutionLineResult,
     AllocationPlanExecutionResult,
     AllocationPlanLineEditCommand,
@@ -83,6 +85,7 @@ _EXPECTED_INVENTORY_LINE_CODES = frozenset(
         "RESOURCE_CONFLICT",
     }
 )
+_E2E_FAILED_ALLOCATION_LINES: set[int] = set()
 
 
 class AllocationPlanService:
@@ -857,14 +860,17 @@ class AllocationPlanService:
         *,
         command: AllocationPlanExecuteCommand,
         idempotency_key: str,
+        _line_ids: set[int] | None = None,
+        _action: str = "EXECUTE",
     ) -> AllocationPlanExecutionResult:
         self._require_contributor(actor)
         clean_key = self._normalize_idempotency_key(actor, idempotency_key)
         request_hash = snapshot_service.canonical_hash(
             {
-                "action": "EXECUTE",
+                "action": _action,
                 "plan_id": int(plan_id),
                 "expected_version": command.expected_version,
+                **({"line_ids": sorted(_line_ids)} if _line_ids is not None else {}),
             }
         )
         plan = self.repository.get_plan_for_update(
@@ -890,7 +896,7 @@ class AllocationPlanService:
                 result_type=AllocationPlanExecutionResult,
             )
 
-        if plan.status != "CONFIRMED":
+        if plan.status not in ({"CONFIRMED"} if _line_ids is None else {"PARTIALLY_COMPLETED", "FAILED"}):
             self._raise_conflict(
                 actor,
                 "allocation plan cannot start a new execution in its current state",
@@ -1005,6 +1011,8 @@ class AllocationPlanService:
                 line.id,
             ),
         )
+        if _line_ids is not None:
+            ordered_lines = [line for line in ordered_lines if line.id in _line_ids]
         owned_versions: dict[int, int] = {}
         line_results: list[AllocationPlanExecutionLineResult] = []
 
@@ -1137,6 +1145,22 @@ class AllocationPlanService:
                 f"allocation-plan:{plan.id}:line:{line.id}:execute:{execution_id}"
             )
             try:
+                settings = get_settings()
+                if (
+                    settings.e2e_mode
+                    and settings.e2e_allocation_fail_line_id == line.id
+                    and line.id not in _E2E_FAILED_ALLOCATION_LINES
+                ):
+                    _E2E_FAILED_ALLOCATION_LINES.add(line.id)
+                    raise ConflictError(
+                        "E2E injected allocation line failure",
+                        code="RESOURCE_CONFLICT",
+                        details={
+                            "line_id": line.id,
+                            "retryable": True,
+                            "e2e_injected": True,
+                        },
+                    )
                 with session.begin_nested():
                     reservation = self.reservation_service.reserve_for_allocation_line(
                         session,
@@ -1209,14 +1233,10 @@ class AllocationPlanService:
                     else expected_version
                 )
 
-        reserved_count = sum(
-            result.outcome == "RESERVED"
-            for result in line_results
-        )
-        conflict_count = sum(
-            result.outcome == "CONFLICT"
-            for result in line_results
-        )
+        all_lines = self._current_plan_lines(session, actor.tenant_id, plan.id)
+        all_outcomes = [(line.result_json or {}).get("outcome") for line in all_lines if line.allocated_quantity > _ZERO]
+        reserved_count = sum(outcome == "RESERVED" for outcome in all_outcomes)
+        conflict_count = sum(outcome == "CONFLICT" for outcome in all_outcomes)
         if conflict_count == 0:
             terminal_status = "COMPLETED"
             terminal_event_type = "EXECUTION_COMPLETED"
@@ -1259,6 +1279,27 @@ class AllocationPlanService:
         )
         session.flush()
         return response
+
+    def retry(self, session: Session, actor: ActorContext, plan_id: int, *, command: AllocationPlanRetryCommand, idempotency_key: str) -> AllocationPlanExecutionResult:
+        self._require_contributor(actor)
+        clean_key = self._normalize_idempotency_key(actor, idempotency_key)
+        line_ids = frozenset(int(value) for value in command.line_ids)
+        request_hash = snapshot_service.canonical_hash({"action": "RETRY", "plan_id": int(plan_id), "expected_version": command.expected_version, "line_ids": sorted(line_ids)})
+        plan = self.repository.get_plan_for_update(session, actor.tenant_id, plan_id)
+        if plan is None:
+            self._raise_not_found(actor, "allocation_plan", plan_id)
+        terminal = self._find_action_event(session, actor.tenant_id, plan.id, event_types=_EXECUTION_TERMINAL_EVENTS, idempotency_key=clean_key)
+        if terminal is not None:
+            return self._replay_action_event(actor, terminal, request_hash=request_hash, result_type=AllocationPlanExecutionResult)
+        self._require_plan_version(actor, plan, command.expected_version)
+        if plan.status not in {"PARTIALLY_COMPLETED", "FAILED"}:
+            self._raise_conflict(actor, "allocation plan cannot retry in its current state", code="ALLOCATION_PLAN_STATE_CONFLICT", details={"status": plan.status, "retryable": False})
+        lines = {line.id: line for line in self._current_plan_lines(session, actor.tenant_id, plan.id)}
+        for line_id in sorted(line_ids):
+            stored = lines.get(line_id).result_json if lines.get(line_id) is not None else None
+            if not isinstance(stored, dict) or stored.get("outcome") != "CONFLICT" or not bool((stored.get("details") or {}).get("cause_retryable")):
+                self._raise_conflict(actor, "allocation retry line is not retryable", code="ALLOCATION_RETRY_LINE_INVALID", details={"line_id": line_id, "retryable": False})
+        return self.execute(session, actor, plan_id, command=AllocationPlanExecuteCommand(expected_version=command.expected_version), idempotency_key=clean_key, _line_ids=set(line_ids), _action="RETRY")
 
     @staticmethod
     def _current_balance(
@@ -1455,8 +1496,8 @@ class AllocationPlanService:
             outcome="CONFLICT",
             error_code="ALLOCATION_INVENTORY_CONFLICT",
             cause_code=cause_code,
-            retryable=False,
-            suggested_action="regenerate",
+            retryable=bool(cause_retryable),
+            suggested_action=("retry" if cause_retryable else "regenerate"),
             details=details,
         )
 

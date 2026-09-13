@@ -16,6 +16,7 @@ from app.schemas.allocation import (
     AllocationPlanConfirmCommand,
     AllocationPlanCreateCommand,
     AllocationPlanExecuteCommand,
+    AllocationPlanRetryCommand,
     AllocationPlanExecutionResult,
     AllocationPlanLineEditCommand,
     AllocationPlanLineRead,
@@ -294,6 +295,12 @@ def execute_plan(
         actor=actor,
         version=result.version,
     )
+
+@router.post("/plans/{plan_id}/retry", response_model=MaintenanceSuccessResponse[AllocationPlanExecutionResult])
+def retry_plan(plan_id: int, payload: AllocationPlanRetryCommand, session: SessionDep, actor: ContributorDep, _tenant_guard: TenantGuardDep, idempotency_key: IdempotencyKeyDep):
+    result = allocation_plan_service.retry(session, actor, plan_id, command=payload, idempotency_key=idempotency_key)
+    session.commit()
+    return success_response(result, "Allocation plan retry executed", actor=actor, version=result.version)
 
 
 @router.post(
