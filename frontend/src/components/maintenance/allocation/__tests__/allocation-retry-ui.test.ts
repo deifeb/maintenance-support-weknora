@@ -119,6 +119,11 @@ describe('allocation execution retry controls', () => {
     const retry = wrapper.get('tbody button')
     expect(retry.attributes('disabled')).toBeDefined()
     expect(retry.text()).toBe('Retrying…')
+    expect(
+      wrapper
+        .get('.plan-execution-summary__header button')
+        .attributes('disabled'),
+    ).toBeDefined()
   })
 })
 
