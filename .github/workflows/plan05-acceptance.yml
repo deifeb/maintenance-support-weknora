@@ -45,6 +45,7 @@ jobs:
         working-directory: frontend
         env:
           E2E_ROOT_DIR: ${{ runner.temp }}/maintenance-e2e
+          CGO_ENABLED: '1'
         run: npm run test:e2e
       - name: Upload Playwright report on failure
         if: failure()

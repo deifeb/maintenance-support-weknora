@@ -23,7 +23,8 @@ try {
   })
   failed = exitCode !== 0
   process.exitCode = exitCode
-} catch {
+} catch (error) {
+  console.error(error instanceof Error ? error.stack ?? error.message : error)
   process.exitCode = 1
 } finally {
   try {
