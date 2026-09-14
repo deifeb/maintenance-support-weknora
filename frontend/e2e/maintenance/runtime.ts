@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const diagnosticPortKeys = ['E2E_FRONTEND_PORT', 'E2E_MAINTENANCE_PORT', 'E2E_WEKNORA_PORT'] as const
+const migrationWaitTimeoutMilliseconds = 180_000
 const sensitiveValue = /(TOKEN|SECRET|PASSWORD|API_KEY|BEARER)/i
 const dockerImageReference = /^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?\/)*[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[a-z0-9][a-z0-9._-]*)?$/
 const serviceNames = ['weknora', 'maintenance', 'vite'] as const
@@ -400,7 +401,7 @@ export class MaintenanceE2ERuntime {
     await this.waitFor(() => this.dependencies.runCommand('docker', [
       'exec', containerName, 'psql', '--username', username, '--dbname', database,
       '--set', 'ON_ERROR_STOP=1', '--command', query,
-    ]))
+    ]), migrationWaitTimeoutMilliseconds)
   }
 
   private async waitForHttp(_name: ServiceName, url: string): Promise<void> {
@@ -410,8 +411,8 @@ export class MaintenanceE2ERuntime {
     })
   }
 
-  private async waitFor(check: () => Promise<void>): Promise<void> {
-    const deadline = Date.now() + 60_000
+  private async waitFor(check: () => Promise<void>, timeoutMilliseconds = 60_000): Promise<void> {
+    const deadline = Date.now() + timeoutMilliseconds
     while (Date.now() < deadline) {
       try {
         await check()
