@@ -127,7 +127,7 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     if (!isPort(rawValue)) throw new Error(`${name} must be between 1024 and 65535`)
     return Number(rawValue)
   }
-  const postgresImage = env.E2E_POSTGRES_IMAGE?.trim() ?? 'paradedb/paradedb:v0.22.2-pg17'
+  const postgresImage = env.E2E_POSTGRES_IMAGE?.trim() ?? 'postgres:17-alpine'
   if (!isSafeDockerImage(postgresImage)) throw new Error('E2E_POSTGRES_IMAGE must be a safe Docker image reference')
   return {
     rootDir,
@@ -353,6 +353,7 @@ export class MaintenanceE2ERuntime {
       ...process.env,
       DB_DRIVER: 'postgres', DB_HOST: '127.0.0.1', DB_PORT: String(this.postgresPort),
       DB_USER: this.databaseUser, DB_PASSWORD: this.databasePassword, DB_NAME: this.databaseName,
+      RETRIEVE_DRIVER: 'sqlite',
       SERVER_PORT: String(this.config.weknoraPort),
       WEKNORA_MAINTENANCE_ENABLED: 'true',
       WEKNORA_MAINTENANCE_BASE_URL: `http://127.0.0.1:${this.config.maintenancePort}`,
