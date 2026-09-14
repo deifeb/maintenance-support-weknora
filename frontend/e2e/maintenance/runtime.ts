@@ -127,7 +127,7 @@ export function readRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     if (!isPort(rawValue)) throw new Error(`${name} must be between 1024 and 65535`)
     return Number(rawValue)
   }
-  const postgresImage = env.E2E_POSTGRES_IMAGE?.trim() ?? 'postgres:17-alpine'
+  const postgresImage = env.E2E_POSTGRES_IMAGE?.trim() ?? 'paradedb/paradedb:v0.22.2-pg17'
   if (!isSafeDockerImage(postgresImage)) throw new Error('E2E_POSTGRES_IMAGE must be a safe Docker image reference')
   return {
     rootDir,
