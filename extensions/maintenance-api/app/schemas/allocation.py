@@ -315,6 +315,13 @@ class AllocationPlanExecuteCommand(BaseModel):
     expected_version: int = Field(gt=0)
 
 
+class AllocationPlanRetryCommand(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_version: int = Field(gt=0)
+    line_ids: list[int] = Field(min_length=1)
+
+
 AllocationExecutionOutcome = Literal[
     "RESERVED",
     "GAP_RETAINED",

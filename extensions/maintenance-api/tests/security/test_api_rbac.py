@@ -33,7 +33,7 @@ EXPECTED_COUNTS = {
     "ai": 27,
     "inventory": 33,
     "reviews": 7,
-    "allocations": 14,
+    "allocations": 15,
 }
 MASTER_ROLE_BY_METHOD = {
     "get": "require_viewer",
@@ -143,6 +143,7 @@ ALLOCATION_ROLE_BY_FUNCTION = {
     "edit_plan_line": "require_contributor",
     "confirm_plan": "require_contributor",
     "execute_plan": "require_contributor",
+    "retry_plan": "require_contributor",
     "void_plan": "require_contributor",
     "regenerate_plan": "require_contributor",
 }
@@ -373,7 +374,7 @@ def test_business_route_inventory_is_exact() -> None:
     assert counts == EXPECTED_COUNTS, (
         f"{TASK6_FEATURE_MISSING}: route counts {counts}"
     )
-    assert sum(counts.values()) == 212
+    assert sum(counts.values()) == 213
     assert demand_functions == set(
         DEMAND_ROLE_BY_FUNCTION
     )
@@ -486,7 +487,7 @@ def test_task6_allocation_rbac_inventory_is_exact() -> None:
         for path in _files("allocations")
         for function, _, _ in _endpoints(path)
     ]
-    if set(rows) != set(ALLOCATION_ROLE_BY_FUNCTION) or len(rows) != 14:
+    if set(rows) != set(ALLOCATION_ROLE_BY_FUNCTION) or len(rows) != 15:
         raise AssertionError(
             f"{TASK6_FEATURE_MISSING}: allocation RBAC inventory missing or drifted; "
             f"expected={sorted(ALLOCATION_ROLE_BY_FUNCTION)}, actual={sorted(rows)}"
