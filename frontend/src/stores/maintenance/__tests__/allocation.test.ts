@@ -166,6 +166,11 @@ interface AllocationApiLike {
     status: string
     version: number
   }>>
+  retryPlan(
+    planId: number,
+    request: Record<string, unknown>,
+    idempotencyKey: string,
+  ): Promise<MaintenanceResultLike<Record<string, unknown>>>
 }
 
 function result<T>(
@@ -477,6 +482,20 @@ function apiStub(
         event_id: 904,
         status: 'DRAFT',
         version: 1,
+      })
+    },
+    async retryPlan(
+      planId: number,
+      _request: Record<string, unknown>,
+      _idempotencyKey: string,
+    ) {
+      return result({
+        plan_id: planId,
+        execution_id: 905,
+        execution_as_of: '2026-08-27T12:00:00Z',
+        status: 'COMPLETED',
+        version: 6,
+        line_results: [],
       })
     },
     ...overrides,
@@ -974,5 +993,55 @@ test(
     assert.equal(regenerated.new_plan_id, 72)
     assert.equal(state.planDetail.item?.id, 71)
     assert.deepEqual(keys, ['regenerate-key'])
+  },
+)
+
+test(
+  'retry sorts and deduplicates line ids and exposes plan.retry command state',
+  { skip: !modulePresent },
+  async () => {
+    const { createAllocationState } = await loadModule()
+    const requests: Record<string, unknown>[] = []
+    const keys: string[] = []
+
+    const state = createAllocationState(
+      apiStub({
+        retryPlan: async (
+          planId,
+          request,
+          key,
+        ) => {
+          requests.push({ planId, ...request })
+          keys.push(key)
+          return result({
+            plan_id: planId,
+            execution_id: 905,
+            execution_as_of: '2026-08-27T12:00:00Z',
+            status: 'COMPLETED',
+            version: 6,
+            line_results: [],
+          })
+        },
+      }),
+      keyFactory('retry-key'),
+    )
+
+    const resultValue = await state.retryPlan(71, {
+      expected_version: 5,
+      line_ids: [703, 701, 703, 702, 701],
+    })
+
+    assert.equal(resultValue.plan_id, 71)
+    assert.deepEqual(requests, [{
+      planId: 71,
+      expected_version: 5,
+      line_ids: [701, 702, 703],
+    }])
+    assert.deepEqual(keys, ['retry-key'])
+    assert.equal(state.commandState.phase, 'succeeded')
+    assert.equal(
+      state.commandState.kind,
+      'plan.retry',
+    )
   },
 )

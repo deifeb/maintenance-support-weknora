@@ -1,0 +1,63 @@
+name: Maintenance Plan 05 Acceptance
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/plan05-acceptance.yml'
+      - 'cmd/**'
+      - 'extensions/maintenance-api/**'
+      - 'frontend/e2e/maintenance/**'
+      - 'frontend/src/**'
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Maintenance API dependencies
+        working-directory: extensions/maintenance-api
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run browser acceptance
+        working-directory: frontend
+        env:
+          E2E_ROOT_DIR: ${{ runner.temp }}/maintenance-e2e
+          CGO_ENABLED: '1'
+        run: npm run test:e2e
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan05-playwright-report
+          path: ${{ runner.temp }}/maintenance-e2e/maintenance-e2e-*/artifacts/playwright-report
+          if-no-files-found: ignore
+      - name: Upload Playwright test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan05-playwright-test-results
+          path: ${{ runner.temp }}/maintenance-e2e/maintenance-e2e-*/artifacts/test-results
+          if-no-files-found: ignore

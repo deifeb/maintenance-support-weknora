@@ -38,6 +38,7 @@
             <button
               v-if="hasAction('preview')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="previewPlan"
             >
               Preview
@@ -45,6 +46,7 @@
             <button
               v-if="hasAction('confirm')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="confirmPlan"
             >
               Confirm
@@ -52,6 +54,7 @@
             <button
               v-if="hasAction('execute')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="executePlan"
             >
               Execute
@@ -59,6 +62,7 @@
             <button
               v-if="hasAction('void')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="voidPlan"
             >
               Void
@@ -66,6 +70,7 @@
             <button
               v-if="hasAction('regenerate')"
               type="button"
+              :disabled="retryingLineId !== null"
               @click="regeneratePlan"
             >
               Regenerate
@@ -144,7 +149,10 @@
         <PlanExecutionSummary
           :execution="executionResult"
           :can-regenerate="hasAction('regenerate')"
+          :can-retry="canContribute"
+          :retrying-line-id="retryingLineId"
           @regenerate="regeneratePlan"
+          @retry="retryExecutionLine"
         />
       </template>
     </template>
@@ -191,6 +199,7 @@ const editingLine = ref<AllocationPlanLineRead | null>(null)
 const allocatedQuantity = ref('')
 const editReason = ref('')
 const executionResult = ref<AllocationPlanExecutionResult | null>(null)
+const retryingLineId = ref<number | null>(null)
 
 const routeId = computed(
   () => positiveAllocationRouteId(route.params.planId),
@@ -356,6 +365,76 @@ async function executePlan(): Promise<void> {
   })
 }
 
+async function retryExecutionLine(lineId: number): Promise<void> {
+  const plan = current.value
+  const execution = executionResult.value
+  if (
+    plan === null
+    || execution === null
+    || !canContribute.value
+    || retryingLineId.value !== null
+  ) return
+
+  const lineResult = execution.line_results.find(
+    (item) => item.line_id === lineId,
+  )
+  if (
+    lineResult === undefined
+    || lineResult.outcome !== 'CONFLICT'
+    || !lineResult.retryable
+  ) return
+
+  const expectedVersion = plan.version
+  retryingLineId.value = lineId
+  actionError.value = null
+  try {
+    const retryResult = await allocationStore.retryPlan(
+      plan.id,
+      {
+        expected_version: expectedVersion,
+        line_ids: [lineId],
+      },
+    )
+    if (routeId.value !== plan.id || current.value?.id !== plan.id) return
+    executionResult.value = mergeExecutionResult(
+      execution,
+      retryResult,
+    )
+    await allocationStore.fetchPlanDetail(plan.id)
+  } catch (error) {
+    actionError.value = error
+  } finally {
+    retryingLineId.value = null
+  }
+}
+
+function mergeExecutionResult(
+  previous: AllocationPlanExecutionResult,
+  next: AllocationPlanExecutionResult,
+): AllocationPlanExecutionResult {
+  const nextByLineId = new Map(
+    next.line_results.map((line) => [line.line_id, line]),
+  )
+  const previousLineIds = new Set(
+    previous.line_results.map((line) => line.line_id),
+  )
+  const lineResults = previous.line_results.map(
+    (line) => nextByLineId.get(line.line_id) ?? line,
+  )
+
+  for (const line of next.line_results) {
+    if (!previousLineIds.has(line.line_id)) {
+      lineResults.push(line)
+    }
+  }
+
+  return {
+    ...previous,
+    ...next,
+    line_results: lineResults,
+  }
+}
+
 async function voidPlan(): Promise<void> {
   const plan = current.value
   if (plan === null || !hasAction('void')) return
@@ -392,6 +471,7 @@ watch(
   () => {
     editingLine.value = null
     executionResult.value = null
+    retryingLineId.value = null
     void load()
   },
   { immediate: true },
