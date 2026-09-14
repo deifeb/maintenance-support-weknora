@@ -29,6 +29,7 @@ EXPECTED_FUNCTIONS = {
     "edit_plan_line": "put",
     "confirm_plan": "post",
     "execute_plan": "post",
+    "retry_plan": "post",
     "void_plan": "post",
     "regenerate_plan": "post",
 }

@@ -22,6 +22,7 @@ EXPECTED_OPERATIONS = {
     ("put", "/api/v1/allocations/plans/{plan_id}/lines/{line_id}"),
     ("post", "/api/v1/allocations/plans/{plan_id}/confirm"),
     ("post", "/api/v1/allocations/plans/{plan_id}/execute"),
+    ("post", "/api/v1/allocations/plans/{plan_id}/retry"),
     ("post", "/api/v1/allocations/plans/{plan_id}/void"),
     ("post", "/api/v1/allocations/plans/{plan_id}/regenerate"),
 }
@@ -31,6 +32,7 @@ STRICT_IDEMPOTENCY = {
     ("post", "/api/v1/allocations/plans"),
     ("post", "/api/v1/allocations/plans/{plan_id}/confirm"),
     ("post", "/api/v1/allocations/plans/{plan_id}/execute"),
+    ("post", "/api/v1/allocations/plans/{plan_id}/retry"),
     ("post", "/api/v1/allocations/plans/{plan_id}/regenerate"),
 }
 
@@ -86,7 +88,7 @@ def _request_properties(
     return set(resolved.get("properties", {}))
 
 
-def test_task6_allocations_openapi_exposes_exact_14_routes() -> None:
+def test_task6_allocations_openapi_exposes_exact_15_routes() -> None:
     schema = _schema()
     assert not any(
         path.startswith("/api/v1/allocations") and "stream" in path
