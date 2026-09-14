@@ -15,6 +15,7 @@ import {
   type AllocationPlanRead,
   type AllocationPlanRegenerateRequest,
   type AllocationPlanRegenerationResult,
+  type AllocationPlanRetryRequest,
   type AllocationPlanSummaryRead,
   type AllocationPlanVoidRequest,
   type AllocationRuleActionResult,
@@ -114,6 +115,13 @@ export interface AllocationStoreApi {
   ): Promise<MaintenanceResult<
     AllocationPlanRegenerationResult
   >>
+  retryPlan(
+    planId: number,
+    request: AllocationPlanRetryRequest,
+    idempotencyKey: string,
+  ): Promise<MaintenanceResult<
+    AllocationPlanExecutionResult
+  >>
 }
 
 export type AllocationCommandKind =
@@ -128,6 +136,7 @@ export type AllocationCommandKind =
   | 'plan.execute'
   | 'plan.void'
   | 'plan.regenerate'
+  | 'plan.retry'
 
 export type AllocationCommandState =
   | { phase: 'idle' }
@@ -895,6 +904,31 @@ export function createAllocationState(
     )
   }
 
+  async function retryPlan(
+    planId: number,
+    request: AllocationPlanRetryRequest,
+  ): Promise<AllocationPlanExecutionResult> {
+    const normalizedRequest: AllocationPlanRetryRequest = {
+      expected_version: request.expected_version,
+      line_ids: [...new Set(request.line_ids)].sort(
+        (left, right) => left - right,
+      ),
+    }
+
+    const result = await runStrictCommand(
+      'plan.retry',
+      [planId],
+      normalizedRequest,
+      (key) => api.retryPlan(
+        planId,
+        normalizedRequest,
+        key,
+      ),
+    )
+    applyExecutionResult(result)
+    return result
+  }
+
   function dispose(): void {
     lifecycleGeneration += 1
 
@@ -955,6 +989,7 @@ export function createAllocationState(
     executePlan,
     voidPlan,
     regeneratePlan,
+    retryPlan,
     dispose,
   }
 }

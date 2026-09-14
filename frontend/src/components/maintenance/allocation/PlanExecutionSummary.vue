@@ -12,6 +12,7 @@
       <button
         v-if="canRegenerate"
         type="button"
+        :disabled="retryingLineId !== null"
         @click="emit('regenerate')"
       >
         Regenerate plan
@@ -34,6 +35,7 @@
             <th>Retryable</th>
             <th>Suggested action</th>
             <th>Details</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -50,6 +52,16 @@
             <td>{{ lineResult.retryable ? 'yes' : 'no' }}</td>
             <td>{{ lineResult.suggested_action || '—' }}</td>
             <td><pre>{{ formatDetails(lineResult.details) }}</pre></td>
+            <td>
+              <button
+                v-if="canRetry && isRetryableConflict(lineResult)"
+                type="button"
+                :disabled="retryingLineId !== null"
+                @click="emit('retry', lineResult.line_id)"
+              >
+                {{ retryingLineId === lineResult.line_id ? 'Retrying…' : 'Retry' }}
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -65,11 +77,20 @@ import type {
 defineProps<{
   execution: AllocationPlanExecutionResult | null
   canRegenerate: boolean
+  canRetry: boolean
+  retryingLineId: number | null
 }>()
 
 const emit = defineEmits<{
   regenerate: []
+  retry: [lineId: number]
 }>()
+
+function isRetryableConflict(
+  lineResult: AllocationPlanExecutionResult['line_results'][number],
+): boolean {
+  return lineResult.outcome === 'CONFLICT' && lineResult.retryable
+}
 
 function idLabel(value: number | null): string {
   return value === null ? '—' : `#${value}`

@@ -171,6 +171,11 @@ export type AllocationPlanVoidRequest =
 export type AllocationPlanRegenerateRequest =
   AllocationPlanVersionRequest
 
+export interface AllocationPlanRetryRequest {
+  expected_version: number
+  line_ids: number[]
+}
+
 export interface AllocationPlanSummaryRead {
   id: number
   source_demand_list_id: number
@@ -472,6 +477,27 @@ export function createAllocationApi(
       return client.post<AllocationPlanRegenerationResult>(
         `${BASE_PATH}/plans/${identifier(planId)}/regenerate`,
         request,
+        idempotencyConfig(idempotencyKey),
+      )
+    },
+
+    retryPlan(
+      planId: number,
+      request: AllocationPlanRetryRequest,
+      idempotencyKey: string,
+    ): Promise<MaintenanceResult<
+      AllocationPlanExecutionResult
+    >> {
+      const normalizedRequest: AllocationPlanRetryRequest = {
+        expected_version: request.expected_version,
+        line_ids: [...new Set(request.line_ids)].sort(
+          (left, right) => left - right,
+        ),
+      }
+
+      return client.post<AllocationPlanExecutionResult>(
+        `${BASE_PATH}/plans/${identifier(planId)}/retry`,
+        normalizedRequest,
         idempotencyConfig(idempotencyKey),
       )
     },

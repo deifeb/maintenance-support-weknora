@@ -11,7 +11,9 @@
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
     "test": "node ./scripts/run-tests.mjs",
-    "test:components": "vitest run"
+    "test:components": "vitest run",
+    "test:e2e": "node ./scripts/run-maintenance-e2e.mjs",
+    "test:e2e:headed": "node ./scripts/run-maintenance-e2e.mjs --headed"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",
@@ -41,6 +43,7 @@
     "xlsx": "file:./packages/xlsx-0.20.2.tgz"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@tsconfig/node22": "^22.0.5",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-vue": "6.0.6",
